@@ -15,7 +15,7 @@ import { AssetPanel } from './panels/AssetPanel';
 import { Console, Hierarchy, Inspector } from './panels/Panels';
 import { GameView, SceneView } from './panels/Viewport';
 import { AnimatorWindow } from './panels/AnimatorWindow';
-import { getEngine, openScene, saveScene, startPlay, stepFrame, stopPlay, togglePause } from './engine';
+import { getEngine, openScene, saveScene, startPlay, stepFrame, stopPlay, syncFiles, togglePause } from './engine';
 import { ProfilerPanel } from './panels/ProfilerPanel';
 import { BuildSettingsWindow, ProjectSettingsWindow } from './panels/SettingsWindows';
 import { ContextMenuHost, MenuBar, type MenuItem } from './ui/Menu';
@@ -219,7 +219,16 @@ export function App() {
       }
     };
     window.addEventListener('keydown', windowKeys);
-    const un = listen('assets-changed', () => refresh());
+    // files changed on disk: the engine gets them (script fields, ScriptableObjects), then the panels refresh
+    let syncTimer = 0;
+    const un = listen('assets-changed', () => {
+      refresh();
+      clearTimeout(syncTimer);
+      syncTimer = window.setTimeout(() => {
+        const e = getEngine();
+        if (e && !e.is_playing()) void syncFiles(e).then(refresh);
+      }, 250);
+    });
     // C# translation results (tools/goat-cs, run by the backend when .cs files change)
     void listen<{ level: 'info' | 'warn' | 'error'; text: string }>('script-log', (ev) => log(ev.payload.text, ev.payload.level));
     // automation / tests: window.__goat

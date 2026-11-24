@@ -149,6 +149,8 @@ pub struct EditorCore {
     pub(crate) redo: Vec<crate::editing::UndoStep>,
     pub(crate) nav_preview: crate::navpreview::NavPreview,
     pub(crate) gizmos: crate::gizmos::Gizmos,
+    /// Script fields / kinds for the Inspector (scripting.rs).
+    pub(crate) scripts: crate::scripting::ScriptInfo,
     /// Play mode paused (the game view keeps drawing) / one frame requested.
     pub paused: bool,
     pub step_once: bool,
@@ -194,6 +196,7 @@ impl EditorCore {
             redo: Vec::new(),
             nav_preview: Default::default(),
             gizmos: Default::default(),
+            scripts: Default::default(),
             paused: false,
             step_once: false,
             tools: Default::default(),
@@ -461,6 +464,14 @@ impl EditorCore {
 
     // ------------------------------------------------------------------ play mode
     pub fn play(&mut self) {
+        // Play runs the scene as it is being edited (unsaved changes included, like Unity): the
+        // edit world is written over the scene key in memory (the file on disk is untouched)
+        if let Some(scene) = self.scene.clone() {
+            match self.save_scene() {
+                Ok(text) => self.io.put(&scene, text.into_bytes()),
+                Err(e) => goat_core::warn!("play: the edited scene couldn't be serialized ({e}); playing the saved file"),
+            }
+        }
         let mut engine = Engine::new(PlayGame { scene: self.scene.clone(), inner: game::HelloGame });
         engine.resources.insert(AssetServer::new(self.io.clone()));
         engine.resources.get_or_default::<Profiler>().keep_history = 300;
@@ -828,6 +839,24 @@ mod playground_tests {
         assert!((pa.x - 0.5).abs() < 1e-3 && (pb.x - 0.5).abs() < 1e-3 && (pa.z + pb.z).abs() < 1e-3 && (pa.z - pb.z).abs() > 1.9, "{pa} {pb}");
         let rot = c.edit.world.get::<&Transform>(a).unwrap().rotation;
         assert!((rot.angle_between(Quat::IDENTITY) - 90f32.to_radians()).abs() < 1e-3, "each object turned 90°");
+    }
+
+    #[test]
+    fn play_runs_unsaved_edits() {
+        let io = AssetIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/hello/assets"));
+        let mut gfx = NullBackend::new();
+        let mut c = EditorCore::new(io.clone());
+        c.first_frame(&mut gfx);
+        c.open_scene(&mut gfx, "scenes/showcase.scene.json").unwrap();
+        let on_disk = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/hello/assets/scenes/showcase.scene.json")).unwrap();
+        c.create_entity("Not Saved Yet", None);
+        c.play();
+        c.frame(&mut gfx, 1.0 / 60.0);
+        let w = &c.play.as_ref().unwrap().world;
+        assert!(w.query::<&Name>().iter().any(|(_, n)| n.0 == "Not Saved Yet"), "the play world has the unsaved object");
+        let still = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/hello/assets/scenes/showcase.scene.json")).unwrap();
+        assert_eq!(on_disk, still, "the file on disk is untouched");
+        c.stop();
     }
 
     #[test]

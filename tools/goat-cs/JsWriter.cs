@@ -14,14 +14,14 @@ public class JsWriter(SemanticModel model, string fileStem)
     static readonly Dictionary<string, string> Lifecycle = new()
     {
         ["Awake"] = "awake", ["Start"] = "start", ["Update"] = "update", ["FixedUpdate"] = "fixedUpdate",
-        ["LateUpdate"] = "lateUpdate", ["OnDestroy"] = "onDestroy",
+        ["LateUpdate"] = "lateUpdate", ["OnDestroy"] = "onDestroy", ["OnEnable"] = "onEnable",
     };
     // engine members whose JS name isn't just camelCase
     static readonly Dictionary<string, string> Renames = new()
     {
         ["Debug.LogWarning"] = "warn", ["Debug.LogError"] = "error",
     };
-    const string Exports = "Behaviour, MonoBehaviour, Vector2, Vector3, Quaternion, Transform, GameObject, Time, Input, Debug, Mathf, Application, WaitForSeconds, WaitForSecondsRealtime, WaitUntil, WaitWhile, WaitForEndOfFrame, WaitForFixedUpdate, Awaitable, DOTween, Ease, LoopType, PathType, Tween, Sequence, PlayerPrefs, SaveData, UI, Physics, Physics2D, Audio, AudioSource, AudioMixer, Animator, SpriteAnimator, NavMeshAgent, NavMesh, SceneManager, LoadSceneMode, Collision, PointerEventData";
+    const string Exports = "Behaviour, MonoBehaviour, ScriptableObject, Resources, Vector2, Vector3, Quaternion, Transform, GameObject, Time, Input, Debug, Mathf, Application, WaitForSeconds, WaitForSecondsRealtime, WaitUntil, WaitWhile, WaitForEndOfFrame, WaitForFixedUpdate, Awaitable, DOTween, Ease, LoopType, PathType, Tween, Sequence, PlayerPrefs, SaveData, UI, Physics, Physics2D, Audio, AudioSource, AudioMixer, Animator, SpriteAnimator, NavMeshAgent, NavMesh, SceneManager, LoadSceneMode, Collision, PointerEventData";
 
     // ------------------------------------------------------------------ output helpers
     void Line(string s) => sb.Append(new string(' ', indent * 2)).Append(s).Append('\n');
@@ -559,6 +559,9 @@ public class JsWriter(SemanticModel model, string fileStem)
                     case "Clear": return $"{on}.clear()";
                 }
             }
+            // ScriptableObject.CreateInstance<EnemyData>() → ScriptableObject.createInstance(EnemyData)
+            if (s.ContainingType is { Name: "ScriptableObject" } && s.Name == "CreateInstance" && s.TypeArguments.Length == 1 && args.Length == 0)
+                return $"ScriptableObject.createInstance({s.TypeArguments[0].Name})";
             if (s.Name == "ToString" && s.Parameters.Length == 0 && on != null) return $"String({on})";
             if (s.ContainingType is { Name: "Console" } && s.Name.StartsWith("Write")) return $"Debug.log({args})";
             if (s.ContainingType?.SpecialType == SpecialType.System_Single || s.ContainingType?.SpecialType == SpecialType.System_Int32)

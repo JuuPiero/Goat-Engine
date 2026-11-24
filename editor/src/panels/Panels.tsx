@@ -4,7 +4,7 @@ import { api, fileUrl, nameOf } from '../api';
 import { log, run, setState, useStore } from '../store';
 import { CircleAlert, Info, Search, TriangleAlert } from 'lucide-react';
 import { AssetIcon } from './icons';
-import { EntityInspector } from './ComponentEditor';
+import { EntityInspector, ScriptableObjectInspector } from './ComponentEditor';
 import { SceneHierarchy } from './SceneHierarchy';
 
 interface SceneEntity {
@@ -77,7 +77,8 @@ function AssetInspector() {
   const [text, setText] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [imgSize, setImgSize] = useState('');
-  const isText = !!active && /\.(json|txt|md)$/i.test(active);
+  const isAsset = !!active && /\.asset\.json$/i.test(active);
+  const isText = !!active && !isAsset && /\.(json|txt|md)$/i.test(active);
   const isImage = !!active && /\.(png|jpe?g)$/i.test(active);
   useEffect(() => {
     setDirty(false);
@@ -90,6 +91,7 @@ function AssetInspector() {
     <div className="inspector">
       <h3>{nameOf(active)}</h3>
       <div className="dim">{active}</div>
+      {isAsset && <ScriptableObjectInspector assetKey={active} />}
       {isImage && project && (
         <div className="preview">
           <img src={fileUrl(project.assets, active, revision)} onLoad={(e) => setImgSize(`${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`)} />

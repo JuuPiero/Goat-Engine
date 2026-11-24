@@ -43,6 +43,7 @@ export const editorengine_revert_prefab: (a: number, b: number, c: number) => [n
 export const editorengine_save_scene: (a: number) => [number, number, number, number];
 export const editorengine_scene: (a: number) => [number, number];
 export const editorengine_scene_overlay: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+export const editorengine_script_info: (a: number, b: number, c: number) => [number, number];
 export const editorengine_select: (a: number, b: number, c: number) => void;
 export const editorengine_select_many: (a: number, b: number, c: number) => void;
 export const editorengine_selected: (a: number) => [number, number];

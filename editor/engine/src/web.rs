@@ -64,6 +64,7 @@ impl EditorEngine {
     /// Makes a project file available to the engine (the UI reads files through Tauri).
     pub fn put_file(&mut self, key: &str, bytes: Vec<u8>) {
         self.core.io.put(key, bytes);
+        self.core.file_changed(key);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -218,6 +219,12 @@ impl EditorEngine {
     pub fn instantiate(&mut self, key: &str, x: f32, y: f32) -> Result<String, JsValue> {
         let at = self.core.ground_point(x, y);
         self.core.instantiate(&mut self.gfx, key, at).map(id_of).map_err(|e| JsValue::from_str(&e))
+    }
+
+    // ------------------------------------------------------------ scripts
+    /// `{ kind: "behaviour" | "scriptableObject", fields: {...} }` or `{ error }` of a script.
+    pub fn script_info(&mut self, src: &str) -> String {
+        self.core.script_info(&mut self.gfx, src).to_string()
     }
 
     // ------------------------------------------------------------ gizmos

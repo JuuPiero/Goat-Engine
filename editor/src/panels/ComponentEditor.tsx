@@ -47,7 +47,8 @@ export function componentInfo(): InfoSet {
 }
 
 const isHexColor = (s: string) => /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(s);
-const nice = (k: string) => k.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+/// `max_speed` / `maxSpeed` → "Max speed" / "Max Speed" (Unity's nicified names)
+const nice = (k: string) => k.replace(/_/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/^\w/, (c) => c.toUpperCase());
 /// "Mesh/Mesh Renderer" → "Mesh Renderer"; components without metadata keep their name.
 export const displayName = (name: string) => componentInfo().components[name]?.menu.split('/').pop() || name;
 
@@ -136,7 +137,9 @@ const ASSET_EXT: Record<string, RegExp> = {
   script: /\.(ts|js|cs)$/i,
   controller: /\.controller\.json$/i,
   scene: /\.scene\.json$/i,
+  scriptableObject: /\.asset\.json$/i,
 };
+const KIND_LABEL: Record<string, string> = { scriptableObject: 'ScriptableObject', script: 'Script', controller: 'Animator Controller' };
 const BUILTINS: Record<string, string[]> = {
   mesh: ['builtin:cube', 'builtin:sphere', 'builtin:capsule', 'builtin:cylinder', 'builtin:plane', 'builtin:quad'],
   material: ['builtin:default'],
@@ -164,7 +167,7 @@ function AssetField({ value, kind, onChange }: { value: string | null; kind: str
   };
   return (
     <div className={`asset-field${drop === dropId ? ' drop' : ''}`} data-drop={dropId} title={value ?? ''}>
-      <span className="asset-name">{value ? nameOf(value) : `None (${kind})`}</span>
+      <span className="asset-name">{value ? nameOf(value) : `None (${KIND_LABEL[kind] ?? kind})`}</span>
       <button className="icon" title="Select…" onClick={(e) => void pick(e)}>
         ⊙
       </button>
@@ -344,6 +347,162 @@ function Field({ path, name, value, hints, onChange }: { path: string; name: str
   );
 }
 
+// ------------------------------------------------------------------ script fields
+
+interface ScriptInfoJson {
+  kind?: 'behaviour' | 'scriptableObject';
+  fields?: Record<string, Json>;
+  /** Field names in declaration order. */
+  order?: string[];
+  error?: string;
+}
+
+/// What the engine reports about a script (its class's fields, Behaviour or ScriptableObject).
+export function scriptInfo(src: string): ScriptInfoJson | null {
+  const e = getEngine();
+  if (!e || !src) return null;
+  try {
+    return JSON.parse(e.script_info(src)) as ScriptInfoJson;
+  } catch (err) {
+    return { error: String(err) };
+  }
+}
+
+/// Unity's serialized fields of a script (a Behaviour on an object, or a ScriptableObject asset):
+/// the class's fields with their defaults, the saved values over them. Fields holding nothing or a
+/// `.asset.json` are object references (drop a ScriptableObject asset on them).
+export function ScriptFields({ src, values, onChange, path }: { src: string; values: Record<string, Json>; onChange: (key: string, value: Json) => void; path: string }) {
+  const rev = useStore((s) => s.revision);
+  const info = useMemo(() => scriptInfo(src), [src, rev]);
+  if (!src) return <div className="dim">Pick a script</div>;
+  if (!info) return null;
+  if (info.error) return <div className="dim script-error" title={info.error}>{info.error.split('\n')[0]}</div>;
+  const keys = info.order ?? Object.keys(info.fields ?? {});
+  if (!keys.length) return <div className="dim">(no fields)</div>;
+  return (
+    <>
+      {keys.map((k) => {
+        const v = k in values ? values[k] : info.fields![k];
+        const reference = v === null || (typeof v === 'string' && /\.asset\.json$/i.test(v));
+        return reference ? (
+          <Row key={k} name={k}>
+            <AssetField value={typeof v === 'string' && v ? v : null} kind="scriptableObject" onChange={(nv) => onChange(k, nv)} />
+          </Row>
+        ) : (
+          <Field key={k} path={`${path}.${k}`} name={k} value={v} hints={{}} onChange={(nv) => onChange(k, nv)} />
+        );
+      })}
+    </>
+  );
+}
+
+interface ScriptRefJson {
+  src: string;
+  props?: Record<string, Json> | null;
+  enabled?: boolean;
+}
+
+const scriptTitle = (src: string) => (src ? `${nameOf(src).replace(/\.(ts|js|mjs|cs)$/i, '')} (Script)` : 'Script (none)');
+
+/// The Script component as Unity shows MonoBehaviours: one block per script, enabled toggle,
+/// Script field, then its fields.
+function ScriptBlocks({ list, write, ids }: { list: ScriptRefJson[]; write: (next: ScriptRefJson[]) => void; ids: string[] }) {
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const set = (i: number, patch: Partial<ScriptRefJson>) => write(list.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  return (
+    <>
+      {list.map((s, i) => {
+        const menu = (ev: React.MouseEvent) =>
+          openContextMenu(ev, [
+            { label: 'Reset', action: () => set(i, { props: null }) },
+            '-',
+            { label: 'Remove Component', action: () => mutate(`Remove ${scriptTitle(s.src)}`, () => ids.forEach((x) => (list.length > 1 ? getEngine()?.set_component(x, 'Script', JSON.stringify(list.filter((_, j) => j !== i))) : getEngine()?.remove_component(x, 'Script')))) },
+            { label: 'Move Up', disabled: i === 0, action: () => write(list.map((x, j) => (j === i - 1 ? list[i] : j === i ? list[i - 1] : x))) },
+            { label: 'Move Down', disabled: i === list.length - 1, action: () => write(list.map((x, j) => (j === i + 1 ? list[i] : j === i ? list[i + 1] : x))) },
+            '-',
+            { label: 'Show Script in Explorer', disabled: !s.src, action: () => void api.reveal(s.src) },
+          ]);
+        return (
+          <div key={i} className="component">
+            <div className="component-title" onContextMenu={menu}>
+              <span className="twisty" onClick={() => setCollapsed((c) => { const n = new Set(c); if (n.has(i)) n.delete(i); else n.add(i); return n; })}>
+                <ChevronRight size={11} className={`g-foldout-arrow${collapsed.has(i) ? '' : ' open'}`} />
+              </span>
+              <span className="g-comp-icon"><ComponentIcon name="Script" /></span>
+              <input type="checkbox" checked={s.enabled !== false} title="Enabled" onChange={(e) => set(i, { enabled: e.target.checked })} />
+              <span className="g-comp-title" title={s.src}>{scriptTitle(s.src)}</span>
+              <span className="spacer" />
+              <button className="g-icon-btn" title="Component menu" onClick={menu}>
+                <EllipsisVertical size={13} />
+              </button>
+            </div>
+            {!collapsed.has(i) && (
+              <>
+                <Row name="Script">
+                  <AssetField value={s.src || null} kind="script" onChange={(v) => set(i, { src: v ?? '', props: null })} />
+                </Row>
+                <ScriptFields src={s.src} path={`Script.${i}`} values={(s.props ?? {}) as Record<string, Json>} onChange={(k, v) => set(i, { props: { ...(s.props ?? {}), [k]: v } })} />
+              </>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/// The Inspector of a ScriptableObject asset (`{ version, script, data }`): its Script and fields;
+/// edits are written to the file right away (and given to the engine).
+export function ScriptableObjectInspector({ assetKey }: { assetKey: string }) {
+  const rev = useStore((s) => s.revision);
+  const [doc, setDoc] = useState<{ version?: number; script?: string; data?: Record<string, Json> } | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let live = true;
+    api
+      .readText(assetKey)
+      .then((t) => live && (setDoc(JSON.parse(t.replace(/^\uFEFF/, ''))), setError('')))
+      .catch((e) => live && setError(String(e)));
+    return () => {
+      live = false;
+    };
+  }, [assetKey, rev]);
+  if (error) return <div className="dim">{error}</div>;
+  if (!doc) return null;
+  const save = async (next: typeof doc) => {
+    setDoc(next);
+    const text = JSON.stringify({ version: 1, ...next }, null, 2) + '\n';
+    await api.writeText(assetKey, text);
+    getEngine()?.put_file(assetKey, new TextEncoder().encode(text));
+  };
+  const script = doc.script ?? '';
+  const info = scriptInfo(script);
+  return (
+    <div className="component">
+      <div className="component-title">
+        <span className="g-comp-icon"><ComponentIcon name="Script" /></span>
+        <span className="g-comp-title">{nameOf(assetKey).replace(/\.asset\.json$/i, '')} ({script ? nameOf(script).replace(/\.(ts|js|mjs|cs)$/i, '') : 'ScriptableObject'})</span>
+      </div>
+      <Row name="Script">
+        <AssetField value={script || null} kind="script" onChange={(v) => void save({ ...doc, script: v ?? '', data: {} })} />
+      </Row>
+      {info?.kind === 'behaviour' && <div className="dim script-error">{nameOf(script)} is a Behaviour, not a ScriptableObject</div>}
+      <ScriptFields
+        src={script}
+        path="data"
+        values={doc.data ?? {}}
+        onChange={(k, v) => {
+          // every field written, in declaration order (fields the class no longer has are dropped)
+          const merged: Record<string, Json> = { ...(info?.fields ?? {}), ...(doc.data ?? {}), [k]: v };
+          const data: Record<string, Json> = {};
+          for (const f of info?.order ?? Object.keys(merged)) data[f] = merged[f];
+          void save({ ...doc, data });
+        }}
+      />
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ components
 
 let componentClipboard: { name: string; value: Json } | null = null;
@@ -356,6 +515,12 @@ function addComponent(ids: string[], name: string) {
   mutate(`Add ${displayName(name)}`, () => {
     for (const id of ids) {
       const present = new Set((JSON.parse(e.components(id)) as { name: string }[]).map((c) => c.name));
+      if (name === 'Script' && present.has('Script')) {
+        // another script: appended to the object's list (Unity: one component per MonoBehaviour)
+        const cur = (JSON.parse(e.components(id)) as CompList).find((c) => c.name === 'Script')?.value;
+        e.set_component(id, 'Script', JSON.stringify([...(Array.isArray(cur) ? cur : []), { src: '' }]));
+        continue;
+      }
       for (const n of [...(info[name]?.requires ?? []), name]) {
         if (present.has(n)) continue;
         e.set_component(id, n, JSON.stringify(info[n]?.defaults ?? {}));
@@ -406,6 +571,9 @@ export function ComponentList({ id, ids = [id] }: { id: string; ids?: string[] }
       {list
         .filter((c) => c.name !== 'Transform' && shared(c.name))
         .map((c) => {
+          if (c.name === 'Script' && Array.isArray(c.value)) {
+            return <ScriptBlocks key="Script" list={c.value as unknown as ScriptRefJson[]} ids={ids} write={(next) => write('Script', next as unknown as Json, 'scripts')} />;
+          }
           const hints = info[c.name]?.fields ?? {};
           const menu = (ev: React.MouseEvent) =>
             openContextMenu(ev, [

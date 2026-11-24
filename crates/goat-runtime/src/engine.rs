@@ -116,6 +116,13 @@ impl Engine {
         self.game.title()
     }
 
+    /// Runs `f` with this engine's [`Context`] outside a frame (tools: the editor asking a
+    /// script host about a script).
+    pub fn with_context<R>(&mut self, gfx: &mut dyn GraphicsBackend, f: impl FnOnce(&mut Context) -> R) -> R {
+        let mut ctx = Context { world: &mut self.world, time: &self.time, input: &self.input, gfx, displays: &self.displays, resources: &mut self.resources, quit: &mut self.quit };
+        f(&mut ctx)
+    }
+
     /// True once the game asked to quit (or input reported a quit request).
     pub fn should_quit(&self) -> bool {
         self.quit || self.input.quit_requested

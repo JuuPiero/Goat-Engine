@@ -497,3 +497,101 @@ export default class Probe extends Behaviour {
     assert!(names.iter().any(|n| n.contains("trigger:Zone") && n.contains("hit:Ground")), "{names:?}");
     assert!(names.iter().any(|n| n.contains("mouseDown") && n.contains("click:")), "{names:?}");
 }
+
+// ------------------------------------------------------------------ ScriptableObject
+
+fn so_io() -> AssetIo {
+    let io = AssetIo::new("/nonexistent-goat-test-root-so");
+    io.put(
+        "scripts/EnemyData.ts",
+        br#"
+import { ScriptableObject, Vector3 } from "goat";
+export default class EnemyData extends ScriptableObject {
+  hp = 10;
+  speed = 2.5;
+  tint = new Vector3(1, 1, 1);
+  next = null;
+  tags = ["a"];
+  _cache = 0;
+  enabledCount = 0;
+  onEnable() { this.enabledCount++; }
+}
+"#
+        .to_vec(),
+    );
+    io.put("data/Goblin.asset.json", br#"{ "version": 1, "script": "scripts/EnemyData.ts", "data": { "hp": 30, "tint": [1, 0, 0], "next": "data/Boss.asset.json" } }"#.to_vec());
+    io.put("data/Boss.asset.json", b"\xEF\xBB\xBF{ \"version\": 1, \"script\": \"scripts/EnemyData.ts\", \"data\": { \"hp\": 500, \"next\": \"data/Goblin.asset.json\" } }".to_vec());
+    io.put(
+        "scripts/Enemy.ts",
+        br#"
+import { Behaviour, ScriptableObject, Resources, Vector3 } from "goat";
+import EnemyData from "./EnemyData";
+export default class Enemy extends Behaviour {
+  data = null;
+  start() {
+    const d = this.data;
+    const check = (ok, what) => { if (!ok) throw new Error("failed: " + what); };
+    check(d instanceof EnemyData, "the field holds the asset");
+    check(d.hp === 30 && d.speed === 2.5, "data over defaults");
+    check(d.tint instanceof Vector3 && d.tint.x === 1 && d.tint.y === 0, "vectors");
+    check(d.next.hp === 500 && d.next.next === d, "references between assets (cycle) share instances");
+    check(d.name === "Goblin" && d.assetPath === "data/Goblin.asset.json", "name / assetPath");
+    check(ScriptableObject.load("data/Goblin.asset.json") === d && Resources.load("data/Goblin.asset.json") === d, "load returns the shared instance");
+    check(d.enabledCount === 1, "onEnable once");
+    const fresh = ScriptableObject.createInstance(EnemyData);
+    check(fresh.hp === 10 && fresh.enabledCount === 1 && fresh.assetPath === null, "createInstance");
+    const copy = ScriptableObject.instantiate(d);
+    check(copy !== d && copy.hp === 30 && copy.name === "Goblin (Clone)", "instantiate");
+    this.gameObject.name = "ok:" + d.hp;
+  }
+}
+"#
+        .to_vec(),
+    );
+    io
+}
+
+#[derive(Default)]
+struct SoProbe {
+    defaults: Option<Result<Vec<(String, Value)>, String>>,
+    is_so: Option<Result<bool, String>>,
+    behaviour_is_so: Option<Result<bool, String>>,
+}
+
+struct SoGame;
+impl Game for SoGame {
+    fn start(&mut self, ctx: &mut GameContext) {
+        ctx.resources.insert(goat_assets::AssetServer::new(so_io()));
+        let mut host = JsHost::with_io(so_io());
+        let probe = {
+            let mut api = api_of(ctx);
+            SoProbe {
+                defaults: Some(host.defaults(&mut api, "scripts/EnemyData.ts")),
+                is_so: Some(host.is_scriptable_object(&mut api, "scripts/EnemyData.ts")),
+                behaviour_is_so: Some(host.is_scriptable_object(&mut api, "scripts/Enemy.ts")),
+            }
+        };
+        ctx.resources.insert(probe);
+        ctx.world.spawn((Name("Enemy".into()), Transform::default(), GlobalTransform::default(), Script(vec![ScriptRef::new("scripts/Enemy.ts").with_props(serde_json::json!({ "data": "data/Goblin.asset.json" }))])));
+    }
+    fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+        vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(so_io())))]
+    }
+}
+
+#[test]
+fn scriptable_objects_load_as_shared_assets() {
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(SoGame);
+    e.frame(0.1, &mut gfx);
+    e.frame(0.1, &mut gfx);
+    assert!(find(&e, "ok:30").is_some(), "the Enemy script checked its asset: {:?}", e.world.query::<&Name>().iter().map(|(_, n)| n.0.clone()).collect::<Vec<_>>());
+    let p = e.resources.get::<SoProbe>().unwrap();
+    let d = p.defaults.clone().unwrap().unwrap();
+    let names: Vec<&str> = d.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(names, ["hp", "speed", "tint", "next", "tags", "enabledCount"], "declaration order, no _private");
+    let map: serde_json::Map<String, Value> = d.into_iter().collect();
+    assert_eq!(Value::Object(map), serde_json::json!({ "hp": 10, "speed": 2.5, "tint": [1, 1, 1], "next": null, "tags": ["a"], "enabledCount": 0 }));
+    assert_eq!(p.is_so.clone().unwrap(), Ok(true));
+    assert_eq!(p.behaviour_is_so.clone().unwrap(), Ok(false));
+}

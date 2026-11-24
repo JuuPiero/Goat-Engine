@@ -629,6 +629,8 @@ export const Debug = {
   log(...a) { N.log(2, text(a)); },
   warn(...a) { N.log(3, text(a)); },
   error(...a) { N.log(4, text(a)); },
+  logWarning(...a) { N.log(3, text(a)); },
+  logError(...a) { N.log(4, text(a)); },
 };
 globalThis.console = { log: Debug.log, info: Debug.log, warn: Debug.warn, error: Debug.error, debug: Debug.log };
 
@@ -666,7 +668,44 @@ export const Mathf = {
   sin: Math.sin, cos: Math.cos, abs: Math.abs, sqrt: Math.sqrt, min: Math.min, max: Math.max, sign: Math.sign,
 };
 
-/** Host: initial field values (scene "props"); arrays fill Vector fields. */
+// ------------------------------------------------------------------ ScriptableObject
+
+/** Unity's ScriptableObject: a data asset shared by everything that references it.
+ *    export default class EnemyData extends ScriptableObject { hp = 10; speed = 2.5; }
+ *  Assets are `.asset.json` files (`{ "version": 1, "script": "scripts/EnemyData.ts", "data": {...} }`,
+ *  Project ▸ Create ▸ ScriptableObject); a script field set to an asset in the Inspector gets the
+ *  object, `ScriptableObject.load(key)` too. One instance per asset per run (changes made while
+ *  playing are not saved, like a build of Unity). `onEnable()` runs once loaded. */
+export class ScriptableObject {
+  /** The asset it was loaded from (null for createInstance / instantiate). */
+  get assetPath() { return this._key ?? null; }
+  get name() { return this._name ?? (this._key ? this._key.split('/').pop().replace(/\.asset\.json$/, '') : this.constructor.name); }
+  set name(n) { this._name = n; }
+  /** The asset at `key` (shared instance), or null. */
+  static load(key) { try { return N.loadAsset(key) ?? null; } catch (e) { Debug.logError(String(e?.message ?? e)); return null; } }
+  /** A new instance of a ScriptableObject class (not an asset). */
+  static createInstance(cls) { const so = new cls(); so.onEnable?.(); return so; }
+  /** A copy of an asset or instance (Unity's Instantiate). */
+  static instantiate(so) {
+    const c = new so.constructor();
+    Object.assign(c, so);
+    c._key = null;
+    c._name = `${so.name} (Clone)`;
+    c.onEnable?.();
+    return c;
+  }
+}
+
+/** Unity's Resources.load: ScriptableObject assets by key (other keys come back as they are). */
+export const Resources = {
+  load(key) { return typeof key === 'string' && key.endsWith('.asset.json') ? ScriptableObject.load(key) : key; },
+};
+
+const isAssetKey = (v) => typeof v === 'string' && v.endsWith('.asset.json');
+const assetOrValue = (v) => (isAssetKey(v) ? ScriptableObject.load(v) : v);
+
+/** Host: initial field values (scene "props", ScriptableObject "data"); arrays fill Vector fields,
+ *  `.asset.json` keys become the ScriptableObjects (also inside arrays). */
 export function __applyProps(obj, props) {
   if (!props || typeof props !== 'object') return;
   for (const k of Object.keys(props)) {
@@ -674,6 +713,34 @@ export function __applyProps(obj, props) {
     const cur = obj[k];
     if (Array.isArray(v) && cur instanceof Vector3) obj[k] = new Vector3(v[0] ?? 0, v[1] ?? 0, v[2] ?? 0);
     else if (Array.isArray(v) && cur instanceof Vector2) obj[k] = new Vector2(v[0] ?? 0, v[1] ?? 0);
-    else obj[k] = v;
+    else if (Array.isArray(v) && cur instanceof Quaternion) obj[k] = new Quaternion(v[0] ?? 0, v[1] ?? 0, v[2] ?? 0, v[3] ?? 1);
+    else if (Array.isArray(v) && v.some(isAssetKey)) obj[k] = v.map(assetOrValue);
+    else obj[k] = assetOrValue(v);
   }
+}
+
+const fieldJson = (v) => {
+  if (v instanceof Vector3) return [v.x, v.y, v.z];
+  if (v instanceof Vector2) return [v.x, v.y];
+  if (v instanceof Quaternion) return [v.x, v.y, v.z, v.w];
+  if (v instanceof ScriptableObject) return v._key ?? null;
+  if (v instanceof GameObject || v instanceof Transform) return null;
+  if (Array.isArray(v)) return v.map(fieldJson);
+  if (v && typeof v === 'object') {
+    const o = {};
+    for (const k of Object.keys(v)) if (!k.startsWith('_') && typeof v[k] !== 'function') o[k] = fieldJson(v[k]);
+    return o;
+  }
+  return typeof v === 'function' ? undefined : v;
+};
+
+/** Host (editor): the serialized fields of a fresh instance — own fields not starting with `_`,
+ *  as `[name, value]` pairs in declaration order. */
+export function __fields(obj) {
+  const out = [];
+  for (const k of Object.keys(obj)) {
+    if (k.startsWith('_') || typeof obj[k] === 'function') continue;
+    out.push([k, fieldJson(obj[k]) ?? null]);
+  }
+  return out;
 }

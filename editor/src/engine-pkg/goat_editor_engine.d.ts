@@ -116,6 +116,10 @@ export class EditorEngine {
      * pixels of a `w × h` view; `px, py` = pointer (pixels, negative = none).
      */
     scene_overlay(w: number, h: number, px: number, py: number): string;
+    /**
+     * `{ kind: "behaviour" | "scriptableObject", fields: {...} }` or `{ error }` of a script.
+     */
+    script_info(src: string): string;
     select(id?: string | null): void;
     /**
      * Selects several entities (JSON array of ids; the last is active).
@@ -243,6 +247,7 @@ export interface InitOutput {
     readonly editorengine_save_scene: (a: number) => [number, number, number, number];
     readonly editorengine_scene: (a: number) => [number, number];
     readonly editorengine_scene_overlay: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly editorengine_script_info: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_select: (a: number, b: number, c: number) => void;
     readonly editorengine_select_many: (a: number, b: number, c: number) => void;
     readonly editorengine_selected: (a: number) => [number, number];

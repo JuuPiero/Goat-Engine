@@ -525,7 +525,7 @@ Script gắn vào entity bằng component `Script` (tương đương MonoBehavio
 "Script": [ { "src": "scripts/Hover.ts", "props": { "height": 0.3 } }, { "src": "scripts/Pulse.cs" }, { "src": "native:Wobble" } ]
 ```
 
-`props` là giá trị khởi tạo của field (như field serialize của Unity). Thứ tự gọi: `start` trước `update` đầu tiên, `update` rồi `lateUpdate` mỗi frame (sau behaviour Rust), `fixedUpdate` theo nhịp cố định, `onDestroy` khi entity hoặc script bị xoá. Script ném lỗi thì được ghi ra Console và tắt, các script khác vẫn chạy.
+`props` là giá trị khởi tạo của field (như field serialize của Unity). Inspector hiện mỗi script như một component của Unity ("Hover (Script)": bật / tắt, field Script, rồi mọi field của class theo thứ tự khai báo với giá trị mặc định của class); field `_tên` là private, không hiện. Thứ tự gọi: `start` trước `update` đầu tiên, `update` rồi `lateUpdate` mỗi frame (sau behaviour Rust), `fixedUpdate` theo nhịp cố định, `onDestroy` khi entity hoặc script bị xoá. Script ném lỗi thì được ghi ra Console và tắt, các script khác vẫn chạy.
 
 **TypeScript / JavaScript** (`goat-script-js`) — ES module, API import từ `"goat"`:
 
@@ -595,6 +595,23 @@ void goat_game_init(void) { goat_register_behaviour(&WOBBLE); }   // scene: "nat
 ```
 
 C++ bọc bảng này bằng một template class (xem `crates/goat-script-native/examples/orbit.cpp`).
+
+**ScriptableObject** — asset dữ liệu dùng chung như Unity (TypeScript / JavaScript / C#):
+
+```ts
+import { ScriptableObject } from "goat";
+export default class EnemyData extends ScriptableObject {
+  maxHealth = 10;
+  moveSpeed = 2.5;
+  loot = null;                 // tham chiếu tới một ScriptableObject khác
+  onEnable() {}                // gọi một lần khi asset được nạp
+}
+```
+
+- Asset là file `.asset.json`: `{ "version": 1, "script": "scripts/EnemyData.ts", "data": { "maxHealth": 30 } }`. Tạo trong Project ▸ Create ▸ **ScriptableObject** ▸ *EnemyData* (menu liệt kê mọi script kế thừa `ScriptableObject`); Create ▸ Scripting có mẫu script Behaviour / ScriptableObject cho TS và C#.
+- Inspector của asset hiện field của class theo thứ tự khai báo (giá trị mặc định lấy từ class, giá trị đã lưu đè lên), sửa là ghi file ngay.
+- Field của script (Behaviour hoặc ScriptableObject) đặt bằng một `.asset.json` thì lúc chạy nhận **object** đó; mọi chỗ cùng tham chiếu một asset dùng chung một instance (asset tham chiếu vòng nhau cũng được). `ScriptableObject.load(key)` / `Resources.load(key)`, `ScriptableObject.createInstance(EnemyData)`, `ScriptableObject.instantiate(asset)` (bản sao "(Clone)"); `name`, `assetPath`. Thay đổi lúc Play không ghi vào asset (như bản build của Unity).
+- C#: `public class EnemyData : ScriptableObject { public int maxHealth = 10; }`, `ScriptableObject.CreateInstance<EnemyData>()`, `Resources.Load<EnemyData>(key)`.
 
 **Thêm lệnh cho script** (subsystem / game): `goat_script::extensions(ctx).add("Animator.setTrigger", f)` — mọi ngôn ngữ gọi được (`gameObject.call(...)`, `goat_call(...)`). `goat-animation` (feature `script`) đăng ký sẵn `Animator.setFloat / setInteger / setBool / setTrigger / resetTrigger / getFloat / getBool / currentState / play / crossFade`.
 

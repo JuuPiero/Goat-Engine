@@ -228,6 +228,26 @@ namespace GoatEngine
 
     public class MonoBehaviour : Behaviour { }
 
+    /// <summary>Unity's ScriptableObject: a data asset (<c>.asset.json</c>, Project ▸ Create ▸ ScriptableObject)
+    /// shared by everything that references it. A field of this type set in the Inspector gets the asset.</summary>
+    public class ScriptableObject
+    {
+        public string name { get; set; } = "";
+        /// <summary>The asset it was loaded from (null for CreateInstance / Instantiate).</summary>
+        public string? assetPath => null;
+        /// <summary>The asset at <paramref name="key"/> (one shared instance per run), or null.</summary>
+        public static T? Load<T>(string key) where T : ScriptableObject => null;
+        public static T CreateInstance<T>() where T : ScriptableObject, new() => new T();
+        /// <summary>A copy (Unity's Instantiate).</summary>
+        public static T Instantiate<T>(T original) where T : ScriptableObject => original;
+    }
+
+    /// <summary>Unity's Resources.Load for ScriptableObject assets.</summary>
+    public static class Resources
+    {
+        public static T? Load<T>(string key) where T : class => null;
+    }
+
     public static class Time
     {
         public static float deltaTime => 0;

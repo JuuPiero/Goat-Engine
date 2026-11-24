@@ -2302,6 +2302,8 @@ dependencies = [
  "goat-physics2d",
  "goat-runtime",
  "goat-scene",
+ "goat-script",
+ "goat-script-js",
  "hecs",
  "hello-game",
  "serde",

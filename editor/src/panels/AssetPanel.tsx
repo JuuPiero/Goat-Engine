@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, fileUrl, nameOf, parentOf, type Entry, type Folder } from '../api';
 import { beginAssetDrag } from '../dnd';
-import { openPrefab, openScene } from '../engine';
+import { getEngine, openPrefab, openScene } from '../engine';
+import { scriptInfo } from './ComponentEditor';
 import { getState, log, refresh, run, setState, useStore } from '../store';
 import { ChevronDown, ChevronRight, Plus, Search, X } from 'lucide-react';
 import { AssetGlyph, AssetSmallIcon } from '../ui/icons';
@@ -57,6 +58,20 @@ export function AssetPanel() {
   const dropTarget = useStore((s) => s.dropTarget);
   const [tree, setTree] = useState<Folder | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
+  // scripts whose class extends ScriptableObject (Create ▸ ScriptableObject ▸ …)
+  const [soTypes, setSoTypes] = useState<string[]>([]);
+  const engineReady = useStore((s) => s.engineReady);
+  const revisionForTypes = useStore((s) => s.revision);
+  useEffect(() => {
+    if (!engineReady) return;
+    const t = window.setTimeout(() => {
+      void api.search('').then((files) => {
+        const scripts = files.filter((f) => f.kind === 'script' && !/\.(d\.ts|cs\.js)$/.test(f.key)).map((f) => f.key);
+        setSoTypes(scripts.filter((k) => scriptInfo(k)?.kind === 'scriptableObject'));
+      });
+    }, 600);
+    return () => clearTimeout(t);
+  }, [engineReady, revisionForTypes]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']));
   const [query, setQuery] = useState('');
   const [size, setSize] = useState(64);
@@ -132,6 +147,41 @@ export function AssetPanel() {
       setState({ selection: [k] });
       setRenaming(k);
     }
+  };
+  /// A file name not taken in the current folder: "New Data.asset.json", "New Data 1.asset.json"…
+  const freeName = async (stem: string, ext: string) => {
+    const taken = new Set((await api.list(dir)).map((e) => e.name.toLowerCase()));
+    for (let i = 0; ; i++) {
+      const n = `${stem}${i ? ` ${i}` : ''}${ext}`;
+      if (!taken.has(n.toLowerCase())) return dir ? `${dir}/${n}` : n;
+    }
+  };
+  const writeNew = async (key: string, text: string) => {
+    if ((await run(`create ${key}`, () => api.writeText(key, text))) === undefined) return;
+    getEngine()?.put_file(key, new TextEncoder().encode(text));
+    refresh();
+    setState({ selection: [key] });
+    setRenaming(key);
+  };
+  /// Create ▸ Scripting: Unity's script templates (class named like the file).
+  const createScript = async (kind: 'behaviour' | 'scriptableObject', lang: 'ts' | 'cs') => {
+    const stem = kind === 'behaviour' ? 'NewBehaviourScript' : 'NewScriptableObject';
+    const key = await freeName(stem, `.${lang}`);
+    const cls = nameOf(key).replace(/\.(ts|cs)$/, '').replace(/[^A-Za-z0-9_]/g, '');
+    const text =
+      lang === 'ts'
+        ? kind === 'behaviour'
+          ? `import { Behaviour, Time } from "goat";\n\nexport default class ${cls} extends Behaviour {\n  speed = 1;\n\n  start() {}\n\n  update() {}\n}\n`
+          : `import { ScriptableObject } from "goat";\n\n/** A data asset: Project ▸ Create ▸ ScriptableObject ▸ ${cls}. */\nexport default class ${cls} extends ScriptableObject {\n  value = 1;\n  label = "";\n}\n`
+        : kind === 'behaviour'
+          ? `using GoatEngine;\n\npublic class ${cls} : MonoBehaviour\n{\n    public float speed = 1f;\n\n    void Start()\n    {\n    }\n\n    void Update()\n    {\n    }\n}\n`
+          : `using GoatEngine;\n\n/// <summary>A data asset: Project ▸ Create ▸ ScriptableObject ▸ ${cls}.</summary>\npublic class ${cls} : ScriptableObject\n{\n    public int value = 1;\n    public string label = "";\n}\n`;
+    await writeNew(key, text);
+  };
+  /// Create ▸ ScriptableObject ▸ <type>: an asset of that script (Unity's CreateAssetMenu).
+  const createScriptable = async (script: string) => {
+    const key = await freeName(`New ${nameOf(script).replace(/\.(ts|js|mjs|cs)$/i, '')}`, '.asset.json');
+    await writeNew(key, JSON.stringify({ version: 1, script, data: {} }, null, 2) + '\n');
   };
   const remove = async (ks: string[]) => {
     if (!ks.length) return;
@@ -264,6 +314,20 @@ export function AssetPanel() {
     { label: 'Prefab', action: () => void createAsset('prefab') },
     { label: 'Material', action: () => void createAsset('material') },
     { label: 'Animator Controller', action: () => void createAsset('controller') },
+    '-',
+    {
+      label: 'Scripting',
+      children: [
+        { label: 'Behaviour Script (TypeScript)', action: () => void createScript('behaviour', 'ts') },
+        { label: 'ScriptableObject Script (TypeScript)', action: () => void createScript('scriptableObject', 'ts') },
+        { label: 'MonoBehaviour Script (C#)', action: () => void createScript('behaviour', 'cs') },
+        { label: 'ScriptableObject Script (C#)', action: () => void createScript('scriptableObject', 'cs') },
+      ],
+    },
+    {
+      label: 'ScriptableObject',
+      children: soTypes.length ? soTypes.map((k) => ({ label: nameOf(k).replace(/\.(ts|js|mjs|cs)$/i, ''), action: () => void createScriptable(k) })) : [{ label: '(no ScriptableObject scripts)', disabled: true, action: () => {} }],
+    },
   ];
   /// Unity's Project window context menu (on an asset, or on empty space).
   const menuFor = (key: string | null): MenuItem[] => {

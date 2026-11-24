@@ -50,7 +50,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ GUID + `.meta` (key `guid:...`; editor phát hiện file đổi tên / di chuyển bên ngoài và sửa tham chiếu), override sâu trong prefab (đường id xuyên prefab lồng nhau, JSON merge patch, editor tự ghi khi lưu, entity thêm vào trong prefab), prefab variant (`base`)
 - ⬜ Bản build: chuyển JSON → nhị phân, nén texture trước cho từng nền tảng
 - ⬜ Hot reload asset trên desktop
-- ⬜ ScriptableObject-style data asset
+- ✅ ScriptableObject (`.asset.json`, TS / JS / C#, Inspector + Create menu, tham chiếu từ field script)
 
 ## Giai đoạn 3 — Gameplay systems (theo PiaEngine)
 - ✅ Physics 3D (`goat-physics`, Rapier): RigidBody dynamic / kinematic / static, Collider box / sphere / capsule, trigger, sự kiện va chạm, raycast, impulse; chạy được trên 3DS

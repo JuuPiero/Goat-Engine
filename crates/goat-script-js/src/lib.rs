@@ -73,6 +73,87 @@ struct Bridge {
 
 thread_local! {
     static BRIDGE: Cell<Option<Bridge>> = const { Cell::new(None) };
+    static SHARED: RefCell<Option<HostShared>> = const { RefCell::new(None) };
+}
+
+/// What natives need of the host that is running (set by `JsHost::enter`): modules, script
+/// classes, loaded ScriptableObject assets.
+#[derive(Clone)]
+struct HostShared {
+    loader: Rc<Loader>,
+    classes: Rc<RefCell<HashMap<String, JsObject>>>,
+    /// ScriptableObject assets by key: one shared instance per asset (Unity).
+    assets: Rc<RefCell<HashMap<String, JsObject>>>,
+    /// goat.js `__applyProps`.
+    apply: Rc<RefCell<Option<JsObject>>>,
+}
+
+fn shared() -> JsResult<HostShared> {
+    SHARED.with(|s| s.borrow().clone()).ok_or_else(|| err("no script host is running"))
+}
+
+/// Loads + evaluates a module and returns its namespace.
+fn evaluate_in(loader: &Loader, ctx: &mut Context, key: &str) -> JsResult<JsObject> {
+    let module = loader.module(key, ctx)?;
+    let promise = module.load_link_evaluate(ctx);
+    ctx.run_jobs()?;
+    match promise.state() {
+        PromiseState::Fulfilled(_) => Ok(module.namespace(ctx)),
+        PromiseState::Rejected(v) => Err(JsError::from_opaque(v)),
+        PromiseState::Pending => Err(err(format!("{key}: the module didn't finish evaluating (top-level await?)"))),
+    }
+}
+
+/// The class a script exports (default export, or the export named like the file).
+fn class_in(sh: &HostShared, ctx: &mut Context, src: &str) -> JsResult<JsObject> {
+    if let Some(c) = sh.classes.borrow().get(src) {
+        return Ok(c.clone());
+    }
+    let ns = evaluate_in(&sh.loader, ctx, src)?;
+    let stem = src.rsplit('/').next().unwrap_or(src).split('.').next().unwrap_or(src).to_string();
+    let mut class = None;
+    for name in ["default", stem.as_str()] {
+        let v = ns.get(JsString::from(name), ctx)?;
+        if let Some(o) = v.as_object().filter(|o| o.is_constructor()) {
+            class = Some(o);
+            break;
+        }
+    }
+    let class = class.ok_or_else(|| err(format!("{src}: export a class (`export default class {stem} extends Behaviour`)")))?;
+    if sh.apply.borrow().is_none() {
+        let goat = evaluate_in(&sh.loader, ctx, "goat")?;
+        *sh.apply.borrow_mut() = goat.get(js_string!("__applyProps"), ctx).ok().and_then(|v| v.as_object());
+    }
+    sh.classes.borrow_mut().insert(src.to_string(), class.clone());
+    Ok(class)
+}
+
+/// A ScriptableObject asset (`{ "version": 1, "script": "scripts/EnemyData.ts", "data": {...} }`):
+/// the script's class constructed, `data` applied over its defaults, `onEnable` called. Cached
+/// per key: every reference to the asset gets the same object.
+fn load_asset(ctx: &mut Context, key: &str) -> JsResult<JsValue> {
+    let sh = shared()?;
+    if let Some(o) = sh.assets.borrow().get(key) {
+        return Ok(o.clone().into());
+    }
+    let io = sh.loader.io.borrow().clone().ok_or_else(|| err("no asset root yet"))?;
+    let text = io.read_string(key).map_err(|e| err(format!("{key}: {e}")))?;
+    let json: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| err(format!("{key}: {e}")))?;
+    let script = json.get("script").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| err(format!("{key}: the asset has no script")))?.to_string();
+    let class = class_in(&sh, ctx, &script)?;
+    let object = class.construct(&[], None, ctx)?;
+    object.set(js_string!("_key"), JsValue::from(JsString::from(key)), true, ctx)?;
+    // cached before its data: assets referencing each other resolve to the same objects
+    sh.assets.borrow_mut().insert(key.to_string(), object.clone());
+    if let (Some(data), Some(apply)) = (json.get("data").filter(|d| d.is_object()), sh.apply.borrow().clone()) {
+        let d = JsValue::from_json(data, ctx)?;
+        apply.call(&JsValue::undefined(), &[object.clone().into(), d], ctx)?;
+    }
+    let on_enable = object.get(js_string!("onEnable"), ctx)?;
+    if let Some(f) = on_enable.as_callable() {
+        f.call(&object.clone().into(), &[], ctx)?;
+    }
+    Ok(object.into())
 }
 
 fn err(msg: impl Into<String>) -> JsError {
@@ -135,6 +216,10 @@ fn map_objects(v: &mut Value, f: &mut dyn FnMut(&serde_json::Map<String, Value>)
 /// The natives behind goat.js (`globalThis.__goat`).
 fn natives() -> Vec<(&'static str, usize, Native)> {
     vec![
+        ("loadAsset", 1, |_, a, c| {
+            let key = string(a, 0, c)?;
+            load_asset(c, &key)
+        }),
         ("find", 1, |_, a, c| {
             let name = string(a, 0, c)?;
             with_api(|api, hs| Ok(api.find(&name).map(|e| hs.borrow_mut().of(e)).unwrap_or(-1.0))).map(JsValue::from)
@@ -457,7 +542,7 @@ pub struct JsHost {
     ctx: Context,
     loader: Rc<Loader>,
     handles: Rc<RefCell<Handles>>,
-    classes: HashMap<String, JsObject>,
+    shared: HostShared,
     instances: HashMap<u32, Instance>,
     next: u32,
     apply_props: Option<JsObject>,
@@ -486,14 +571,17 @@ impl JsHost {
         }
         let natives = natives.build();
         ctx.register_global_property(js_string!("__goat"), natives, Attribute::all()).expect("__goat");
-        JsHost { ctx, loader, handles: Rc::new(RefCell::new(Handles::default())), classes: HashMap::new(), instances: HashMap::new(), next: 0, apply_props: None, tick: None, message: None }
+        let shared = HostShared { loader: loader.clone(), classes: Default::default(), assets: Default::default(), apply: Default::default() };
+        JsHost { ctx, loader, handles: Rc::new(RefCell::new(Handles::default())), shared, instances: HashMap::new(), next: 0, apply_props: None, tick: None, message: None }
     }
 
     /// Runs `f` with the bridge to `api` installed.
     fn enter<R>(&mut self, api: &mut Api, f: impl FnOnce(&mut Self) -> R) -> R {
         let bridge = Bridge { api: api as *mut Api as *mut (), handles: Rc::as_ptr(&self.handles) };
         let prev = BRIDGE.with(|c| c.replace(Some(bridge)));
+        let prev_shared = SHARED.with(|s| s.replace(Some(self.shared.clone())));
         let r = f(self);
+        SHARED.with(|s| *s.borrow_mut() = prev_shared);
         BRIDGE.with(|c| c.set(prev));
         r
     }
@@ -507,39 +595,68 @@ impl JsHost {
 
     /// Loads + evaluates a module and returns its namespace.
     fn evaluate(&mut self, key: &str) -> Result<JsObject, String> {
-        let module = self.loader.module(key, &mut self.ctx).map_err(|e| self.describe(e))?;
-        let promise = module.load_link_evaluate(&mut self.ctx);
-        self.ctx.run_jobs().map_err(|e| self.describe(e))?;
-        match promise.state() {
-            PromiseState::Fulfilled(_) => Ok(module.namespace(&mut self.ctx)),
-            PromiseState::Rejected(v) => Err(self.describe(JsError::from_opaque(v))),
-            PromiseState::Pending => Err("the module didn't finish evaluating (top-level await?)".into()),
-        }
+        evaluate_in(&self.loader.clone(), &mut self.ctx, key).map_err(|e| self.describe(e))
     }
 
     fn class_of(&mut self, src: &str) -> Result<JsObject, String> {
-        if let Some(c) = self.classes.get(src) {
-            return Ok(c.clone());
-        }
-        let ns = self.evaluate(src)?;
-        let stem = src.rsplit('/').next().unwrap_or(src).split('.').next().unwrap_or(src).to_string();
-        let mut class = None;
-        for name in ["default", stem.as_str()] {
-            let v = ns.get(JsString::from(name), &mut self.ctx).map_err(|e| self.describe(e))?;
-            if let Some(o) = v.as_object().filter(|o| o.is_constructor()) {
-                class = Some(o);
-                break;
-            }
-        }
-        let class = class.ok_or_else(|| format!("{src}: export a class (`export default class {stem} extends Behaviour`)"))?;
+        let sh = self.shared.clone();
+        let class = class_in(&sh, &mut self.ctx, src).map_err(|e| self.describe(e))?;
         if self.apply_props.is_none() {
             let goat = self.evaluate("goat")?;
             self.apply_props = goat.get(js_string!("__applyProps"), &mut self.ctx).ok().and_then(|v| v.as_object());
             self.tick = goat.get(js_string!("__tick"), &mut self.ctx).ok().and_then(|v| v.as_object());
             self.message = goat.get(js_string!("__message"), &mut self.ctx).ok().and_then(|v| v.as_object());
         }
-        self.classes.insert(src.to_string(), class.clone());
         Ok(class)
+    }
+
+    fn ensure_io(&mut self, api: &mut Api) -> Result<(), String> {
+        if self.loader.io.borrow().is_none() {
+            let io = api.ctx.resources.get::<goat_assets::AssetServer>().map(|a| a.io.clone()).ok_or("no AssetServer: add AssetsPlugin before ScriptPlugin")?;
+            *self.loader.io.borrow_mut() = Some(io);
+        }
+        Ok(())
+    }
+
+    /// The serialized fields of a script class as a fresh instance has them (the editor's
+    /// Inspector: Behaviours and ScriptableObjects), in declaration order: own enumerable fields
+    /// not starting with `_`, vectors as arrays, ScriptableObjects as their asset key.
+    pub fn defaults(&mut self, api: &mut Api, src: &str) -> Result<Vec<(String, Value)>, String> {
+        self.ensure_io(api)?;
+        self.enter(api, |h| {
+            let class = h.class_of(src)?;
+            let object = class.construct(&[], None, &mut h.ctx).map_err(|e| h.describe(e))?;
+            let goat = h.evaluate("goat")?;
+            let fields = goat.get(js_string!("__fields"), &mut h.ctx).map_err(|e| h.describe(e))?;
+            let f = fields.as_callable().ok_or("goat.js has no __fields")?;
+            let v = f.call(&JsValue::undefined(), &[object.into()], &mut h.ctx).map_err(|e| h.describe(e))?;
+            let v = v.to_json(&mut h.ctx).map(|v| v.unwrap_or(Value::Null)).map_err(|e| h.describe(e))?;
+            let pairs: Vec<(String, Value)> = serde_json::from_value(v).map_err(|e| e.to_string())?;
+            Ok(pairs)
+        })
+    }
+
+    /// Whether a script's class extends goat's ScriptableObject.
+    pub fn is_scriptable_object(&mut self, api: &mut Api, src: &str) -> Result<bool, String> {
+        self.ensure_io(api)?;
+        self.enter(api, |h| {
+            let class = h.class_of(src)?;
+            let goat = h.evaluate("goat")?;
+            let base = goat.get(js_string!("ScriptableObject"), &mut h.ctx).map_err(|e| h.describe(e))?;
+            let proto = class.get(js_string!("prototype"), &mut h.ctx).map_err(|e| h.describe(e))?;
+            let base_proto = base.as_object().ok_or("no ScriptableObject")?.get(js_string!("prototype"), &mut h.ctx).map_err(|e| h.describe(e))?;
+            let (Some(mut p), Some(bp)) = (proto.as_object(), base_proto.as_object()) else { return Ok(false) };
+            for _ in 0..32 {
+                if JsObject::equals(&p, &bp) {
+                    return Ok(true);
+                }
+                match p.prototype() {
+                    Some(n) => p = n,
+                    None => break,
+                }
+            }
+            Ok(false)
+        })
     }
 
     /// Evaluates a snippet (tests, the editor's console).
@@ -570,10 +687,7 @@ impl ScriptHost for JsHost {
     }
 
     fn instantiate(&mut self, api: &mut Api, entity: Entity, src: &str, props: &Value) -> Result<u32, String> {
-        if self.loader.io.borrow().is_none() {
-            let io = api.ctx.resources.get::<goat_assets::AssetServer>().map(|a| a.io.clone()).ok_or("no AssetServer: add AssetsPlugin before ScriptPlugin")?;
-            *self.loader.io.borrow_mut() = Some(io);
-        }
+        self.ensure_io(api)?;
         self.enter(api, |h| {
             let class = h.class_of(src)?;
             let object = class.construct(&[], None, &mut h.ctx).map_err(|e| h.describe(e))?;
@@ -635,8 +749,10 @@ impl ScriptHost for JsHost {
     }
 
     fn invalidate(&mut self, src: &str) {
-        self.classes.remove(src);
+        self.shared.classes.borrow_mut().remove(src);
         self.loader.modules.borrow_mut().remove(src);
+        // ScriptableObject assets are re-read (their file or their script changed)
+        self.shared.assets.borrow_mut().clear();
     }
 }
 
