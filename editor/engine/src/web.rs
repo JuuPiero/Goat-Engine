@@ -128,6 +128,11 @@ impl EditorEngine {
         let ids = self.core.duplicate_selection(&mut self.gfx).map_err(|e| JsValue::from_str(&e))?;
         Ok(serde_json::to_string(&ids.into_iter().map(id_of).collect::<Vec<_>>()).unwrap_or_default())
     }
+    /// Runs an Inspector button of a component (e.g. NavMeshSurface ▸ Bake); returns its message.
+    pub fn component_action(&mut self, id: &str, component: &str, action: &str) -> Result<String, JsValue> {
+        let e = entity_of(id).ok_or_else(|| JsValue::from_str("no entity"))?;
+        self.core.component_action(&mut self.gfx, e, component, action).map_err(|e| JsValue::from_str(&e))
+    }
     /// `{ components: { name: { menu, defaults?, fields?, requires? } }, behaviours: [...] }`.
     pub fn component_info(&self) -> String {
         self.core.component_info().to_string()

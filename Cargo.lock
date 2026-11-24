@@ -2295,6 +2295,7 @@ dependencies = [
  "goat-core",
  "goat-gfx",
  "goat-gfx-wgpu",
+ "goat-navigation",
  "goat-particles",
  "goat-physics2d",
  "goat-runtime",
@@ -2346,6 +2347,36 @@ dependencies = [
  "goat-assets",
  "goat-core",
  "goat-runtime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "goat-lines"
+version = "0.1.0"
+dependencies = [
+ "goat-assets",
+ "goat-core",
+ "goat-gfx",
+ "goat-runtime",
+ "goat-scene",
+ "goat-sprites",
+ "hecs",
+ "serde",
+]
+
+[[package]]
+name = "goat-navigation"
+version = "0.1.0"
+dependencies = [
+ "goat-assets",
+ "goat-core",
+ "goat-gfx",
+ "goat-physics",
+ "goat-runtime",
+ "goat-scene",
+ "goat-script",
+ "hecs",
  "serde",
  "serde_json",
 ]
@@ -2803,6 +2834,8 @@ dependencies = [
  "goat-assets",
  "goat-audio",
  "goat-input",
+ "goat-lines",
+ "goat-navigation",
  "goat-particles",
  "goat-physics",
  "goat-physics2d",

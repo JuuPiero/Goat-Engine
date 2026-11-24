@@ -405,6 +405,47 @@ export class Animator {
   onEvent(fn) { animListeners.push({ h: this._h, fn }); return this; }
 }
 
+/**
+ * Walks an object over the navmesh (Unity's NavMeshAgent): NavMeshAgent.of(go).setDestination(p).
+ * State getters read the engine (one call each): remainingDistance, hasPath, pathPending, velocity...
+ */
+export class NavMeshAgent {
+  constructor(go) { this._h = handle(go); }
+  static of(go) { return new NavMeshAgent(go); }
+  _s() { return N.call('NavMeshAgent.state', this._h, []); }
+  setDestination(p) { return N.call('NavMeshAgent.setDestination', this._h, [arr(p)]); }
+  set destination(p) { this.setDestination(p); }
+  get destination() { return v3(this._s().destination); }
+  get remainingDistance() { return this._s().remainingDistance; }
+  get hasPath() { return this._s().hasPath; }
+  get pathPending() { return this._s().pathPending; }
+  get isOnNavMesh() { return this._s().isOnNavMesh; }
+  get pathStatus() { return this._s().pathStatus; }
+  get velocity() { return v3(this._s().velocity); }
+  get desiredVelocity() { return v3(this._s().desiredVelocity); }
+  get nextPosition() { return v3(this._s().nextPosition); }
+  get steeringTarget() { return v3(this._s().steeringTarget); }
+  get stoppingDistance() { return this._s().stoppingDistance; }
+  set stoppingDistance(v) { N.call('NavMeshAgent.set', this._h, ['stopping_distance', v]); }
+  set speed(v) { N.call('NavMeshAgent.set', this._h, ['speed', v]); }
+  set angularSpeed(v) { N.call('NavMeshAgent.set', this._h, ['angular_speed', v]); }
+  set acceleration(v) { N.call('NavMeshAgent.set', this._h, ['acceleration', v]); }
+  get isStopped() { return this._s().isStopped; }
+  set isStopped(b) { N.call('NavMeshAgent.setStopped', this._h, [!!b]); }
+  get path() { return { corners: this._s().corners.map(v3), status: this.pathStatus }; }
+  resetPath() { N.call('NavMeshAgent.resetPath', this._h, []); }
+  warp(p) { return N.call('NavMeshAgent.warp', this._h, [arr(p)]); }
+  move(offset) { N.call('NavMeshAgent.move', this._h, [arr(offset)]); }
+}
+
+const navHit = (h) => ({ hit: h.hit, position: h.position ? v3(h.position) : null, normal: h.normal ? v3(h.normal) : null, distance: h.distance ?? Infinity, mask: h.mask ?? 0 });
+/** Unity's NavMesh queries: NavMesh.samplePosition(p, 2) → { hit, position }, calculatePath(a, b) → { status, corners }. */
+export const NavMesh = {
+  allAreas: 0xffffffff,
+  samplePosition(p, maxDistance = 1, areaMask = 0xffffffff) { return navHit(call('NavMesh.samplePosition', null, [arr(p), maxDistance, areaMask])); },
+  calculatePath(a, b, areaMask = 0xffffffff) { const r = call('NavMesh.calculatePath', null, [arr(a), arr(b), areaMask]); return { status: r.status, corners: r.corners.map(v3) }; },
+  raycast(a, b) { return navHit(call('NavMesh.raycast', null, [arr(a), arr(b)])); },
+};
 /** Flipbook animation of a SpriteRenderer: SpriteAnimator.of(go).play("run"). */
 export class SpriteAnimator {
   constructor(go) { this._h = handle(go); }

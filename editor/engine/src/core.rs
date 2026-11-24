@@ -107,6 +107,7 @@ pub struct EditorCore {
     selection_boxes: Vec<Entity>,
     pub(crate) undo: Vec<crate::editing::UndoStep>,
     pub(crate) redo: Vec<crate::editing::UndoStep>,
+    pub(crate) nav_preview: crate::navpreview::NavPreview,
     pub tools: crate::tools::Tools,
     /// Buttons held (Play mode input), by Button index.
     held: [bool; 14],
@@ -142,6 +143,7 @@ impl EditorCore {
             selection_boxes: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
+            nav_preview: Default::default(),
             tools: Default::default(),
             held: [false; 14],
             axes: [0.0; 4],
@@ -401,6 +403,7 @@ impl EditorCore {
         }
         self.update_selection_box(gfx);
         self.update_tools(gfx);
+        self.update_nav_preview(gfx);
         self.edit.frame(dt, gfx);
     }
 

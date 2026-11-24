@@ -25,6 +25,8 @@ pub fn plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(goat_audio::AudioPlugin::default()),
         Box::new(goat_animation::AnimationPlugin::default()),
         Box::new(goat_particles::ParticlePlugin::default()),
+        Box::new(goat_lines::LinePlugin::default()),
+        Box::new(goat_navigation::NavigationPlugin),
         Box::new(goat_ui::UiPlugin::default()),
         Box::new(goat_tween::TweenPlugin),
         Box::new(goat_save::SavePlugin::new("GoatHello")),
@@ -234,6 +236,16 @@ impl Game for HelloGame {
 
     fn start(&mut self, ctx: &mut Context) {
         info!("Hello from GoatEngine on {}", ctx.gfx.name());
+        // a scene instead of the demo: `--scene scenes/navigation.scene.json` (desktop), or
+        // GOAT_START_SCENE when building (the 3DS has no command line)
+        let arg = std::env::args().skip_while(|a| a != "--scene").nth(1);
+        if let Some(key) = arg.or(option_env!("GOAT_START_SCENE").map(str::to_string)).filter(|k| !k.is_empty()) {
+            register(goat_scene::registry(ctx));
+            match goat_scene::load_scene(ctx, &key, goat_scene::LoadMode::Single) {
+                Ok(_) => return,
+                Err(e) => goat_runtime::warn!("--scene {key}: {e}"),
+            }
+        }
         let gfx = &mut *ctx.gfx;
 
         // ground: mipmapped (no shimmering in the distance), 16-bit on the 3DS

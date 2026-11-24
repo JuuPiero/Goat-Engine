@@ -257,6 +257,30 @@ mod tests {
     }
 
     #[test]
+    fn bake_button_and_navmesh_preview() {
+        let (mut c, mut gfx) = core();
+        c.open_scene(&mut gfx, "scenes/navigation.scene.json").unwrap();
+        let s = named(&c, "NavMesh Surface").unwrap();
+        let msg = c.component_action(&mut gfx, s, "NavMeshSurface", "Bake").unwrap();
+        assert!(msg.contains("walkable cells"), "{msg}");
+        assert!(!c.edit.world.get::<&goat_navigation::NavMeshSurface>(s).unwrap().baked_data.is_empty());
+        let info = c.component_info();
+        assert_eq!(info["components"]["NavMeshSurface"]["actions"], serde_json::json!(["Bake", "Clear"]));
+        // selecting the surface shows its navmesh on the editor layer
+        c.select_many(vec![s]);
+        c.frame(&mut gfx, 0.016);
+        let shown = c.edit.world.query::<(&Name, &MeshRenderer)>().iter().filter(|(_, (n, r))| n.0 == "NavMesh Preview" && r.visible).count();
+        assert!(shown >= 1);
+        c.select_many(vec![]);
+        c.frame(&mut gfx, 0.016);
+        assert_eq!(c.edit.world.query::<(&Name, &MeshRenderer)>().iter().filter(|(_, (n, r))| n.0 == "NavMesh Preview" && r.visible).count(), 0);
+        // saved with the scene, Clear removes it
+        assert!(c.save_scene().unwrap().contains("baked_data"));
+        c.component_action(&mut gfx, s, "NavMeshSurface", "Clear").unwrap();
+        assert!(c.edit.world.get::<&goat_navigation::NavMeshSurface>(s).unwrap().baked_data.is_empty());
+    }
+
+    #[test]
     fn every_component_can_be_added_from_its_defaults() {
         let (mut c, mut gfx) = core();
         let info = c.component_info();

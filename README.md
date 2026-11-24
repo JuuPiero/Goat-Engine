@@ -407,6 +407,23 @@ Hiệu ứng làm sẵn trong Unity có thể chuyển sang bằng `tools/unity-
 
   Trong script: `SpriteAnimator.of(go).play("hit")`.
 
+## Line, trail (`goat-lines`)
+
+`LineRenderer` (đường qua danh sách điểm) và `TrailRenderer` (vệt phía sau một vật đang chạy), giống Unity:
+- Line: `positions` (toạ độ thế giới hoặc cục bộ, `use_world_space`), `loop`, `start_width` / `end_width` × `width_multiplier`, `start_color` / `end_color`.
+- Trail: `time` (số giây một điểm tồn tại), `min_vertex_distance`, `emitting` (tắt thì vệt rời khỏi vật và mờ dần), `autodestruct` (xoá vật khi đứng yên và vệt đã hết); `clear()`.
+- Chung: `alignment` `View` (quay về camera) / `TransformZ` (nằm phẳng theo trục Z của vật), `texture_mode` `Stretch` / `Tile`, `texture`, `blend` (Alpha / Additive), `layer`, `sorting_order`.
+- Vẽ unlit, gom chung với bộ gom sprite (mỗi texture một draw call), nên chạy cả trên 3DS. Line hiện cả trong Edit Mode; trail chỉ ghi điểm khi Play.
+
+## Navigation (`goat-navigation`)
+
+NavMesh giống package AI Navigation của Unity (cùng thiết kế với `com.pia.ai-navigation` của PiaEngine):
+- `NavMeshSurface`: bấm **Bake** trong Inspector (hoặc `bake_on_awake`, `build_nav_mesh()` lúc chạy). Hình học lấy từ collider của goat-physics (Box / Sphere / Capsule / Mesh) hoặc từ MeshRenderer (cả mesh trong model glTF). Có bán kính / chiều cao / độ dốc / bậc leo của agent, All / Volume / Children, layer mask, voxel size, min region area. Chọn surface trong editor để thấy lưới navmesh phủ lên Scene view. Dữ liệu bake lưu trong scene.
+- `NavMeshAgent`: `set_destination` (đường được tính ở lần update kế tiếp: `path_pending`), tự tăng tốc / quay / phanh, `stopping_distance`, tránh agent khác theo `avoidance_priority`, `warp` / `move_by` / `reset_path`, `is_stopped`, đi một phần đường khi đích không tới được và tự tính lại khi navmesh đổi.
+- `NavMeshObstacle` (Box / Capsule): agent lách quanh; bật `carve` thì khoét lỗ trên navmesh. `NavMeshModifier`: đổi area hoặc bỏ khỏi bake.
+- Resource `NavMeshes` (``NavMesh`` của Unity): `calculate_path`, `sample_position`, `raycast`, `find_closest_edge`, tên area + cost.
+- Script: `NavMeshAgent.of(go).setDestination(p)`, `.remainingDistance`, `.pathPending`, `.velocity`, `.isStopped`, `.warp()`… và `NavMesh.samplePosition(p, 2)` / `calculatePath(a, b)` / `raycast(a, b)` trong TypeScript / JavaScript / C#.
+- Demo: `scenes/navigation.scene.json` (desktop: `goat-hello --scene scenes/navigation.scene.json`; 3DS: build với biến môi trường `GOAT_START_SCENE=scenes/navigation.scene.json`).
 ## Physics 2D
 
 Crate riêng `goat-physics2d` (Rapier 2D): game chỉ 2D thì không mang physics 3D theo, và ngược lại.

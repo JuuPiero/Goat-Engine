@@ -21,6 +21,8 @@ members = [
     "crates/goat-audio",
     "crates/goat-animation",
     "crates/goat-particles",
+    "crates/goat-lines",
+    "crates/goat-navigation",
     "crates/goat-ui",
     "crates/goat-tween",
     "crates/goat-save",
@@ -53,6 +55,8 @@ default-members = [
     "crates/goat-audio",
     "crates/goat-animation",
     "crates/goat-particles",
+    "crates/goat-lines",
+    "crates/goat-navigation",
     "crates/goat-ui",
     "crates/goat-tween",
     "crates/goat-save",
@@ -90,6 +94,8 @@ goat-script-native = { path = "crates/goat-script-native" }
 goat-audio = { path = "crates/goat-audio" }
 goat-animation = { path = "crates/goat-animation" }
 goat-particles = { path = "crates/goat-particles" }
+goat-lines = { path = "crates/goat-lines" }
+goat-navigation = { path = "crates/goat-navigation" }
 goat-ui = { path = "crates/goat-ui" }
 goat-tween = { path = "crates/goat-tween" }
 goat-save = { path = "crates/goat-save" }

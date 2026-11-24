@@ -1,0 +1,30 @@
+[package]
+name = "goat-navigation"
+description = "GoatEngine navigation meshes (Unity's AI Navigation): NavMeshSurface bake (grid heightfield), NavMeshAgent (paths, steering, avoidance), NavMeshObstacle (carving), NavMeshModifier, NavMesh queries."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-runtime.workspace = true
+goat-assets.workspace = true
+hecs.workspace = true
+serde.workspace = true
+goat-scene = { workspace = true, optional = true }
+goat-physics = { workspace = true, optional = true }
+goat-script = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[features]
+default = ["physics"]
+# NavMeshSurface / Agent / Obstacle / Modifier in scene files + Inspector buttons
+scene = ["dep:goat-scene"]
+# bake from goat-physics colliders
+physics = ["dep:goat-physics"]
+# NavMeshAgent / NavMesh calls for scripts
+script = ["dep:goat-script", "dep:serde_json"]
+
+[dev-dependencies]
+goat-gfx.workspace = true
+goat-scene.workspace = true

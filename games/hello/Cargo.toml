@@ -27,6 +27,8 @@ goat-particles = { workspace = true, features = ["scene", "physics"] }
 goat-ui = { workspace = true, features = ["scene", "script"] }
 goat-tween = { workspace = true, features = ["scene", "script"] }
 goat-save = { workspace = true, features = ["script"] }
+goat-lines = { workspace = true, features = ["scene"] }
+goat-navigation = { workspace = true, features = ["scene", "script"] }
 
 [features]
 default = ["typescript"]

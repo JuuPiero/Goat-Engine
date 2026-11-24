@@ -1,0 +1,20 @@
+[package]
+name = "goat-lines"
+description = "GoatEngine line rendering (Unity's LineRenderer / TrailRenderer): camera-facing or flat ribbons through points / an object's recent path, batched with the sprite batcher (one draw per texture), on every backend."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+goat-runtime.workspace = true
+goat-sprites.workspace = true
+goat-assets.workspace = true
+hecs.workspace = true
+serde.workspace = true
+goat-scene = { workspace = true, optional = true }
+
+[features]
+# LineRenderer / TrailRenderer in scene files
+scene = ["dep:goat-scene"]

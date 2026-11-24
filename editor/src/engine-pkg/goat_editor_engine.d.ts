@@ -7,6 +7,10 @@ export class EditorEngine {
     [Symbol.dispose](): void;
     backend_name(): string;
     /**
+     * Runs an Inspector button of a component (e.g. NavMeshSurface ▸ Bake); returns its message.
+     */
+    component_action(id: string, component: string, action: string): string;
+    /**
      * `{ components: { name: { menu, defaults?, fields?, requires? } }, behaviours: [...] }`.
      */
     component_info(): string;
@@ -124,6 +128,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_editorengine_free: (a: number, b: number) => void;
     readonly editorengine_backend_name: (a: number) => [number, number];
+    readonly editorengine_component_action: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly editorengine_component_info: (a: number) => [number, number];
     readonly editorengine_component_names: (a: number) => [number, number];
     readonly editorengine_components: (a: number, b: number, c: number) => [number, number];

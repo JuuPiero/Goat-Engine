@@ -32,6 +32,8 @@ pub struct SaveContext<'a> {
 pub type SaveFn = fn(&SaveContext, Entity) -> Option<Value>;
 pub type LoadFn = fn(&mut LoadContext, Entity, &Value) -> Result<(), String>;
 pub type RemoveFn = fn(&mut World, Entity);
+/// A component action (an Inspector button, Unity's [ContextMenu] / Odin's [Button]): returns a message for the Console.
+pub type ActionFn = fn(&mut LoadContext, Entity) -> Result<String, String>;
 
 /// Removes a component of type `T` (codecs' `remove`).
 pub fn remove_typed<T: hecs::Component>(world: &mut World, e: Entity) {
@@ -104,9 +106,12 @@ pub struct ComponentInfo {
     pub defaults: Option<Value>,
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub fields: std::collections::BTreeMap<&'static str, FieldHint>,
-    /// Allowed more than once per entity? (ECS: never — kept for the editor's checks.)
+    /// Components added with this one (Unity's RequireComponent).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<&'static str>,
+    /// Inspector buttons (registered with [`SceneRegistry::action`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<&'static str>,
 }
 
 impl ComponentInfo {
@@ -173,12 +178,13 @@ pub struct SceneRegistry {
     behaviours: HashMap<TypeId, BehaviourCodec>,
     behaviour_names: HashMap<String, TypeId>,
     info: HashMap<String, ComponentInfo>,
+    actions: HashMap<(String, String), ActionFn>,
 }
 
 impl Default for SceneRegistry {
     /// The engine's built-in components already registered.
     fn default() -> Self {
-        let mut r = SceneRegistry { components: Vec::new(), behaviours: HashMap::new(), behaviour_names: HashMap::new(), info: HashMap::new() };
+        let mut r = SceneRegistry { components: Vec::new(), behaviours: HashMap::new(), behaviour_names: HashMap::new(), info: HashMap::new(), actions: HashMap::new() };
         crate::builtins::register(&mut r);
         crate::component_info::describe_engine_components(&mut r);
         r
@@ -187,13 +193,33 @@ impl Default for SceneRegistry {
 
 impl SceneRegistry {
     /// Editor metadata of a component (by codec name); replaces earlier descriptions.
-    pub fn describe(&mut self, name: &str, info: ComponentInfo) -> &mut Self {
+    pub fn describe(&mut self, name: &str, mut info: ComponentInfo) -> &mut Self {
+        // keep the buttons added with action()
+        for a in self.info.get(name).map(|i| i.actions.clone()).unwrap_or_default() {
+            if !info.actions.contains(&a) {
+                info.actions.push(a);
+            }
+        }
         self.info.insert(name.to_string(), info);
         self
     }
 
     pub fn info(&self, name: &str) -> Option<&ComponentInfo> {
         self.info.get(name)
+    }
+
+    /// Adds an Inspector button to a component (listed in its ComponentInfo `actions`).
+    pub fn action(&mut self, component: &str, label: &'static str, f: ActionFn) -> &mut Self {
+        self.actions.insert((component.to_string(), label.to_string()), f);
+        let info = self.info.entry(component.to_string()).or_insert_with(|| ComponentInfo::new(""));
+        if !info.actions.contains(&label) {
+            info.actions.push(label);
+        }
+        self
+    }
+
+    pub fn find_action(&self, component: &str, label: &str) -> Option<ActionFn> {
+        self.actions.get(&(component.to_string(), label.to_string())).copied()
     }
 
     /// Names of the registered behaviours (Add Component ▸ Scripts).

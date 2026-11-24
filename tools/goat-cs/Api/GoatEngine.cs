@@ -99,7 +99,9 @@ namespace GoatEngine
     }
 
     public enum Ease { Linear, InSine, OutSine, InOutSine, InQuad, OutQuad, InOutQuad, InCubic, OutCubic, InOutCubic, InQuart, OutQuart, InOutQuart, InQuint, OutQuint, InOutQuint, InExpo, OutExpo, InOutExpo, InCirc, OutCirc, InOutCirc, InElastic, OutElastic, InOutElastic, InBack, OutBack, InOutBack, InBounce, OutBounce, InOutBounce }
+
     public enum LoopType { Restart, Yoyo, Incremental }
+
     public enum PathType { CatmullRom, Linear }
 
     /// <summary>A running tween (DOTween's Tween / Tweener): settings chain.</summary>
@@ -156,11 +158,17 @@ namespace GoatEngine
 
     // coroutines (Unity's yield instructions)
     public class Coroutine { }
+
     public class WaitForSeconds { public WaitForSeconds(float seconds) { } }
+
     public class WaitForSecondsRealtime { public WaitForSecondsRealtime(float seconds) { } }
+
     public class WaitUntil { public WaitUntil(System.Func<bool> predicate) { } }
+
     public class WaitWhile { public WaitWhile(System.Func<bool> predicate) { } }
+
     public class WaitForEndOfFrame { }
+
     public class WaitForFixedUpdate { }
 
     /// <summary>Unity 2023's Awaitable: `await Awaitable.WaitForSecondsAsync(1)` in async methods.</summary>
@@ -282,6 +290,56 @@ namespace GoatEngine
         public Animator OnEvent(System.Action<AnimationEvent> handler) => this;
     }
 
+    /// <summary>Walks an object over the navmesh (Unity's NavMeshAgent).</summary>
+    public class NavMeshAgent
+    {
+        public static NavMeshAgent Of(GameObject go) => null!;
+        public bool SetDestination(Vector3 target) => false;
+        public Vector3 destination { get; set; }
+        public float remainingDistance => 0;
+        public bool hasPath => false;
+        public bool pathPending => false;
+        public bool isOnNavMesh => false;
+        public string pathStatus => "";
+        public Vector3 velocity => default;
+        public Vector3 desiredVelocity => default;
+        public Vector3 nextPosition => default;
+        public Vector3 steeringTarget => default;
+        public float stoppingDistance { get; set; }
+        public float speed { set { } }
+        public float angularSpeed { set { } }
+        public float acceleration { set { } }
+        public bool isStopped { get; set; }
+        public void ResetPath() { }
+        public bool Warp(Vector3 position) => false;
+        public void Move(Vector3 offset) { }
+    }
+
+    /// <summary>Result of a NavMesh query.</summary>
+    public class NavMeshHit
+    {
+        public bool hit;
+        public Vector3 position;
+        public Vector3 normal;
+        public float distance;
+        public int mask;
+    }
+
+    /// <summary>A path: corners + status ("PathComplete", "PathPartial", "PathInvalid").</summary>
+    public class NavMeshPath
+    {
+        public Vector3[] corners = [];
+        public string status = "";
+    }
+
+    /// <summary>Unity's NavMesh queries.</summary>
+    public static class NavMesh
+    {
+        public const int allAreas = -1;
+        public static NavMeshHit SamplePosition(Vector3 position, float maxDistance = 1, int areaMask = -1) => null!;
+        public static NavMeshPath CalculatePath(Vector3 source, Vector3 target, int areaMask = -1) => null!;
+        public static NavMeshHit Raycast(Vector3 source, Vector3 target) => null!;
+    }
     /// <summary>Flipbook animation of a SpriteRenderer.</summary>
     public class SpriteAnimator
     {
@@ -314,40 +372,6 @@ namespace GoatEngine
     }
 
     public class MixerGroupSettings { public float volume; public bool mute; public float lowpass; }
-
-    public class AnimationEvent { public string name = ""; public string parameter = ""; public string clip = ""; }
-
-    /// <summary>The Animator of an object: Animator.Of(gameObject).SetTrigger("jump").</summary>
-    public class Animator
-    {
-        public static Animator Of(GameObject go) => null!;
-        public void SetFloat(string name, float v) { }
-        public void SetInteger(string name, int v) { }
-        public void SetBool(string name, bool v) { }
-        public void SetTrigger(string name) { }
-        public void ResetTrigger(string name) { }
-        public float GetFloat(string name) => 0;
-        public bool GetBool(string name) => false;
-        public void Play(string state) { }
-        public void CrossFade(string state, float seconds) { }
-        public string? CurrentState(int layer = 0) => null;
-        public float NormalizedTime(int layer = 0) => 0;
-        public float speed { set { } }
-        public AnimationEvent[] events => [];
-        public Animator OnEvent(System.Action<AnimationEvent> handler) => this;
-    }
-
-    /// <summary>Flipbook animation of a SpriteRenderer.</summary>
-    public class SpriteAnimator
-    {
-        public static SpriteAnimator Of(GameObject go) => null!;
-        public void Play(string clip) { }
-        public void Restart(string clip) { }
-        public string current => "";
-        public bool finished => false;
-        public float speed { set { } }
-        public bool paused { set { } }
-    }
 
     public static class AudioMixer
     {
@@ -363,101 +387,6 @@ namespace GoatEngine
         public Vector3 normal;
         public float distance;
     }
-    public class AnimationEvent { public string name = ""; public string parameter = ""; public string clip = ""; }
-
-    /// <summary>The Animator of an object: Animator.Of(gameObject).SetTrigger("jump").</summary>
-    public class Animator
-    {
-        public static Animator Of(GameObject go) => null!;
-        public void SetFloat(string name, float v) { }
-        public void SetInteger(string name, int v) { }
-        public void SetBool(string name, bool v) { }
-        public void SetTrigger(string name) { }
-        public void ResetTrigger(string name) { }
-        public float GetFloat(string name) => 0;
-        public bool GetBool(string name) => false;
-        public void Play(string state) { }
-        public void CrossFade(string state, float seconds) { }
-        public string? CurrentState(int layer = 0) => null;
-        public float NormalizedTime(int layer = 0) => 0;
-        public float speed { set { } }
-        public AnimationEvent[] events => [];
-        public Animator OnEvent(System.Action<AnimationEvent> handler) => this;
-    }
-
-    /// <summary>Flipbook animation of a SpriteRenderer.</summary>
-    public class SpriteAnimator
-    {
-        public static SpriteAnimator Of(GameObject go) => null!;
-        public void Play(string clip) { }
-        public void Restart(string clip) { }
-        public string current => "";
-        public bool finished => false;
-        public float speed { set { } }
-        public bool paused { set { } }
-    }
-
-    public static class Audio
-    {
-        public static void PlayOneShot(string clip, float volume = 1, string group = "") { }
-        public static void PlayClipAtPoint(string clip, Vector3 position, float volume = 1) { }
-        public static float masterVolume { set { } }
-    }
-
-    /// <summary>The AudioSource of an object: AudioSource.Of(gameObject).Play().</summary>
-    public class AudioSource
-    {
-        public static AudioSource Of(GameObject go) => null!;
-        public void Play() { }
-        public void Stop() { }
-        public void Pause() { }
-        public void UnPause() { }
-        public bool isPlaying => false;
-        public float time => 0;
-    }
-
-    public class MixerGroupSettings { public float volume; public bool mute; public float lowpass; }
-
-    public class AnimationEvent { public string name = ""; public string parameter = ""; public string clip = ""; }
-
-    /// <summary>The Animator of an object: Animator.Of(gameObject).SetTrigger("jump").</summary>
-    public class Animator
-    {
-        public static Animator Of(GameObject go) => null!;
-        public void SetFloat(string name, float v) { }
-        public void SetInteger(string name, int v) { }
-        public void SetBool(string name, bool v) { }
-        public void SetTrigger(string name) { }
-        public void ResetTrigger(string name) { }
-        public float GetFloat(string name) => 0;
-        public bool GetBool(string name) => false;
-        public void Play(string state) { }
-        public void CrossFade(string state, float seconds) { }
-        public string? CurrentState(int layer = 0) => null;
-        public float NormalizedTime(int layer = 0) => 0;
-        public float speed { set { } }
-        public AnimationEvent[] events => [];
-        public Animator OnEvent(System.Action<AnimationEvent> handler) => this;
-    }
-
-    /// <summary>Flipbook animation of a SpriteRenderer.</summary>
-    public class SpriteAnimator
-    {
-        public static SpriteAnimator Of(GameObject go) => null!;
-        public void Play(string clip) { }
-        public void Restart(string clip) { }
-        public string current => "";
-        public bool finished => false;
-        public float speed { set { } }
-        public bool paused { set { } }
-    }
-
-    public static class AudioMixer
-    {
-        public static void Set(string group, object settings) { }
-        public static MixerGroupSettings? Get(string group) => null;
-        public static void SetVolumeDb(string group, float db) { }
-    }
 
     public class RaycastHit2D
     {
@@ -466,8 +395,11 @@ namespace GoatEngine
         public Vector2 normal;
         public float distance;
     }
+
     public class CollisionFlags { public bool below, sides, above; }
+
     public class CharacterMove { public bool isGrounded; public CollisionFlags collisionFlags = null!; public Vector3 velocity; }
+
     public class CollisionInfo { public GameObject other = null!; public string kind = ""; }
 
     /// <summary>3D physics (layerMask: bits of layers, -1 = all).</summary>

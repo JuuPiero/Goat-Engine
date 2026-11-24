@@ -26,6 +26,8 @@ interface ComponentInfo {
   defaults?: Json;
   fields?: Record<string, FieldHint>;
   requires?: string[];
+  /** Inspector buttons (SceneRegistry::action). */
+  actions?: string[];
 }
 interface InfoSet {
   components: Record<string, ComponentInfo>;
@@ -414,6 +416,22 @@ export function ComponentList({ id }: { id: string }) {
                 ) : (
                   <div className="dim">(no settings)</div>
                 ))}
+              {!collapsed.has(c.name) && (info[c.name]?.actions?.length ?? 0) > 0 && (
+                <div className="component-actions">
+                  {info[c.name]!.actions!.map((a) => (
+                    <button
+                      key={a}
+                      onClick={() => {
+                        const msg = mutate(`${a} ${displayName(c.name)}`, () => getEngine()?.component_action(id, c.name, a));
+                        if (msg) log(`${displayName(c.name)} ▸ ${a}: ${msg}`);
+                        reload();
+                      }}
+                    >
+                      {a}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}

@@ -3,6 +3,7 @@
 
 pub mod core;
 pub mod editing;
+pub mod navpreview;
 pub mod tools;
 
 #[cfg(target_arch = "wasm32")]

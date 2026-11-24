@@ -245,3 +245,6 @@ button.icon.menu-dots:hover { color: var(--accent); }
 .log { display: flex; gap: 6px; padding: 1px 2px; border-bottom: 1px solid #262a32; }
 .log.picked { background: #2c3a52; }
 .log .count { margin-left: auto; background: #3a4152; border-radius: 8px; padding: 0 6px; font-size: 10px; }
+
+.component-actions { display: flex; gap: 6px; justify-content: center; margin-top: 4px; }
+.component-actions button { min-width: 90px; }

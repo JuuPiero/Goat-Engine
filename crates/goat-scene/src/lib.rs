@@ -27,7 +27,7 @@ pub mod registry;
 
 pub use prefab::{apply_overrides, find_in_instance, resolve_file, set_track_overrides, PrefabBaseline, PrefabOverride, PrefabSource};
 
-pub use registry::{load_serde, remove_typed, save_serde, serde_codec, ComponentCodec, ComponentInfo, FieldHint, LoadContext, SaveContext, SceneRegistry};
+pub use registry::{load_serde, remove_typed, save_serde, serde_codec, ActionFn, ComponentCodec, ComponentInfo, FieldHint, LoadContext, SaveContext, SceneRegistry};
 
 use std::collections::{HashMap, HashSet};
 
