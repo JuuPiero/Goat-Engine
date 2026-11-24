@@ -447,6 +447,8 @@ let hit = goat_physics2d::physics2d(ctx).raycast(origin, Vec2::NEG_Y, 20.0);
 - Shape: `box`, `circle`, `capsule`, `polygon` (bao lồi). Trigger, ma sát, độ nảy, mật độ hoặc khối lượng.
 - `Physics2D`: `gravity`, `events` (Enter / Exit / TriggerEnter / TriggerExit), `raycast`, `overlap_point`, `apply_impulse`.
 - Scene mẫu: `scenes/physics2d.scene.json`. Trong scene: `"Rigidbody2D": {}`, `"Collider2D": { "shape": { "circle": 0.5 } }`.
+- Lực và effector (như Unity): `ConstantForce2D` (lực theo trục thế giới / theo hướng của body, mô-men); `AreaEffector2D` (gió / dòng chảy trong vùng collider: góc, độ lớn, dao động, lực cản); `PointEffector2D` (hút khi âm, đẩy khi dương; Constant / InverseLinear / InverseSquared); `BuoyancyEffector2D` (nước: `surface_level`, mật độ > 1 thì vật nổi, lực cản, dòng chảy); `TargetJoint2D` (kéo vật về một điểm như kéo bằng ngón tay). Effector tác động lên body động có tâm nằm trong collider của nó (thường là trigger).
+- 3D: `ConstantForce` (`force`, `relative_force`, `torque`, `relative_torque`).
 
 ## Input actions
 

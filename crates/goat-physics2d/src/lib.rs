@@ -12,6 +12,7 @@
 //!   ([`Shape2D::Edge`], Unity's EdgeCollider2D: one-sided ground lines), [`Joint2D`]s (fixed,
 //!   hinge with limits / motor, slider, spring, distance).
 
+pub mod forces;
 mod joint;
 #[cfg(feature = "script")]
 pub mod script;
@@ -190,6 +191,8 @@ impl EventHandler for EventSink {
 /// The 2D physics world (a resource).
 pub struct Physics2D {
     pub gravity: Vec2,
+    /// Random state of effector force variations.
+    pub effector_seed: u32,
     pub events: Vec<CollisionEvent2D>,
     bodies: RigidBodySet,
     colliders: ColliderSet,
@@ -212,6 +215,7 @@ impl Default for Physics2D {
     fn default() -> Self {
         Physics2D {
             gravity: Vec2::new(0.0, -9.81),
+            effector_seed: 0x9e37_79b9,
             events: Vec::new(),
             bodies: RigidBodySet::new(),
             colliders: ColliderSet::new(),
@@ -319,6 +323,28 @@ impl Physics2D {
         if let Some(b) = self.tracked.get(&e).and_then(|t| self.bodies.get_mut(t.body)) {
             b.apply_impulse(v(impulse), true);
         }
+    }
+
+    /// Adds an angular impulse (around Z) to a dynamic body.
+    pub fn apply_torque_impulse(&mut self, e: Entity, impulse: f32) {
+        if let Some(b) = self.tracked.get(&e).and_then(|t| self.bodies.get_mut(t.body)) {
+            b.apply_torque_impulse(impulse, true);
+        }
+    }
+
+    /// (position, velocity, mass, angular velocity) of a dynamic body.
+    pub fn body_state(&self, e: Entity) -> Option<(Vec2, Vec2, f32, f32)> {
+        let b = self.bodies.get(self.tracked.get(&e)?.body)?;
+        if !b.is_dynamic() {
+            return None;
+        }
+        let (p, lv) = (b.translation(), b.linvel());
+        Some((Vec2::new(p.x, p.y), Vec2::new(lv.x, lv.y), b.mass(), b.angvel()))
+    }
+
+    /// Dynamic bodies (effectors find what they act on).
+    pub fn dynamic_bodies(&self) -> Vec<Entity> {
+        self.tracked.iter().filter(|(_, t)| self.bodies.get(t.body).is_some_and(|b| b.is_dynamic())).map(|(e, _)| *e).collect()
     }
 
     pub fn body_count(&self) -> usize {
@@ -534,13 +560,31 @@ impl Plugin for Physics2DPlugin {
         goat_scene::registry(ctx)
             .component(goat_scene::serde_codec::<Rigidbody2D>("Rigidbody2D"))
             .component(goat_scene::serde_codec::<Collider2D>("Collider2D"))
-            .component(goat_scene::serde_codec::<Joint2D>("Joint2D"));
+            .component(goat_scene::serde_codec::<Joint2D>("Joint2D"))
+            .component(goat_scene::serde_codec::<forces::ConstantForce2D>("ConstantForce2D"))
+            .component(goat_scene::serde_codec::<forces::AreaEffector2D>("AreaEffector2D"))
+            .component(goat_scene::serde_codec::<forces::PointEffector2D>("PointEffector2D"))
+            .component(goat_scene::serde_codec::<forces::BuoyancyEffector2D>("BuoyancyEffector2D"))
+            .component(goat_scene::serde_codec::<forces::TargetJoint2D>("TargetJoint2D"));
+        #[cfg(feature = "scene")]
+        {
+            use goat_scene::ComponentInfo as I;
+            let r = goat_scene::registry(ctx);
+            r.describe("TargetJoint2D", I::new("Physics 2D/Target Joint 2D").requires(&["Rigidbody2D"]).range("damping_ratio", 0.0, 1.0));
+            r.describe("ConstantForce2D", I::new("Physics 2D/Constant Force 2D").requires(&["Rigidbody2D"]));
+            r.describe("AreaEffector2D", I::new("Physics 2D/Area Effector 2D").requires(&["Collider2D"]).range("force_angle", -360.0, 360.0));
+            r.describe("PointEffector2D", I::new("Physics 2D/Point Effector 2D").requires(&["Collider2D"]).options("force_mode", &["Constant", "InverseLinear", "InverseSquared"]).tip("force_magnitude", "Positive pushes away, negative attracts"));
+            r.describe("BuoyancyEffector2D", I::new("Physics 2D/Buoyancy Effector 2D").requires(&["Collider2D"]).tip("surface_level", "Local Y of the fluid surface").tip("density", "Bodies float when the fluid is denser than 1"));
+        }
         #[cfg(feature = "script")]
         script::register(goat_script::extensions(ctx));
     }
     fn fixed_update(&mut self, ctx: &mut Context) {
         let dt = ctx.time.delta;
         if let Some(p) = ctx.resources.get_mut::<Physics2D>() {
+            let mut seed = p.effector_seed;
+            forces::apply(ctx.world, p, dt, &mut seed);
+            p.effector_seed = seed;
             p.step(ctx.world, dt);
         }
     }

@@ -101,6 +101,30 @@ pub enum Shape {
     },
 }
 
+/// Applies every ConstantForce for one fixed step (impulses of force × step).
+pub fn apply_constant_forces(world: &World, p: &mut Physics, dt: f32) {
+    for (e, (f, t)) in world.query::<(&ConstantForce, &Transform)>().without::<&goat_runtime::InactiveInHierarchy>().iter() {
+        let force = f.force + t.rotation * f.relative_force;
+        if force != Vec3::ZERO {
+            p.apply_impulse(e, force * dt);
+        }
+        let torque = f.torque + t.rotation * f.relative_torque;
+        if torque != Vec3::ZERO {
+            p.apply_torque_impulse(e, torque * dt);
+        }
+    }
+}
+
+/// A constant force / torque on a RigidBody (Unity's ConstantForce): world or relative to the
+/// body's rotation, applied every fixed step.
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ConstantForce {
+    pub force: Vec3,
+    pub relative_force: Vec3,
+    pub torque: Vec3,
+    pub relative_torque: Vec3,
+}
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Collider {
@@ -351,6 +375,15 @@ impl Physics {
         if let Some(t) = self.tracked.get(&e) {
             if let Some(b) = self.bodies.get_mut(t.body) {
                 b.apply_impulse(v(impulse), true);
+            }
+        }
+    }
+
+    /// Adds an angular impulse to a dynamic body.
+    pub fn apply_torque_impulse(&mut self, e: Entity, impulse: Vec3) {
+        if let Some(t) = self.tracked.get(&e) {
+            if let Some(b) = self.bodies.get_mut(t.body) {
+                b.apply_torque_impulse(v(impulse), true);
             }
         }
     }
@@ -625,7 +658,10 @@ impl Plugin for PhysicsPlugin {
             .component(goat_scene::serde_codec::<RigidBody>("RigidBody"))
             .component(goat_scene::serde_codec::<Collider>("Collider"))
             .component(goat_scene::serde_codec::<Joint>("Joint"))
-            .component(goat_scene::serde_codec::<CharacterController>("CharacterController"));
+            .component(goat_scene::serde_codec::<CharacterController>("CharacterController"))
+            .component(goat_scene::serde_codec::<ConstantForce>("ConstantForce"));
+        #[cfg(feature = "scene")]
+        goat_scene::registry(ctx).describe("ConstantForce", goat_scene::ComponentInfo::new("Physics/Constant Force").requires(&["RigidBody"]));
         #[cfg(feature = "script")]
         script::register(goat_script::extensions(ctx));
     }
@@ -633,6 +669,7 @@ impl Plugin for PhysicsPlugin {
         load_meshes(ctx);
         let dt = ctx.time.delta;
         if let Some(p) = ctx.resources.get_mut::<Physics>() {
+            apply_constant_forces(ctx.world, p, dt);
             p.step(ctx.world, dt);
         }
     }
@@ -707,6 +744,22 @@ mod tests {
         (w, Physics::default(), ground)
     }
 
+    #[test]
+    fn constant_forces_lift_and_spin() {
+        let (mut w, mut p, _) = world_with_ground();
+        let ball = w.spawn((Transform::from_position(Vec3::new(0.0, 1.0, 0.0)), GlobalTransform::default(), RigidBody::dynamic(), Collider::new(Shape::Sphere(0.5)), ConstantForce { force: Vec3::new(0.0, 40.0, 0.0), torque: Vec3::new(0.0, 5.0, 0.0), ..Default::default() }));
+        let (dt, mut y0) = (1.0 / 60.0, 0.0);
+        for i in 0..60 {
+            apply_constant_forces(&w, &mut p, dt);
+            p.step(&mut w, dt);
+            if i == 0 {
+                y0 = w.get::<&Transform>(ball).unwrap().position.y;
+            }
+        }
+        let t = *w.get::<&Transform>(ball).unwrap();
+        assert!(t.position.y > y0 + 0.5, "lifted: {}", t.position.y);
+        assert!(t.rotation.angle_between(Quat::IDENTITY) > 0.1, "spun");
+    }
     #[test]
     fn a_ball_falls_and_rests_on_the_ground() {
         let (mut w, mut p, ground) = world_with_ground();
