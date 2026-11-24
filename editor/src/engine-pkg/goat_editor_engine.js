@@ -33,6 +33,22 @@ export class EditorEngine {
         }
     }
     /**
+     * `{ components: { name: { menu, defaults?, fields?, requires? } }, behaviours: [...] }`.
+     * @returns {string}
+     */
+    component_info() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.editorengine_component_info(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * JSON array of the registered component names.
      * @returns {string}
      */
@@ -66,6 +82,19 @@ export class EditorEngine {
         } finally {
             wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
         }
+    }
+    /**
+     * The selection as scene JSON (clipboard), or nothing.
+     * @returns {string | undefined}
+     */
+    copy_selection() {
+        const ret = wasm.editorengine_copy_selection(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
     }
     /**
      * Starts the engine on a canvas (WebGPU, or WebGL2 when unavailable).
@@ -111,6 +140,28 @@ export class EditorEngine {
         const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.editorengine_delete_entity(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * Duplicates the selection; returns the new ids (JSON array).
+     * @returns {string}
+     */
+    duplicate() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.editorengine_duplicate(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
     }
     /**
      * One frame (`dt` seconds).
@@ -234,6 +285,41 @@ export class EditorEngine {
         wasm.editorengine_pan(this.__wbg_ptr, dx, dy);
     }
     /**
+     * Pastes clipboard JSON under `parent`; returns the new ids (JSON array).
+     * @param {string} json
+     * @param {string | null} [parent]
+     * @returns {string}
+     */
+    paste(json, parent) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            let ptr0, len0, ptr1, len1;
+            try {
+                ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+                len0 = WASM_VECTOR_LEN;
+                ptr1 = isLikeNone(parent) ? 0 : passStringToWasm0(parent, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+                len1 = WASM_VECTOR_LEN;
+            } catch (e) {
+                if (ptr1) { wasm.__wbindgen_free(ptr1, len1 * 1, 1); }
+                if (ptr0) { wasm.__wbindgen_free(ptr0, len0 * 1, 1); }
+                throw e;
+            }
+            const ret = wasm.editorengine_paste(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
      * Picks at (x, y) in 0..1 of the view; selects and returns the entity id.
      * @param {number} x
      * @param {number} y
@@ -273,6 +359,39 @@ export class EditorEngine {
             throw e;
         }
         wasm.editorengine_put_file(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+    }
+    /**
+     * Call before changing the scene (Undo goes back to this state).
+     * @param {string} label
+     */
+    record_undo(label) {
+        const ptr0 = passStringToWasm0(label, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.editorengine_record_undo(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @returns {string | undefined}
+     */
+    redo() {
+        const ret = wasm.editorengine_redo(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
+     * @returns {string | undefined}
+     */
+    redo_label() {
+        const ret = wasm.editorengine_redo_label(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
     }
     /**
      * @param {string} id
@@ -359,6 +478,15 @@ export class EditorEngine {
         wasm.editorengine_select(this.__wbg_ptr, ptr0, len0);
     }
     /**
+     * Selects several entities (JSON array of ids; the last is active).
+     * @param {string} ids_json
+     */
+    select_many(ids_json) {
+        const ptr0 = passStringToWasm0(ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.editorengine_select_many(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
      * @returns {string | undefined}
      */
     selected() {
@@ -369,6 +497,22 @@ export class EditorEngine {
             wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         }
         return v1;
+    }
+    /**
+     * JSON array of the selected ids (active last).
+     * @returns {string}
+     */
+    selection() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.editorengine_selection(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * @param {string} id
@@ -493,6 +637,30 @@ export class EditorEngine {
             wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         }
         return v2;
+    }
+    /**
+     * @returns {string | undefined}
+     */
+    undo() {
+        const ret = wasm.editorengine_undo(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
+     * @returns {string | undefined}
+     */
+    undo_label() {
+        const ret = wasm.editorengine_undo_label(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
     }
     /**
      * @param {number} delta
@@ -1484,7 +1652,7 @@ function __wbg_get_imports() {
             arg0.writeTexture(arg1, arg2, arg3, arg4);
         }, arguments); },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2825, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2827, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_49c42322a91a8d99___convert__closures_____invoke___wasm_bindgen_49c42322a91a8d99___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_49c42322a91a8d99___JsError___true_);
             return ret;
         },

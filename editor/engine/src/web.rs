@@ -87,6 +87,51 @@ impl EditorEngine {
     pub fn select(&mut self, id: Option<String>) {
         self.core.select(id.as_deref().and_then(entity_of));
     }
+    /// Selects several entities (JSON array of ids; the last is active).
+    pub fn select_many(&mut self, ids_json: &str) {
+        let ids: Vec<String> = serde_json::from_str(ids_json).unwrap_or_default();
+        self.core.select_many(ids.iter().filter_map(|i| entity_of(i)).collect());
+    }
+    /// JSON array of the selected ids (active last).
+    pub fn selection(&self) -> String {
+        serde_json::to_string(&self.core.selection.iter().map(|e| id_of(*e)).collect::<Vec<_>>()).unwrap_or_default()
+    }
+
+    // ------------------------------------------------------------ undo / clipboard
+    /// Call before changing the scene (Undo goes back to this state).
+    pub fn record_undo(&mut self, label: &str) {
+        self.core.record_undo(label);
+    }
+    pub fn undo(&mut self) -> Option<String> {
+        self.core.undo(&mut self.gfx)
+    }
+    pub fn redo(&mut self) -> Option<String> {
+        self.core.redo(&mut self.gfx)
+    }
+    pub fn undo_label(&self) -> Option<String> {
+        self.core.undo_label().map(str::to_string)
+    }
+    pub fn redo_label(&self) -> Option<String> {
+        self.core.redo_label().map(str::to_string)
+    }
+    /// The selection as scene JSON (clipboard), or nothing.
+    pub fn copy_selection(&mut self) -> Option<String> {
+        self.core.copy_selection()
+    }
+    /// Pastes clipboard JSON under `parent`; returns the new ids (JSON array).
+    pub fn paste(&mut self, json: &str, parent: Option<String>) -> Result<String, JsValue> {
+        let ids = self.core.paste(&mut self.gfx, json, parent.as_deref().and_then(entity_of)).map_err(|e| JsValue::from_str(&e))?;
+        Ok(serde_json::to_string(&ids.into_iter().map(id_of).collect::<Vec<_>>()).unwrap_or_default())
+    }
+    /// Duplicates the selection; returns the new ids (JSON array).
+    pub fn duplicate(&mut self) -> Result<String, JsValue> {
+        let ids = self.core.duplicate_selection(&mut self.gfx).map_err(|e| JsValue::from_str(&e))?;
+        Ok(serde_json::to_string(&ids.into_iter().map(id_of).collect::<Vec<_>>()).unwrap_or_default())
+    }
+    /// `{ components: { name: { menu, defaults?, fields?, requires? } }, behaviours: [...] }`.
+    pub fn component_info(&self) -> String {
+        self.core.component_info().to_string()
+    }
     pub fn selected(&self) -> Option<String> {
         self.core.selected.map(id_of)
     }

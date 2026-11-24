@@ -118,8 +118,9 @@ impl EditorCore {
         for d in doomed {
             let _ = self.edit.world.despawn(d);
         }
-        if self.selected == Some(e) {
-            self.selected = None;
+        self.selection.retain(|s| self.edit.world.contains(*s));
+        if self.selected.is_some_and(|s| !self.edit.world.contains(s)) {
+            self.selected = self.selection.last().copied();
         }
     }
 

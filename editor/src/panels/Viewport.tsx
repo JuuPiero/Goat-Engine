@@ -3,7 +3,8 @@
 //   right drag / Alt+left drag: orbit · middle drag: pan · wheel: zoom · F: frame selection
 //   click: select · Ctrl+S: save scene · Play mode: keyboard = 3DS buttons (K/J/I/U, WASD, arrows, Enter)
 import { useEffect, useRef, useState } from 'react';
-import { frameSelected } from '../selection';
+import { frameSelected, selectEntities } from '../selection';
+import { afterChange } from '../commands';
 import { getEngine, saveScene, startEngine, startPlay, stopPlay } from '../engine';
 import { getState, log, setState, useStore } from '../store';
 
@@ -91,18 +92,11 @@ export function Viewport() {
         return;
       }
       if (!wrap.current?.matches(':hover')) return;
+      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
       if (ev.code === 'KeyF') frameSelected();
       if (ev.code === 'KeyW') setMode('move');
       if (ev.code === 'KeyE') setMode('rotate');
       if (ev.code === 'KeyR') setMode('scale');
-      if (ev.code === 'Delete' && getState().entity) {
-        e.delete_entity(getState().entity!);
-        setState((s) => ({ entity: null, sceneDirty: true, hierarchyRev: s.hierarchyRev + 1 }));
-      }
-      if ((ev.ctrlKey || ev.metaKey) && ev.code === 'KeyS') {
-        ev.preventDefault();
-        void saveScene();
-      }
     };
     const up = (ev: KeyboardEvent) => getEngine()?.is_playing() && getEngine()!.key(ev.code, false);
     window.addEventListener('keydown', down);
@@ -118,6 +112,8 @@ export function Viewport() {
     if (!e || e.is_playing()) return;
     const r = canvas.current!.getBoundingClientRect();
     const onGizmo = ev.button === 0 && !ev.altKey && e.gizmo_begin((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height, r.width, r.height);
+    // the drag is one Undo step (recorded before the first change)
+    if (onGizmo) e.record_undo(gizmo === 'move' ? 'Move' : gizmo === 'rotate' ? 'Rotate' : 'Scale');
     const mode = onGizmo ? 'gizmo' : ev.button === 2 || (ev.button === 0 && ev.altKey) ? 'orbit' : ev.button === 1 ? 'pan' : 'click';
     drag.current = { x: ev.clientX, y: ev.clientY, mode, moved: false };
     (ev.target as HTMLElement).setPointerCapture(ev.pointerId);
@@ -145,13 +141,17 @@ export function Viewport() {
     const e = getEngine();
     if (d?.mode === 'gizmo' && e) {
       e.gizmo_end();
-      if (d.moved) setState((s) => ({ sceneDirty: true, hierarchyRev: s.hierarchyRev + 1 }));
+      if (d.moved) afterChange();
       return;
     }
     if (!d || !e || d.mode !== 'click' || d.moved) return;
     const r = canvas.current!.getBoundingClientRect();
     const id = e.pick((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height) ?? null;
-    setState({ entity: id });
+    // Ctrl / Shift + click: add to / remove from the selection (Unity)
+    if ((ev.ctrlKey || ev.shiftKey || ev.metaKey) && id) {
+      const cur = getState().entities;
+      selectEntities(cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]);
+    } else selectEntities(id ? [id] : []);
   };
 
   const showCanvas = tab === 'scene' ? !playing : playing;

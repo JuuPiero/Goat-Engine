@@ -101,8 +101,12 @@ pub struct EditorCore {
     pub camera: Entity,
     pub orbit: Orbit,
     pub scene: Option<String>,
+    /// The active selected entity (Inspector, gizmo); `selection` holds all of them.
     pub selected: Option<Entity>,
-    selection_box: Option<Entity>,
+    pub selection: Vec<Entity>,
+    selection_boxes: Vec<Entity>,
+    pub(crate) undo: Vec<crate::editing::UndoStep>,
+    pub(crate) redo: Vec<crate::editing::UndoStep>,
     pub tools: crate::tools::Tools,
     /// Buttons held (Play mode input), by Button index.
     held: [bool; 14],
@@ -134,7 +138,10 @@ impl EditorCore {
             orbit: Orbit { target: Vec3::new(0.0, 0.5, 0.0), yaw: 0.5, pitch: -0.45, distance: 11.0 },
             scene: None,
             selected: None,
-            selection_box: None,
+            selection: Vec::new(),
+            selection_boxes: Vec::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
             tools: Default::default(),
             held: [false; 14],
             axes: [0.0; 4],
@@ -165,7 +172,15 @@ impl EditorCore {
         self.edit.resources.put_back(registry);
         self.scene = Some(key.to_string());
         self.selected = None;
+        self.selection.clear();
+        self.clear_undo();
         result
+    }
+
+    pub(crate) fn clear_scene_entities(&mut self) {
+        self.clear_scene();
+        self.selected = None;
+        self.selection.clear();
     }
 
     fn clear_scene(&mut self) {
@@ -220,7 +235,7 @@ impl EditorCore {
     }
 
     pub fn select(&mut self, e: Option<Entity>) {
-        self.selected = e.filter(|e| self.edit.world.contains(*e));
+        self.select_many(e.into_iter().collect());
     }
 
     pub fn transform(&self, e: Entity) -> Option<TransformEdit> {
@@ -389,10 +404,14 @@ impl EditorCore {
         self.edit.frame(dt, gfx);
     }
 
-    /// A translucent box around the selection (editor layer).
+    /// Translucent boxes around the selected entities (editor layer); the active one brighter.
     fn update_selection_box(&mut self, gfx: &mut dyn GraphicsBackend) {
-        let sphere = self.selected.and_then(|e| self.world_sphere(gfx, e));
-        if self.selection_box.is_none() {
+        self.selection.retain(|e| self.edit.world.contains(*e));
+        if self.selected.is_some_and(|e| !self.edit.world.contains(e)) {
+            self.selected = self.selection.last().copied();
+        }
+        let spheres: Vec<(Vec3, f32, bool)> = self.selection.iter().filter_map(|&e| self.world_sphere(gfx, e).map(|(c, r)| (c, r, Some(e) == self.selected))).collect();
+        while self.selection_boxes.len() < spheres.len() {
             let (Ok(mesh), Ok(mat)) = (
                 gfx.create_mesh(&MeshData::cube(1.0)),
                 gfx.create_material(&MaterialDesc { base_color: Color::rgba(1.0, 0.65, 0.15, 0.18), lighting: LightingModel::Unlit, blend: BlendMode::Additive, cull: CullMode::None, depth_write: false, fog: false, ..Default::default() }),
@@ -400,14 +419,17 @@ impl EditorCore {
                 return;
             };
             let e = self.edit.world.spawn((Name("Selection".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, mat).with_layer(EDITOR_LAYER).with_sorting_order(1000)));
-            self.selection_box = Some(e);
+            self.selection_boxes.push(e);
         }
-        let b = self.selection_box.unwrap();
-        if let Ok(mut r) = self.edit.world.get::<&mut MeshRenderer>(b) {
-            r.visible = sphere.is_some();
-        }
-        if let (Some((c, r)), Ok(mut t)) = (sphere, self.edit.world.get::<&mut Transform>(b)) {
-            *t = Transform::from_position(c).with_scale(Vec3::splat(r * 2.0));
+        for (i, &b) in self.selection_boxes.iter().enumerate() {
+            let s = spheres.get(i).copied();
+            if let Ok(mut r) = self.edit.world.get::<&mut MeshRenderer>(b) {
+                r.visible = s.is_some();
+            }
+            if let (Some((c, r, active)), Ok(mut t)) = (s, self.edit.world.get::<&mut Transform>(b)) {
+                // inactive members of a multi-selection: a slightly smaller box
+                *t = Transform::from_position(c).with_scale(Vec3::splat(r * if active { 2.0 } else { 1.9 }));
+            }
         }
     }
 
@@ -563,3 +585,4 @@ mod playground_tests {
         }
     }
 }
+

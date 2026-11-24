@@ -46,7 +46,12 @@ pub fn save_serde<T: hecs::Component + Serialize>(ctx: &SaveContext, e: Entity) 
 
 /// Loads (inserts / replaces) a component through its serde implementation.
 pub fn load_serde<T: hecs::Component + DeserializeOwned>(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
-    let c: T = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
+    let c: T = match serde_json::from_value(v.clone()) {
+        Ok(c) => c,
+        // unit structs (markers like AudioListener) are `null`; the editor's "defaults" is `{}`
+        Err(_) if v.as_object().is_some_and(|o| o.is_empty()) => serde_json::from_value(Value::Null).map_err(|e| e.to_string())?,
+        Err(e) => return Err(e.to_string()),
+    };
     ctx.world.insert_one(e, c).map_err(|_| "entity vanished".to_string())
 }
 
@@ -64,6 +69,99 @@ pub struct ComponentCodec {
     pub remove: RemoveFn,
 }
 
+/// How the editor shows one field of a component's scene JSON (dotted paths for nested
+/// fields: `projection.perspective.fov`).
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+pub struct FieldHint {
+    /// "enum" (pick from `options`), "variant" (externally tagged object: one key out of
+    /// `variants`, each with its default payload), "asset" (`asset` = texture / material / mesh /
+    /// model / prefab / audio / font / script / controller / scene / any), "color" (a number
+    /// array as a color), "entity" (a name / id of another entity), "mask" (32-bit layer mask),
+    /// "layer" (0..31), "hidden".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    pub variants: serde_json::Map<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<&'static str>,
+}
+
+/// Editor metadata of a component: where it sits in Add Component (Unity's menu paths), what a
+/// freshly added one holds, how its fields are edited.
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+pub struct ComponentInfo {
+    pub menu: &'static str,
+    /// JSON a new component is created from (`{}` when absent: serde defaults).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defaults: Option<Value>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub fields: std::collections::BTreeMap<&'static str, FieldHint>,
+    /// Allowed more than once per entity? (ECS: never — kept for the editor's checks.)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<&'static str>,
+}
+
+impl ComponentInfo {
+    pub fn new(menu: &'static str) -> Self {
+        ComponentInfo { menu, ..Default::default() }
+    }
+    pub fn defaults(mut self, v: Value) -> Self {
+        self.defaults = Some(v);
+        self
+    }
+    fn hint(&mut self, field: &'static str) -> &mut FieldHint {
+        self.fields.entry(field).or_default()
+    }
+    pub fn options(mut self, field: &'static str, options: &[&str]) -> Self {
+        let h = self.hint(field);
+        h.kind = Some("enum");
+        h.options = options.iter().map(|s| s.to_string()).collect();
+        self
+    }
+    /// `variants` = `{ "box": [0.5, 0.5, 0.5], "sphere": 0.5, ... }`.
+    pub fn variants(mut self, field: &'static str, variants: Value) -> Self {
+        let h = self.hint(field);
+        h.kind = Some("variant");
+        if let Value::Object(m) = variants {
+            h.variants = m;
+        }
+        self
+    }
+    pub fn asset(mut self, field: &'static str, kind: &'static str) -> Self {
+        let h = self.hint(field);
+        h.kind = Some("asset");
+        h.asset = Some(kind);
+        self
+    }
+    pub fn range(mut self, field: &'static str, min: f64, max: f64) -> Self {
+        let h = self.hint(field);
+        h.min = Some(min);
+        h.max = Some(max);
+        self
+    }
+    pub fn kind(mut self, field: &'static str, kind: &'static str) -> Self {
+        self.hint(field).kind = Some(kind);
+        self
+    }
+    pub fn tip(mut self, field: &'static str, text: &'static str) -> Self {
+        self.hint(field).tooltip = Some(text);
+        self
+    }
+    /// Components added with this one (Unity's RequireComponent).
+    pub fn requires(mut self, names: &[&'static str]) -> Self {
+        self.requires = names.to_vec();
+        self
+    }
+}
+
 struct BehaviourCodec {
     name: String,
     save: Box<dyn Fn(&dyn Behaviour) -> Option<Value>>,
@@ -74,18 +172,37 @@ pub struct SceneRegistry {
     components: Vec<ComponentCodec>,
     behaviours: HashMap<TypeId, BehaviourCodec>,
     behaviour_names: HashMap<String, TypeId>,
+    info: HashMap<String, ComponentInfo>,
 }
 
 impl Default for SceneRegistry {
     /// The engine's built-in components already registered.
     fn default() -> Self {
-        let mut r = SceneRegistry { components: Vec::new(), behaviours: HashMap::new(), behaviour_names: HashMap::new() };
+        let mut r = SceneRegistry { components: Vec::new(), behaviours: HashMap::new(), behaviour_names: HashMap::new(), info: HashMap::new() };
         crate::builtins::register(&mut r);
+        crate::component_info::describe_engine_components(&mut r);
         r
     }
 }
 
 impl SceneRegistry {
+    /// Editor metadata of a component (by codec name); replaces earlier descriptions.
+    pub fn describe(&mut self, name: &str, info: ComponentInfo) -> &mut Self {
+        self.info.insert(name.to_string(), info);
+        self
+    }
+
+    pub fn info(&self, name: &str) -> Option<&ComponentInfo> {
+        self.info.get(name)
+    }
+
+    /// Names of the registered behaviours (Add Component ▸ Scripts).
+    pub fn behaviour_names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.behaviour_names.keys().cloned().collect();
+        v.sort();
+        v
+    }
+
     /// Adds (or replaces, by name) a component codec. Codecs run in registration order.
     pub fn component(&mut self, codec: ComponentCodec) -> &mut Self {
         self.components.retain(|c| c.name != codec.name);

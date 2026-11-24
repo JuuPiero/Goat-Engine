@@ -13,12 +13,21 @@ const COLORS: Record<string, string> = {
   font: '#e6e6e6',
   text: '#b8bec9',
   file: '#9aa1ad',
+  entity: '#c3cad6',
 };
 
 export function AssetIcon({ kind, size }: { kind: string; size: number }) {
   const c = COLORS[kind] ?? COLORS.file;
   const s = { width: size, height: size };
   switch (kind) {
+    case 'entity':
+      // a GameObject (Unity's grey cube)
+      return (
+        <svg viewBox="0 0 24 24" style={s}>
+          <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" fill="none" stroke={c} strokeWidth="1.8" strokeLinejoin="round" />
+          <path d="M4 7.5l8 4.5 8-4.5M12 12v9" fill="none" stroke={c} strokeWidth="1.8" />
+        </svg>
+      );
     case 'folder':
       return (
         <svg viewBox="0 0 24 24" style={s}>

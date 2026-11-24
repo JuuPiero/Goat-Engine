@@ -7,6 +7,10 @@ export class EditorEngine {
     [Symbol.dispose](): void;
     backend_name(): string;
     /**
+     * `{ components: { name: { menu, defaults?, fields?, requires? } }, behaviours: [...] }`.
+     */
+    component_info(): string;
+    /**
      * JSON array of the registered component names.
      */
     component_names(): string;
@@ -15,11 +19,19 @@ export class EditorEngine {
      */
     components(id: string): string;
     /**
+     * The selection as scene JSON (clipboard), or nothing.
+     */
+    copy_selection(): string | undefined;
+    /**
      * Starts the engine on a canvas (WebGPU, or WebGL2 when unavailable).
      */
     static create(canvas: HTMLCanvasElement): Promise<EditorEngine>;
     create_entity(name: string, parent?: string | null): string;
     delete_entity(id: string): void;
+    /**
+     * Duplicates the selection; returns the new ids (JSON array).
+     */
+    duplicate(): string;
     /**
      * One frame (`dt` seconds).
      */
@@ -45,6 +57,10 @@ export class EditorEngine {
     orbit(dx: number, dy: number): void;
     pan(dx: number, dy: number): void;
     /**
+     * Pastes clipboard JSON under `parent`; returns the new ids (JSON array).
+     */
+    paste(json: string, parent?: string | null): string;
+    /**
      * Picks at (x, y) in 0..1 of the view; selects and returns the entity id.
      */
     pick(x: number, y: number): string | undefined;
@@ -56,13 +72,27 @@ export class EditorEngine {
      * Makes a project file available to the engine (the UI reads files through Tauri).
      */
     put_file(key: string, bytes: Uint8Array | number[]): void;
+    /**
+     * Call before changing the scene (Undo goes back to this state).
+     */
+    record_undo(label: string): void;
+    redo(): string | undefined;
+    redo_label(): string | undefined;
     remove_component(id: string, name: string): void;
     rename(id: string, name: string): void;
     resize(width: number, height: number): void;
     save_scene(): string;
     scene(): string | undefined;
     select(id?: string | null): void;
+    /**
+     * Selects several entities (JSON array of ids; the last is active).
+     */
+    select_many(ids_json: string): void;
     selected(): string | undefined;
+    /**
+     * JSON array of the selected ids (active last).
+     */
+    selection(): string;
     set_component(id: string, name: string, json: string): void;
     /**
      * "move" / "rotate" / "scale".
@@ -83,6 +113,8 @@ export class EditorEngine {
      * `{ position, euler, scale }` of an entity.
      */
     transform(id: string): string | undefined;
+    undo(): string | undefined;
+    undo_label(): string | undefined;
     zoom(delta: number): void;
 }
 
@@ -92,11 +124,14 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_editorengine_free: (a: number, b: number) => void;
     readonly editorengine_backend_name: (a: number) => [number, number];
+    readonly editorengine_component_info: (a: number) => [number, number];
     readonly editorengine_component_names: (a: number) => [number, number];
     readonly editorengine_components: (a: number, b: number, c: number) => [number, number];
+    readonly editorengine_copy_selection: (a: number) => [number, number];
     readonly editorengine_create: (a: any) => any;
     readonly editorengine_create_entity: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly editorengine_delete_entity: (a: number, b: number, c: number) => void;
+    readonly editorengine_duplicate: (a: number) => [number, number, number, number];
     readonly editorengine_frame: (a: number, b: number) => void;
     readonly editorengine_frame_selected: (a: number) => void;
     readonly editorengine_gizmo_begin: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -109,16 +144,22 @@ export interface InitOutput {
     readonly editorengine_open_scene: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_orbit: (a: number, b: number, c: number) => void;
     readonly editorengine_pan: (a: number, b: number, c: number) => void;
+    readonly editorengine_paste: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly editorengine_pick: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_play: (a: number, b: number) => void;
     readonly editorengine_put_file: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly editorengine_record_undo: (a: number, b: number, c: number) => void;
+    readonly editorengine_redo: (a: number) => [number, number];
+    readonly editorengine_redo_label: (a: number) => [number, number];
     readonly editorengine_remove_component: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_rename: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_resize: (a: number, b: number, c: number) => void;
     readonly editorengine_save_scene: (a: number) => [number, number, number, number];
     readonly editorengine_scene: (a: number) => [number, number];
     readonly editorengine_select: (a: number, b: number, c: number) => void;
+    readonly editorengine_select_many: (a: number, b: number, c: number) => void;
     readonly editorengine_selected: (a: number) => [number, number];
+    readonly editorengine_selection: (a: number) => [number, number];
     readonly editorengine_set_component: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly editorengine_set_gizmo_mode: (a: number, b: number, c: number) => void;
     readonly editorengine_set_parent: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -127,6 +168,8 @@ export interface InitOutput {
     readonly editorengine_stop: (a: number) => void;
     readonly editorengine_take_logs: (a: number) => [number, number];
     readonly editorengine_transform: (a: number, b: number, c: number) => [number, number];
+    readonly editorengine_undo: (a: number) => [number, number];
+    readonly editorengine_undo_label: (a: number) => [number, number];
     readonly editorengine_zoom: (a: number, b: number) => void;
     readonly goat_action_triggered: (a: number, b: number) => number;
     readonly goat_action_value: (a: number, b: number, c: number) => void;

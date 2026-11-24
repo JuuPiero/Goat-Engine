@@ -13,7 +13,12 @@ import { AssetPanel } from './panels/AssetPanel';
 import { Console, Hierarchy, Inspector } from './panels/Panels';
 import { Viewport } from './panels/Viewport';
 import { AnimatorWindow } from './panels/AnimatorWindow';
-import { getEngine, openScene, startPlay, stopPlay } from './engine';
+import { getEngine, openScene, saveScene, startPlay, stopPlay } from './engine';
+import { ContextMenuHost, MenuBar, type MenuItem } from './ui/Menu';
+import * as commands from './commands';
+import { copy, cut, deleteSelection, duplicate, gameObjectMenu, hasClipboard, installShortcuts, mutate, paste, redo, selectAll, undo } from './commands';
+import { frameSelected } from './selection';
+import { componentInfo, displayName } from './panels/ComponentEditor';
 
 const LAYOUT_KEY = 'goat.editor.layout.v1';
 
@@ -42,6 +47,11 @@ export function App() {
   const playing = useStore((s) => s.playing);
   const dv = useRef<DockviewApi | null>(null);
   const controller = useStore((s) => s.controller);
+  const revision = useStore((s) => s.revision);
+  useEffect(() => {
+    if (!project) return;
+    void api.search('.scene.json').then((list) => (sceneFiles = list.map((e) => e.key).filter((k) => k.endsWith('.scene.json')).sort()));
+  }, [project, revision]);
   // opening a controller shows the Animator window (next to the Scene view, like Unity)
   useEffect(() => {
     const d = dv.current;
@@ -57,12 +67,16 @@ export function App() {
       log(`project ${p.name} — ${p.assets}`);
     });
     void installDropHandling();
+    const offKeys = installShortcuts();
     const un = listen('assets-changed', () => refresh());
     // C# translation results (tools/goat-cs, run by the backend when .cs files change)
     void listen<{ level: 'info' | 'warn' | 'error'; text: string }>('script-log', (ev) => log(ev.payload.text, ev.payload.level));
     // automation / tests: window.__goat
-    (window as unknown as { __goat: unknown }).__goat = { getState, setState, handleDrop, api, engine: getEngine, dock: () => dv.current, openScene, startPlay, stopPlay };
-    return () => void un.then((f) => f());
+    (window as unknown as { __goat: unknown }).__goat = { getState, setState, handleDrop, api, engine: getEngine, dock: () => dv.current, openScene, startPlay, stopPlay, commands };
+    return () => {
+      offKeys();
+      void un.then((f) => f());
+    };
   }, []);
 
   const onReady = (e: DockviewReadyEvent) => {
@@ -105,8 +119,9 @@ export function App() {
     <div className="app">
       <div className="toolbar">
         <span className="brand">
-          <span className="logo">G</span> GoatEngine
+          <span className="logo">G</span>
         </span>
+        <MenuBar menus={menus(dv, resetLayout, newWindow)} />
         <span className="project-name">{project?.name}</span>
         <div className="spacer" />
         <div className="play-group">
@@ -123,6 +138,119 @@ export function App() {
         </button>
       </div>
       <DockviewReact className="dock" theme={themeDark} components={components} onReady={onReady} />
+      <ContextMenuHost />
     </div>
   );
+}
+
+/// Scene files of the project (File ▸ Open Scene), refreshed when files change.
+let sceneFiles: string[] = [];
+
+const PANELS: { id: string; title: string; key?: string }[] = [
+  { id: 'viewport', title: 'Scene', key: 'Ctrl+1' },
+  { id: 'hierarchy', title: 'Hierarchy', key: 'Ctrl+4' },
+  { id: 'inspector', title: 'Inspector', key: 'Ctrl+3' },
+  { id: 'project', title: 'Project', key: 'Ctrl+5' },
+  { id: 'console', title: 'Console', key: 'Ctrl+Shift+C' },
+  { id: 'animator', title: 'Animator' },
+];
+
+/// Opens (or focuses) a panel of the dock.
+function showPanel(d: DockviewApi | null, id: string, title: string) {
+  if (!d) return;
+  const p = d.getPanel(id) ?? d.addPanel({ id, component: id, title, position: { referencePanel: 'viewport', direction: 'within' } });
+  p.api.setActive();
+}
+
+/// Unity's main menu: File, Edit, Assets, GameObject, Component, Window, Help.
+function menus(dv: React.RefObject<DockviewApi | null>, resetLayout: () => void, newWindow: () => void): { title: string; items: () => MenuItem[] }[] {
+  const s = getState;
+  const noScene = () => !s().scene || s().playing;
+  return [
+    {
+      title: 'File',
+      items: () => [
+        {
+          label: 'New Scene',
+          action: () =>
+            void run('new scene', async () => {
+              const key = await api.createAsset(s().dir, 'scene');
+              await openScene(key);
+            }),
+        },
+        {
+          label: 'Open Scene',
+          children: sceneFiles.length ? sceneFiles.map((k) => ({ label: k, checked: k === s().scene, action: () => void openScene(k) })) : [{ label: '(no scenes)', disabled: true }],
+        },
+        { label: 'Save', shortcut: 'Ctrl+S', disabled: noScene(), action: () => void saveScene() },
+        '-',
+        { label: 'Build Settings…', disabled: true },
+        '-',
+        { label: 'New Window', action: newWindow },
+      ],
+    },
+    {
+      title: 'Edit',
+      items: () => [
+        { label: s().undoLabel ? `Undo ${s().undoLabel}` : 'Undo', shortcut: 'Ctrl+Z', disabled: !s().undoLabel || s().playing, action: undo },
+        { label: s().redoLabel ? `Redo ${s().redoLabel}` : 'Redo', shortcut: 'Ctrl+Y', disabled: !s().redoLabel || s().playing, action: redo },
+        '-',
+        { label: 'Cut', shortcut: 'Ctrl+X', disabled: !s().entities.length, action: cut },
+        { label: 'Copy', shortcut: 'Ctrl+C', disabled: !s().entities.length, action: copy },
+        { label: 'Paste', shortcut: 'Ctrl+V', disabled: !hasClipboard() || noScene(), action: () => paste(null) },
+        { label: 'Duplicate', shortcut: 'Ctrl+D', disabled: !s().entities.length, action: duplicate },
+        { label: 'Delete', shortcut: 'Del', disabled: !s().entities.length, action: () => deleteSelection() },
+        '-',
+        { label: 'Select All', shortcut: 'Ctrl+A', disabled: noScene(), action: selectAll },
+        { label: 'Frame Selected', shortcut: 'F', disabled: !s().entities.length, action: frameSelected },
+        '-',
+        { label: s().playing ? 'Stop' : 'Play', shortcut: 'Ctrl+P', action: () => (s().playing ? stopPlay() : void startPlay()) },
+      ],
+    },
+    {
+      title: 'Assets',
+      items: () => [
+        {
+          label: 'Create',
+          children: (['scene', 'prefab', 'material', 'controller'] as const).map((k) => ({
+            label: { scene: 'Scene', prefab: 'Prefab', material: 'Material', controller: 'Animator Controller' }[k],
+            action: () =>
+              void run('create', async () => {
+                const key = await api.createAsset(s().dir, k);
+                setState({ selection: [key] });
+                refresh();
+              }),
+          })),
+        },
+        { label: 'Show in Explorer', disabled: !s().selection.length, action: () => void api.reveal(s().selection[s().selection.length - 1]) },
+        { label: 'Refresh', shortcut: 'Ctrl+R', action: refresh },
+      ],
+    },
+    { title: 'GameObject', items: () => (noScene() ? [{ label: 'Open a scene first', disabled: true }] : gameObjectMenu(() => s().entity)) },
+    {
+      title: 'Component',
+      items: () => {
+        const id = s().entity;
+        if (!id || noScene()) return [{ label: 'Select a GameObject first', disabled: true }];
+        const info = componentInfo().components;
+        const present = new Set((JSON.parse(getEngine()?.components(id) ?? '[]') as { name: string }[]).map((c) => c.name));
+        const groups = new Map<string, MenuItem[]>();
+        for (const [name, i] of Object.entries(info)) {
+          if (!i.menu) continue;
+          const [group] = i.menu.split('/');
+          const add = () =>
+            mutate(`Add ${displayName(name)}`, () => {
+              for (const n of [...(i.requires ?? []), name]) if (!present.has(n)) getEngine()?.set_component(id, n, JSON.stringify(info[n]?.defaults ?? {}));
+            });
+          groups.set(group, [...(groups.get(group) ?? []), { label: i.menu.split('/').slice(1).join(' / '), disabled: present.has(name), action: add }]);
+        }
+        return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([g, children]) => ({ label: g, children }));
+      },
+    },
+    {
+      title: 'Window',
+      items: () => [...PANELS.map((p) => ({ label: p.title, shortcut: p.key, action: () => showPanel(dv.current, p.id, p.title) })), '-', { label: 'Reset Layout', action: resetLayout }],
+    },
+    { title: 'Help', items: () => [{ label: 'GoatEngine — Unity-like engine for the 3DS and desktop', disabled: true }] },
+  ];
 }

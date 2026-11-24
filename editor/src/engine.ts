@@ -48,7 +48,7 @@ export async function openScene(key: string) {
   await syncFiles(e);
   try {
     e.open_scene(key);
-    setState({ scene: key, entity: null, sceneDirty: false, hierarchyRev: getState().hierarchyRev + 1 });
+    setState({ scene: key, entity: null, entities: [], undoLabel: null, redoLabel: null, sceneDirty: false, hierarchyRev: getState().hierarchyRev + 1 });
     log(`opened ${key}`);
   } catch (err) {
     log(`open ${key}: ${err}`, 'error');

@@ -1,6 +1,7 @@
 // Editor state shared by panels: a tiny store (subscribe + snapshot) used through `useStore`.
 import { useSyncExternalStore } from 'react';
 import type { ProjectInfo } from './api';
+import type { MenuItem } from './ui/Menu';
 
 export interface LogLine {
   time: string;
@@ -23,8 +24,16 @@ export interface EditorState {
   /// Scene open in the Scene view.
   scene: string | null;
   sceneDirty: boolean;
-  /// Selected entity of the open scene (engine id).
+  /// Selected entity of the open scene (engine id): the active one of `entities`.
   entity: string | null;
+  /// Every selected entity (Hierarchy multi-selection), active last.
+  entities: string[];
+  /// Entity whose name is being edited in the Hierarchy (F2).
+  renaming: string | null;
+  /// Undo / Redo labels for the Edit menu.
+  undoLabel: string | null;
+  redoLabel: string | null;
+  contextMenu: { x: number; y: number; items: MenuItem[] } | null;
   /// Bumped when the scene's entities change (Hierarchy re-reads the engine).
   hierarchyRev: number;
   playing: boolean;
@@ -34,7 +43,7 @@ export interface EditorState {
   controller: string | null;
 }
 
-let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, hierarchyRev: 0, playing: false, dual3ds: true, viewTab: 'scene', controller: null };
+let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, entities: [], renaming: null, undoLabel: null, redoLabel: null, contextMenu: null, hierarchyRev: 0, playing: false, dual3ds: true, viewTab: 'scene', controller: null };
 const listeners = new Set<() => void>();
 
 export function getState(): EditorState {

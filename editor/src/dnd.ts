@@ -14,11 +14,22 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { api, absPath, nameOf } from './api';
 import { getState, log, refresh, run, setState } from './store';
 import { getEngine, syncFiles } from './engine';
+import { selectEntities } from './selection';
+import { afterChange } from './commands';
 
 let dragIcon = '';
 let ctrlDown = false;
 /// Keys this window is dragging right now (the drag can come back to us).
 let outgoing: string[] | null = null;
+
+/// Inspector fields that accept a dropped asset: `data-drop="field:<id>"` → handler(key).
+const fieldDrops = new Map<string, (key: string) => void>();
+let nextField = 0;
+export function registerFieldDrop(handler: (key: string) => void): [string, () => void] {
+  const id = `field:${++nextField}`;
+  fieldDrops.set(id, handler);
+  return [id, () => fieldDrops.delete(id)];
+}
 
 export function draggingOut(): string[] | null {
   return outgoing;
@@ -45,6 +56,12 @@ function dropTargetAt(x: number, y: number): string | null {
 /// What a drop of `paths` on `target` does (also the test hook).
 export async function handleDrop(paths: string[], target: string | null, copy = ctrlDown, at?: [number, number]) {
   if (!target || paths.length === 0) return;
+  if (target.startsWith('field:')) {
+    const [key] = (await api.keysOf(paths)).filter((k): k is string => k !== null);
+    if (key) fieldDrops.get(target)?.(key);
+    else log('only project assets can be assigned', 'warn');
+    return;
+  }
   if (target.startsWith('folder:')) {
     const dest = target.slice('folder:'.length);
     const keys = await api.keysOf(paths);
@@ -81,9 +98,10 @@ export async function handleDrop(paths: string[], target: string | null, copy = 
     await syncFiles(e);
     for (const key of keys) {
       try {
+        e.record_undo('Instantiate');
         const id = e.instantiate(key, at?.[0] ?? 0.5, at?.[1] ?? 0.5);
-        setState((s) => ({ entity: id, sceneDirty: true, hierarchyRev: s.hierarchyRev + 1 }));
-        e.select(id);
+        selectEntities([id]);
+        afterChange();
         log(`added ${nameOf(key)}`);
       } catch (err) {
         log(`${key}: ${err}`, 'error');

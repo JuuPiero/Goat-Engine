@@ -184,3 +184,64 @@ button.icon:hover { color: #ff7b7b; }
 .graph-menu { position: absolute; z-index: 10; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 4px; min-width: 180px; box-shadow: 0 6px 18px rgba(0,0,0,.45); }
 .graph-menu > div { padding: 4px 8px; border-radius: 4px; cursor: default; }
 .graph-menu > div:hover { background: var(--accent); color: white; }
+
+/* main menu bar + menus (Unity) */
+.menubar { display: flex; align-items: stretch; height: 100%; }
+.menubar-title { position: relative; display: flex; align-items: center; padding: 0 9px; cursor: default; border-radius: 4px; margin: 5px 0; }
+.menubar-title:hover, .menubar-title.open { background: var(--panel2); }
+.menubar-title > .context-menu { margin-top: 5px; }
+.context-menu { position: fixed; }
+.menubar .context-menu, .context-menu .context-menu { position: absolute; }
+.context-menu .item { position: relative; display: flex; align-items: center; gap: 6px; padding: 4px 12px 4px 6px; white-space: nowrap; }
+.context-menu .item.open { background: var(--select); }
+.context-menu .check-mark { width: 12px; text-align: center; color: var(--accent); }
+.context-menu .label-text { flex: 1; }
+.context-menu .shortcut { color: var(--dim); font-size: 11px; padding-left: 18px; }
+.context-menu .item:hover .shortcut { color: #dfe6f3; }
+.context-menu .arrow-right { color: var(--dim); }
+.context-menu { max-height: 80vh; overflow-y: visible; }
+select { background: #1a1c22; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; font: inherit; min-width: 0; }
+
+/* hierarchy */
+.hier-scene-row { display: flex; align-items: center; gap: 5px; padding: 3px 6px; font-weight: 600; background: #22252d; border-bottom: 1px solid var(--line); }
+.tree-row.active.primary { background: #3567b3; }
+.tree-row:not(.active) .tree-name { color: inherit; }
+.tree-row.prefab .tree-name { color: #7fb6ff; }
+.tree-row.generated.prefab .tree-name, .tree-row.generated .tree-name { color: #8fb0d8; }
+.prefab-arrow { margin-left: auto; color: var(--dim); padding-right: 4px; }
+.rename-inline { flex: 1; min-width: 0; padding: 0 4px; user-select: text; }
+.hier-toolbar input { min-width: 0; }
+
+/* inspector */
+.entity-header { display: flex; align-items: center; gap: 6px; }
+.entity-icon { color: #9fb6d9; font-size: 16px; }
+.entity-icon.prefab { color: #7fb6ff; }
+.multi-note { font-size: 11px; padding: 2px 4px; border-left: 2px solid var(--accent); }
+.asset-field { flex: 1; display: flex; align-items: center; min-width: 0; background: #16181d; border: 1px solid var(--line); border-radius: 4px; padding: 1px 2px 1px 6px; }
+.asset-field .asset-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asset-field button.icon:hover { color: var(--accent); }
+.mask-button { text-align: left; padding: 2px 8px; }
+button.icon.menu-dots:hover { color: var(--accent); }
+.add-wrap { position: relative; display: flex; justify-content: center; margin-top: 6px; }
+.add-component { width: 70%; padding: 5px; background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; }
+.add-popup { position: absolute; top: 100%; z-index: 20; width: 260px; margin-top: 4px; background: #20232b; border: 1px solid var(--line); border-radius: 6px; padding: 6px; box-shadow: 0 8px 24px #000b; display: flex; flex-direction: column; gap: 4px; }
+.add-popup input { width: 100%; }
+.add-title { text-align: center; font-weight: 600; padding: 3px; background: #2a2e38; border-radius: 4px; }
+.add-list { max-height: 300px; overflow: auto; display: flex; flex-direction: column; }
+.add-item { display: flex; gap: 6px; padding: 3px 8px; border-radius: 3px; cursor: default; }
+.add-item:hover { background: var(--select); }
+.add-item.folder .arrow-right { margin-left: auto; color: var(--dim); }
+.add-item.back { color: var(--dim); }
+
+/* console */
+.console-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.console-bar { display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+.console-bar button { padding: 1px 8px; }
+.console-bar button.on { background: #3a4152; border-color: #59627a; }
+.console-bar button.level:not(.on) { opacity: 0.45; }
+.console-bar button.level.warn { color: #f2c94c; }
+.console-bar button.level.error { color: #ff6b6b; }
+.console { flex: 1; overflow: auto; }
+.log { display: flex; gap: 6px; padding: 1px 2px; border-bottom: 1px solid #262a32; }
+.log.picked { background: #2c3a52; }
+.log .count { margin-left: auto; background: #3a4152; border-radius: 8px; padding: 0 6px; font-size: 10px; }

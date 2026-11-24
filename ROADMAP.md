@@ -88,7 +88,11 @@ Mọi ngôn ngữ đi qua cùng một lõi (`goat-script`: component `Script`, t
 - ✅ Project panel như file manager (kéo thả native giữa 2 editor / ra Explorer / vào từ OS), Hierarchy (tạo, xoá, kéo để đổi cha), Inspector mọi component (JSON theo codec scene, Add / Remove Component), Console (kể cả log engine + lỗi script)
 - ✅ Scene view: lưới, gizmo Move / Rotate / Scale (W / E / R), chọn bằng click, orbit / pan / zoom, F để frame, kéo model / prefab vào scene; Play / Stop; lưu scene
 - ✅ Cửa sổ Animator (Animator Controller)
-- ⬜ Undo / Redo, đa chọn, prefab mode, cửa sổ Input Actions, chạy thử trên 3DS từ editor (`3dslink` + log qua mạng), profiler
+- ✅ Editor kiểu Unity / PiaEngine (đợt 1): menu chính, Undo / Redo (snapshot scene, gộp thao tác kéo), chọn nhiều, copy / paste / duplicate, menu GameObject, Hierarchy (chuột phải, F2, tìm kiếm, phím mũi tên), Inspector theo metadata component (`ComponentInfo`: menu, enum, variant, asset, màu, layer, mask, range), Add Component có tìm kiếm, Console (Collapse, lọc)
+- Đuổi kịp PiaEngine (theo yêu cầu 2026-11-24), làm theo đợt:
+  - ⬜ Đợt 2 — component lõi còn thiếu: GameObject active / inactive, tag, Trail Renderer, Line Renderer, NavMesh + NavMeshAgent (package), Constant Force, joint 3D đủ loại (Character / Configurable) và joint / effector 2D, Sprite Mask, Light / Reflection Probe đơn giản, Animation (legacy), UI: Raw Image, Toggle Group, Scrollbar, Rect Mask 2D, Shadow / Outline, Grid Layout, Aspect Ratio Fitter, Canvas Group, raycaster; mesh dựng sẵn capsule / cylinder / quad
+  - ⬜ Đợt 3 — cửa sổ: Game view riêng (Pause / Step, độ phân giải), Profiler, Animation window, Build Settings / Project Settings, Package Manager, prefab mode + Apply / Revert override, Scene view: tool Hand / Rect, Pivot / Center, Local / Global, snap, gizmo cho đèn / camera / collider, sửa nhiều vật cùng lúc trong Inspector, behaviour (script Rust) trong Inspector
+- ⬜ Prefab mode, cửa sổ Input Actions, chạy thử trên 3DS từ editor (`3dslink` + log qua mạng), profiler
 
 ## Giai đoạn 6 — Thêm nền tảng (làm sau cùng, khi các thành phần engine đã xong)
 Mỗi nền tảng = backend đồ họa + platform + `Builder` trong `tools/goat`.

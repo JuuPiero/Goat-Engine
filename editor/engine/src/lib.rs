@@ -2,6 +2,7 @@
 //! [`web`] (the wasm-bindgen API the editor UI calls, rendering on a canvas).
 
 pub mod core;
+pub mod editing;
 pub mod tools;
 
 #[cfg(target_arch = "wasm32")]

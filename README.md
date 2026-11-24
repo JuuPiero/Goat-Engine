@@ -566,6 +566,9 @@ C++ bọc bảng này bằng một template class (xem `crates/goat-script-nativ
 
 Editor dùng Tauri 2 + React; engine chạy bên trong editor dưới dạng WebAssembly và render bằng WebGPU.
 
+- **Menu chính** như Unity: File (New / Open / Save Scene), Edit (Undo / Redo kèm tên thao tác, Cut / Copy / Paste / Duplicate / Delete, Select All, Frame Selected, Play), Assets (Create, Show in Explorer), GameObject (Create Empty, 3D Object, 2D Object, Effects, Light, Audio, UI, Camera), Component (mọi component theo nhóm), Window (mở lại panel, Reset Layout).
+- **Undo / Redo** (Ctrl+Z / Ctrl+Y) cho mọi thay đổi trong scene: tạo, xóa, đổi tên, đổi cha, gizmo, sửa component, thêm / bỏ component, dán. Kéo một số hoặc gõ liên tục vào cùng một trường được gộp thành một bước Undo.
+- **Phím tắt**: Ctrl+S lưu, Ctrl+P Play, Ctrl+D nhân bản (tên `Cube (1)`), Ctrl+C / X / V, Ctrl+A, Delete, F2 đổi tên, F căn khung nhìn, Ctrl+Shift+N tạo GameObject rỗng, Alt+Shift+N tạo con.
 - **Dock panel**: kéo tab để sắp xếp, chia đôi, ghép nhóm. Layout được nhớ lại; nút *Reset Layout* đưa về mặc định (Hierarchy | Scene/Game | Inspector, bên dưới là Project + Console).
 - **Project (Asset Panel)**: dùng như một trình quản lý file.
   - Cây thư mục, breadcrumb, lưới có thumbnail, tìm kiếm.
@@ -574,10 +577,14 @@ Editor dùng Tauri 2 + React; engine chạy bên trong editor dưới dạng Web
   - Đổi tên hay di chuyển asset thì tham chiếu trong scene, prefab, material được tự sửa theo.
 - **Scene view**: double-click file `.scene.json` để mở.
   - Chuột phải hoặc Alt + chuột trái: xoay; chuột giữa: kéo khung nhìn; cuộn: zoom; F: căn vào vật đang chọn.
-  - Click để chọn; Hierarchy và Inspector (Transform, kéo nhãn X/Y/Z để chỉnh) đồng bộ theo. Ctrl+S lưu scene.
-- **Gizmo**: W / E / R (hoặc nút trên thanh Scene) chọn Move / Rotate / Scale; kéo trục đỏ / xanh lá / xanh dương. Lưới trên mặt đất. Delete xoá vật đang chọn.
-- **Hierarchy**: *＋ Create* (con của vật đang chọn, Ctrl+N), *Delete*; kéo một dòng thả lên dòng khác để đổi cha, thả vào chỗ trống để bỏ cha (vị trí trong thế giới được giữ nguyên).
-- **Inspector**: Transform và mọi component khác (sửa theo kiểu: số kéo nhãn để chỉnh, màu, vector, bool, chuỗi, object lồng nhau); *＋ Add Component*, ✕ để bỏ.
+  - Click để chọn, Ctrl / Shift + click để thêm hoặc bỏ khỏi vùng chọn; Hierarchy và Inspector đồng bộ theo.
+- **Gizmo**: W / E / R (hoặc nút trên thanh Scene) chọn Move / Rotate / Scale; kéo trục đỏ / xanh lá / xanh dương, mỗi lần kéo là một bước Undo. Lưới trên mặt đất.
+- **Hierarchy**: click / Ctrl+click / Shift+click để chọn nhiều, phím mũi tên để di chuyển và gập / mở, Alt+click mũi tên gập cả nhánh, ô tìm kiếm. Kéo một hoặc nhiều dòng thả lên dòng khác để đổi cha, thả vào chỗ trống để bỏ cha (vị trí trong thế giới được giữ nguyên). Chuột phải: Copy / Cut / Paste / Paste As Child, Rename, Duplicate, Delete, Select Children, Frame Selected và menu tạo GameObject. Instance prefab có chữ màu xanh; con sinh ra từ prefab / model in nghiêng.
+- **Inspector**: tên GameObject, Transform, rồi từng component với tên kiểu Unity (`Mesh Renderer`, `Rigidbody`…), gập / mở được, nút ⋮ (hoặc chuột phải tiêu đề): Reset, Remove Component, Copy Component, Paste Component Values.
+  - Trường được vẽ theo metadata của component: enum là danh sách chọn; kiểu union (Camera `projection`, Collider `shape`, Joint `kind`) là danh sách chọn kèm các trường con; asset (texture, material, mesh, font, audio…) là ô nhận asset thả từ Project hoặc chọn bằng nút ⊙; màu có thanh alpha; layer, culling mask; giá trị có giới hạn có thanh trượt; tooltip khi rê chuột vào tên trường. Ô số kéo nhãn để chỉnh và nhận biểu thức (`2*3`).
+  - *Add Component*: popup có ô tìm kiếm và danh mục giống Unity (Mesh, Rendering, Effects, Physics, Physics 2D, Audio, UI, Layout, Event, Miscellaneous, Scripts). Component bắt buộc đi kèm được thêm tự động (ví dụ UI Button thêm Rect Transform và Image).
+  - Game / package mô tả component của mình bằng `goat_scene::registry(ctx).describe("Name", ComponentInfo::new("Menu/Path").asset("texture", "texture").options(...))`.
+- **Console**: Clear, Collapse (gộp dòng trùng), bật / tắt từng mức info / warn / error kèm số đếm, tìm kiếm, double-click để copy một dòng.
 - Kéo model (.glb) hoặc prefab từ Project vào Scene view / Hierarchy để thêm vào scene.
 - **Animator**: double-click file `.controller.json` để mở. Chuột phải nền: *Create State*; chuột phải state: *Make Transition* / *Set as Layer Default State* / *Delete*; click mũi tên để sửa transition; Alt + kéo hoặc chuột giữa để kéo khung nhìn; Ctrl+S lưu.
 - **Script**: file `.cs` được tự dịch khi lưu, lỗi biên dịch và lỗi script lúc Play hiện ở Console.
