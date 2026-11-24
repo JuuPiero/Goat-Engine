@@ -68,11 +68,16 @@ pub(crate) fn copy_into(dir: &Path, files: &[PathBuf]) -> Result<PathBuf, String
 /// The sample game's assets folder (copied next to desktop builds; packed into romfs on the 3DS).
 pub(crate) const GAME_ASSETS: &str = "games/hello/assets";
 
+/// The assets folder a build ships: `GOAT_ASSETS` (the editor's open project) or [`GAME_ASSETS`].
+pub(crate) fn game_assets(config: &Config) -> std::path::PathBuf {
+    std::env::var_os("GOAT_ASSETS").filter(|v| !v.is_empty()).map(std::path::PathBuf::from).unwrap_or_else(|| config.root.join(GAME_ASSETS))
+}
+
 /// The game's assets as a build ships them, in `dest`: a copy where scripts are compiled —
 /// C# → JavaScript (tools/goat-cs, needs the .NET SDK when there are .cs files), TypeScript →
 /// JavaScript (oxc) — and their sources dropped (consoles load the JavaScript).
 pub(crate) fn stage_assets(config: &Config, dest: &Path) -> Result<(), String> {
-    let src = config.root.join(GAME_ASSETS);
+    let src = game_assets(config);
     copy_dir(&src, dest)?;
     let mut files = Vec::new();
     walk(dest, &mut files);

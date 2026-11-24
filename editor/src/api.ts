@@ -37,6 +37,7 @@ export const api = {
   readText: (key: string) => invoke<string>('read_text', { key }),
   writeText: (key: string, text: string) => invoke<void>('write_text', { key, text }),
   reveal: (key: string) => invoke<void>('reveal', { key }),
+  buildGame: (platform: string, startScene: string | null, debug: boolean) => invoke<void>('build_game', { platform, startScene, debug }),
   dragIcon: () => invoke<string>('drag_icon'),
 };
 

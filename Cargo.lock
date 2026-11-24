@@ -2292,11 +2292,13 @@ dependencies = [
  "console_error_panic_hook",
  "goat-animation",
  "goat-assets",
+ "goat-audio",
  "goat-core",
  "goat-gfx",
  "goat-gfx-wgpu",
  "goat-navigation",
  "goat-particles",
+ "goat-physics",
  "goat-physics2d",
  "goat-runtime",
  "goat-scene",
@@ -2473,6 +2475,8 @@ dependencies = [
  "goat-core",
  "goat-gfx",
  "hecs",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

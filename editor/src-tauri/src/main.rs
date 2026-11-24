@@ -180,6 +180,76 @@ struct ScriptLog {
     text: String,
 }
 
+/// The engine workspace (Cargo.toml with `[workspace]` + goat-core) above the editor executable.
+fn engine_root() -> Option<PathBuf> {
+    let mut d = std::env::current_exe().ok()?;
+    while d.pop() {
+        if std::fs::read_to_string(d.join("Cargo.toml")).is_ok_and(|t| t.contains("[workspace]") && t.contains("goat-core")) {
+            return Some(d);
+        }
+    }
+    None
+}
+
+#[derive(Clone, Serialize)]
+struct BuildDone {
+    ok: bool,
+    out: String,
+}
+
+/// File ▸ Build Settings ▸ Build: runs `goat build <platform>` on the open project (`GOAT_ASSETS`,
+/// start scene baked in with `GOAT_START_SCENE`), streaming its output to the Console
+/// (`script-log`), then `build-done`.
+#[tauri::command]
+fn build_game(app: tauri::AppHandle, s: State<AppState>, platform: String, start_scene: Option<String>, debug: bool) -> Res<()> {
+    let assets = with(&s, |p| Ok(p.assets.clone()))?;
+    let root = engine_root().ok_or("the editor isn't inside a GoatEngine workspace")?;
+    // `cargo run` keeps the CLI up to date; a prebuilt target/release/goat when cargo isn't there
+    let exe = root.join("target").join("release").join(if cfg!(windows) { "goat.exe" } else { "goat" });
+    let start_scene = start_scene.unwrap_or_default();
+    let command = |cargo: bool| {
+        let mut cmd = if cargo {
+            let mut c = std::process::Command::new("cargo");
+            c.args(["run", "-q", "--release", "-p", "goat", "--"]);
+            c
+        } else {
+            std::process::Command::new(&exe)
+        };
+        cmd.current_dir(&root).arg("build").arg(&platform).env("GOAT_ASSETS", &assets).env("GOAT_START_SCENE", &start_scene);
+        if debug {
+            cmd.arg("--debug");
+        }
+        cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        cmd
+    };
+    let mut child = command(true).spawn().or_else(|_| command(false).spawn()).map_err(|e| format!("can't run the goat CLI: {e}"))?;
+    let out_dir = root.join("out").join(&platform).display().to_string();
+    std::thread::spawn(move || {
+        let pipe = |app: tauri::AppHandle, r: Box<dyn std::io::Read + Send>, level: &'static str| {
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for l in std::io::BufReader::new(r).lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()) {
+                    let level = if l.contains("error") { "error" } else if l.contains("warning") { "warn" } else { level };
+                    let _ = app.emit("script-log", ScriptLog { level, text: format!("Build: {l}") });
+                }
+            })
+        };
+        let a = child.stdout.take().map(|o| pipe(app.clone(), Box::new(o), "info"));
+        let b = child.stderr.take().map(|o| pipe(app.clone(), Box::new(o), "info"));
+        let ok = child.wait().is_ok_and(|s| s.success());
+        a.map(|t| t.join());
+        b.map(|t| t.join());
+        let _ = app.emit("script-log", ScriptLog { level: if ok { "info" } else { "error" }, text: if ok { format!("Build succeeded → {out_dir}") } else { "Build failed".into() } });
+        let _ = app.emit("build-done", BuildDone { ok, out: out_dir });
+    });
+    Ok(())
+}
+
 /// Translates changed C# scripts (debounced), reporting to the Console (`script-log` events).
 fn csharp_worker(app: tauri::AppHandle, root: PathBuf) -> std::sync::mpsc::Sender<PathBuf> {
     let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
@@ -274,6 +344,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             project_info,
+            build_game,
             list_dir,
             folder_tree,
             search,

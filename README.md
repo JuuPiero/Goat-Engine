@@ -223,6 +223,9 @@ Asset được gọi bằng **key** là đường dẫn tương đối:
 | Model | glTF 2.0 / GLB: mesh, material, ảnh nhúng, cây node |
 | Material | `*.mat.json`: `{ "base_color": "#3d8bff", "texture": "../textures/a.png", "shininess": 64, "blend": "alpha" }` |
 | Scene / Prefab | `*.scene.json` / `*.prefab.json` (xem `crates/goat-scene/src/lib.rs`) |
+| Thiết lập project | `project.json` ở gốc `assets/`: `name`, `version`, `scenes` (Build Settings: `[{ "path": "scenes/menu.scene.json", "enabled": true }]`), `fixed_timestep`, `max_delta`, `gravity`, `gravity_2d`, `tags`, `layers` (`goat_runtime::ProjectSettings`, là một resource) |
+
+Chuyển scene từ script giống Unity: `SceneManager.loadScene(1)` (chỉ số trong Build Settings), `SceneManager.loadScene("level1")` (tên file) hoặc theo key; tham số thứ hai `LoadSceneMode.Additive` để nạp thêm. Scene được nạp ở cuối frame. `SceneManager.getActiveScene()` trả `{ name, path, buildIndex }`; `sceneCountInBuildSettings`. Từ Rust: `goat_scene::request_scene(ctx, "1", LoadMode::Single)`. `goat build` nhận `GOAT_ASSETS` (thư mục assets khác) và `GOAT_START_SCENE` (scene khởi động) — nút Build của editor đặt sẵn cả hai.
 
 ```rust
 fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
@@ -620,6 +623,8 @@ Editor dùng Tauri 2 + React; engine chạy bên trong editor dưới dạng Web
 - **Gizmo của component** (object đang chọn): khung collider 3D / 2D và CharacterController màu xanh lá, frustum của camera, tia / tầm / hình nón của đèn, tầm min / max của AudioSource 3D, hình trụ của NavMeshAgent, khối NavMeshObstacle.
 - **Pause / Step** (❚❚ / ▶❚ cạnh nút Play, Ctrl+Shift+P / Ctrl+Alt+P): dừng game giữa chừng (Game view vẫn hiện khung hình), chạy từng frame một.
 - **Profiler** (Window ▸ Profiler): biểu đồ CPU 300 frame gần nhất (ms của từng plugin, behaviour, transform, culling, render; vạch 60 / 30 FPS), click một cột để xem frame đó, bảng ms / %, số draw call và tam giác. Đo cả Play mode lẫn Edit mode.
+- **Build Settings** (File ▸ Build Settings…, Ctrl+Shift+B): danh sách *Scenes In Build* (kéo để đổi thứ tự, bỏ tick để tạm loại, Delete để xóa, thả scene từ Project vào, nút *Add Open Scenes*; scene đầu tiên được bật là scene khởi động), chọn nền tảng Desktop / Nintendo 3DS, *Development Build*, nút *Build* chạy `goat build` trên project đang mở và in kết quả ra Console.
+- **Project Settings** (Edit ▸ Project Settings…): Player (tên, phiên bản), Time (Fixed Timestep, Maximum Allowed Timestep), Physics / Physics 2D (gravity), Tags and Layers (tag thêm ở đây hiện trong ô Tag của Inspector). Tất cả lưu trong `assets/project.json`, áp dụng khi Play và trong bản build.
 - **Play (▶)**: chạy game thật (behaviour, script, physics, animation, sprite, text) trong Game view, có thể bật layout 2 màn hình 3DS. Phím điều khiển giống bản desktop. Esc hoặc ■ để dừng; scene đang edit không bị thay đổi.
 
 ```sh

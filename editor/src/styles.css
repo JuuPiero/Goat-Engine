@@ -261,3 +261,26 @@ button.icon.menu-dots:hover { color: var(--accent); }
 .profiler-row.head { color: var(--dim); position: sticky; top: 0; background: var(--panel); }
 .profiler-row i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
 button.play:disabled { opacity: 0.35; }
+
+/* Build Settings / Project Settings */
+.settings-window { display: flex; flex-direction: column; gap: 6px; padding: 10px; min-height: 0; }
+.settings-title { font-weight: 600; font-size: 13px; margin-top: 4px; }
+.settings-sub { color: var(--dim); margin-top: 8px; border-bottom: 1px solid var(--line); padding-bottom: 2px; }
+.settings-actions { gap: 6px; }
+.settings-note { margin-top: 12px; font-size: 11px; }
+.build-scenes { min-height: 120px; max-height: 260px; overflow: auto; background: #15171c; border: 1px solid var(--line); border-radius: 3px; outline: none; }
+.build-scenes:focus { border-color: #4a5a7a; }
+.build-empty { padding: 10px; }
+.build-scene { display: flex; align-items: center; gap: 6px; padding: 2px 6px; cursor: default; }
+.build-scene.picked { background: #2c4a7a; }
+.build-platforms { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 3px; }
+.build-platform { padding: 4px 8px; display: flex; gap: 6px; align-items: center; }
+.build-platform.picked { background: #2a3140; }
+button.primary { background: #2c5aa0; border-color: #3a6cc0; }
+.project-settings { flex-direction: row; height: 100%; padding: 0; gap: 0; }
+.settings-nav { flex: 0 0 160px; border-right: 1px solid var(--line); padding: 6px 0; overflow: auto; }
+.settings-nav-item { padding: 4px 12px; cursor: default; }
+.settings-nav-item.picked { background: #2c4a7a; }
+.settings-body { flex: 1; padding: 10px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.settings-body .field { grid-template-columns: 170px 1fr; }
+.settings-body .vec input { width: 0; flex: 1; }

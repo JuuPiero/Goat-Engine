@@ -555,7 +555,11 @@ pub struct Physics2DPlugin;
 
 impl Plugin for Physics2DPlugin {
     fn build(&mut self, ctx: &mut Context) {
-        ctx.resources.get_or_default::<Physics2D>();
+        let gravity = ctx.resources.get::<goat_runtime::ProjectSettings>().map(|s| s.gravity_2d);
+        let p = ctx.resources.get_or_default::<Physics2D>();
+        if let Some(g) = gravity {
+            p.gravity = g;
+        }
         #[cfg(feature = "scene")]
         goat_scene::registry(ctx)
             .component(goat_scene::serde_codec::<Rigidbody2D>("Rigidbody2D"))

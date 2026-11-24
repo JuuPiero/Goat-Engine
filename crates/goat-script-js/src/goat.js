@@ -176,6 +176,15 @@ export const Time = {
 
 // ------------------------------------------------------------------ coroutines
 
+// Unity's SceneManager: scenes by Build Settings index or name (assets/project.json); the load
+// happens at the end of the frame.
+export const LoadSceneMode = { Single: 'single', Additive: 'additive' };
+export const SceneManager = {
+  loadScene(nameOrIndex, mode = 'single') { return call('SceneManager.loadScene', null, [nameOrIndex, mode]); },
+  getActiveScene() { const s = call('SceneManager.activeScene', null, []) ?? { key: '', buildIndex: -1 }; return { name: s.key.split('/').pop().replace(/\.scene\.json$/, ''), path: s.key, buildIndex: s.buildIndex }; },
+  get sceneCountInBuildSettings() { return call('SceneManager.sceneCountInBuildSettings', null, []) ?? 0; },
+};
+
 export class WaitForSeconds { constructor(seconds) { this.seconds = seconds; } }
 export class WaitForSecondsRealtime { constructor(seconds) { this.seconds = seconds; } }
 export class WaitUntil { constructor(predicate) { this.predicate = predicate; } }

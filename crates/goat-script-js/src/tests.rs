@@ -402,3 +402,33 @@ fn set_active_and_tags_from_scripts() {
     }
     assert!(counted(&e).unwrap_or(0) > before, "running again once reactivated");
 }
+/// SceneManager.loadScene(index | name) ? Build Settings (ProjectSettings), loaded at the end of the frame.
+#[test]
+fn scene_manager_loads_build_scenes() {
+    struct S;
+    fn sio() -> AssetIo {
+        let io = AssetIo::new("/nonexistent-goat-test-root");
+        io.put("scenes/menu.scene.json", br#"{ "version": 1, "entities": [ {"id":1,"name":"Menu","components":{"Script":{"src":"scripts/Next.ts"}}} ] }"#.to_vec());
+        io.put("scenes/level1.scene.json", br#"{ "version": 1, "entities": [ {"id":1,"name":"Level","components":{"Script":{"src":"scripts/Report.ts"}}} ] }"#.to_vec());
+        io.put("scripts/Next.ts", b"import { Behaviour, SceneManager } from 'goat';\nexport default class Next extends Behaviour { n = 0; update() { if (++this.n == 2) SceneManager.loadScene(SceneManager.sceneCountInBuildSettings - 1); } }\n".to_vec());
+        io.put("scripts/Report.ts", b"import { Behaviour, SceneManager } from 'goat';\nexport default class Report extends Behaviour { start() { const s = SceneManager.getActiveScene(); this.gameObject.name = s.name + ':' + s.buildIndex; } }\n".to_vec());
+        io
+    }
+    impl Game for S {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(sio()));
+            ctx.resources.insert(goat_runtime::ProjectSettings { scenes: ["scenes/menu.scene.json", "scenes/level1.scene.json"].iter().map(|p| goat_runtime::SceneEntry { path: p.to_string(), enabled: true }).collect(), ..Default::default() });
+            goat_scene::load_scene(ctx, "scenes/menu.scene.json", goat_scene::LoadMode::Single).unwrap();
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(sio())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(S);
+    for _ in 0..4 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    assert!(find(&e, "Menu").is_none(), "the menu scene was unloaded");
+    assert!(find(&e, "level1:1").is_some(), "level 1 loaded and its script saw the active scene");
+}

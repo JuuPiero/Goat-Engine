@@ -2,6 +2,7 @@
 // (foldout, ⋮ menu: Reset / Remove / Copy / Paste values) with fields drawn from the engine's
 // component metadata (enums, variants, asset references with drop + picker, colors, ranges,
 // layers, masks), and Add Component (a searchable category popup). Edits are Undo steps.
+import { useSettings } from '../projectSettings';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, nameOf } from '../api';
 import { getEngine } from '../engine';
@@ -534,6 +535,7 @@ export function EntityInspector({ id }: { id: string }) {
   const [kind, setKind] = useState('entity');
   const [activeSelf, setActiveSelf] = useState(true);
   const [tag, setTag] = useState('Untagged');
+  const projectTags = useSettings().tags;
   useEffect(() => {
     const e = getEngine();
     if (!e) return;
@@ -585,7 +587,7 @@ export function EntityInspector({ id }: { id: string }) {
           onBlur={(e) => mutate('Change Tag', () => getEngine()?.set_tag(id, e.target.value.trim() || 'Untagged'))}
         />
         <datalist id="goat-tags">
-          {TAGS.map((t) => (
+          {[...TAGS, ...projectTags.filter((x) => !TAGS.includes(x))].map((t) => (
             <option key={t} value={t} />
           ))}
         </datalist>

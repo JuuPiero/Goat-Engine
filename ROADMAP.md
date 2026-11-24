@@ -98,7 +98,8 @@ Mọi ngôn ngữ đi qua cùng một lõi (`goat-script`: component `Script`, t
   - ⬜ Đợt 2 — component lõi còn thiếu: Constant Force, joint 3D đủ loại (Character / Configurable) và joint / effector 2D, Sprite Mask, Light / Reflection Probe đơn giản, Animation (legacy), UI: Raw Image, Toggle Group, Scrollbar, Rect Mask 2D, Shadow / Outline, Grid Layout, Aspect Ratio Fitter, Canvas Group, raycaster; mesh dựng sẵn capsule / cylinder / quad
   - ✅ Pause / Step, cửa sổ Profiler (đồng hồ cho wasm, lịch sử frame)
   - ✅ Gizmo của component trong Scene view (collider, camera, đèn, audio, navigation)
-  - ⬜ Đợt 3 — cửa sổ: Game view riêng (Pause / Step, độ phân giải), Profiler, Animation window, Build Settings / Project Settings, Package Manager, prefab mode + Apply / Revert override, Scene view: tool Hand / Rect, Pivot / Center, Local / Global, snap, gizmo cho đèn / camera / collider, sửa nhiều vật cùng lúc trong Inspector, behaviour (script Rust) trong Inspector
+  - ✅ Build Settings (danh sách scene, nền tảng, Build từ editor) + Project Settings (`assets/project.json`: Time, gravity, tag, layer) + `SceneManager.loadScene` (JS / C#)
+  - ⬜ Đợt 3 — cửa sổ: Game view chọn độ phân giải, Animation window, Package Manager, prefab mode + Apply / Revert override, Scene view: tool Hand / Rect, Pivot / Center, Local / Global, snap, gizmo cho đèn / camera / collider, sửa nhiều vật cùng lúc trong Inspector, behaviour (script Rust) trong Inspector
 - ⬜ Prefab mode, cửa sổ Input Actions, chạy thử trên 3DS từ editor (`3dslink` + log qua mạng), profiler
 
 ## Giai đoạn 6 — Thêm nền tảng (làm sau cùng, khi các thành phần engine đã xong)

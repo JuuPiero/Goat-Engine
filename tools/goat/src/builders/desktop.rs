@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{copy_into, exe, run_command, stage_assets, BuildOptions, Builder, GAME_ASSETS};
+use super::{copy_into, exe, run_command, stage_assets, BuildOptions, Builder};
 use crate::config::Config;
 
 pub struct Desktop;
@@ -38,7 +38,7 @@ impl Builder for Desktop {
         run_command(&mut cmd)?;
         let built = config.target_dir().join(options.profile()).join(exe(BIN));
         let out = config.out_dir(self.id())?;
-        let assets = config.root.join(GAME_ASSETS);
+        let assets = super::game_assets(config);
         if assets.is_dir() {
             stage_assets(config, &out.join("assets"))?;
         }

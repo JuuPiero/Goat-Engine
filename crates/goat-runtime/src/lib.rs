@@ -18,6 +18,7 @@ pub mod plugin;
 pub mod profiler;
 pub mod resources;
 pub mod script;
+pub mod settings;
 
 pub use components::*;
 pub use coroutine::{start_coroutine, stop_coroutine, stop_coroutines_of, CoroutineId, Coroutines, Steps, TimeScale, Yield};
@@ -30,3 +31,4 @@ pub use plugin::Plugin;
 pub use profiler::Profiler;
 pub use resources::Resources;
 pub use script::{AsAny, Behaviour, Scripts};
+pub use settings::{ProjectSettings, SceneEntry};

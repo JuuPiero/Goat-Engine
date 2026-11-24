@@ -349,6 +349,24 @@ namespace GoatEngine
         public static NavMeshPath CalculatePath(Vector3 source, Vector3 target, int areaMask = -1) => null!;
         public static NavMeshHit Raycast(Vector3 source, Vector3 target) => null!;
     }
+    public enum LoadSceneMode { Single, Additive }
+
+    /// <summary>A loaded scene (Unity's Scene struct, the parts GoatEngine has).</summary>
+    public class Scene
+    {
+        public string name = "";
+        public string path = "";
+        public int buildIndex;
+    }
+
+    /// <summary>Unity's SceneManager: scenes by Build Settings index or name; loads at the end of the frame.</summary>
+    public static class SceneManager
+    {
+        public static void LoadScene(string sceneName, LoadSceneMode mode = LoadSceneMode.Single) { }
+        public static void LoadScene(int sceneBuildIndex, LoadSceneMode mode = LoadSceneMode.Single) { }
+        public static Scene GetActiveScene() => null!;
+        public static int sceneCountInBuildSettings => 0;
+    }
     /// <summary>Flipbook animation of a SpriteRenderer.</summary>
     public class SpriteAnimator
     {

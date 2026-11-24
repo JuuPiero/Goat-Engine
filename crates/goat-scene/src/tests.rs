@@ -243,3 +243,13 @@ fn variants_refuse_colliding_ids_and_guid_keys_load() {
 fn newer_versions_are_refused() {
     assert!(parse("x", r#"{ "version": 99, "entities": [] }"#).is_err());
 }
+
+#[test]
+fn scenes_resolve_by_build_index_and_name() {
+    let s: goat_runtime::ProjectSettings = serde_json::from_str(include_str!("../../../games/hello/assets/project.json")).unwrap();
+    assert_eq!(s.gravity.y, -9.81);
+    assert_eq!(resolve_scene(Some(&s), "1").as_deref(), Some("scenes/playground.scene.json"));
+    assert_eq!(resolve_scene(Some(&s), "navigation").as_deref(), Some("scenes/navigation.scene.json"));
+    assert_eq!(resolve_scene(Some(&s), "9"), None);
+    assert_eq!(resolve_scene(None, "scenes/x.scene.json").as_deref(), Some("scenes/x.scene.json"));
+}

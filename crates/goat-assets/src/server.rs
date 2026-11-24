@@ -455,6 +455,16 @@ impl Plugin for AssetsPlugin {
             goat_core::info!("assets: {}", root.display());
             ctx.resources.insert(AssetServer::new(AssetIo::new(root)));
         }
+        // project settings (Unity's ProjectSettings + Build Settings)
+        if ctx.resources.get::<goat_runtime::ProjectSettings>().is_none() {
+            let text = ctx.resources.get::<AssetServer>().and_then(|a| a.io.read_string("project.json").ok());
+            if let Some(text) = text {
+                match serde_json::from_str::<goat_runtime::ProjectSettings>(&text) {
+                    Ok(s) => ctx.resources.insert(s),
+                    Err(e) => goat_core::warn!("project.json: {e}"),
+                }
+            }
+        }
     }
 }
 

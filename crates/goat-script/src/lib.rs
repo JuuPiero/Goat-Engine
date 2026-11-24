@@ -176,6 +176,24 @@ fn register_core(x: &mut Extensions) {
     fn find_one(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
         Ok(find_all(api, e, a)?.as_array().and_then(|l| l.first().cloned()).unwrap_or(Value::Null))
     }
+    fn load_scene(api: &mut Api, _: Entity, a: &[Value]) -> Result<Value, String> {
+        let which = match a.first() {
+            Some(Value::Number(n)) => n.to_string(),
+            Some(Value::String(s)) => s.clone(),
+            _ => return Err("SceneManager.loadScene(nameOrIndex)".into()),
+        };
+        let mode = if a.get(1).and_then(|v| v.as_str()) == Some("additive") { goat_scene::LoadMode::Additive } else { goat_scene::LoadMode::Single };
+        goat_scene::request_scene(api.ctx, &which, mode).map(Value::String).map_err(|e| e.to_string())
+    }
+    fn active_scene(api: &mut Api, _: Entity, _: &[Value]) -> Result<Value, String> {
+        let key = api.ctx.resources.get::<goat_scene::ActiveScene>().map(|s| s.0.clone()).unwrap_or_default();
+        let index = api.ctx.resources.get::<goat_runtime::ProjectSettings>().and_then(|s| s.build_scenes().iter().position(|p| *p == key));
+        Ok(serde_json::json!({ "key": key, "buildIndex": index.map(|i| i as i64).unwrap_or(-1) }))
+    }
+    fn scene_count(api: &mut Api, _: Entity, _: &[Value]) -> Result<Value, String> {
+        Ok(Value::from(api.ctx.resources.get::<goat_runtime::ProjectSettings>().map(|s| s.build_scenes().len()).unwrap_or(0)))
+    }
+    x.add("SceneManager.loadScene", load_scene).add("SceneManager.activeScene", active_scene).add("SceneManager.sceneCountInBuildSettings", scene_count);
     x.add("GameObject.setActive", set_active)
         .add("GameObject.activeSelf", active_self)
         .add("GameObject.activeInHierarchy", active_in_hierarchy)

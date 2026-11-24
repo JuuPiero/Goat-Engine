@@ -1,0 +1,16 @@
+{
+  "name": "Hello Goat",
+  "version": "1.0",
+  "scenes": [
+    { "path": "scenes/showcase.scene.json", "enabled": true },
+    { "path": "scenes/playground.scene.json", "enabled": true },
+    { "path": "scenes/physics2d.scene.json", "enabled": true },
+    { "path": "scenes/navigation.scene.json", "enabled": true }
+  ],
+  "fixed_timestep": 0.016666668,
+  "max_delta": 0.1,
+  "gravity": [0, -9.81, 0],
+  "gravity_2d": [0, -9.81],
+  "tags": ["Enemy", "Pickup"],
+  "layers": ["Default", "TransparentFX", "Ignore Raycast", "", "Water", "UI"]
+}

@@ -478,10 +478,15 @@ pub fn load_scene(ctx: &mut Context, key: &str, mode: LoadMode) -> Result<Vec<En
             let _ = ctx.world.despawn(e);
         }
     }
-    with_parts(ctx, |world, gfx, assets, registry| {
+    let roots = with_parts(ctx, |world, gfx, assets, registry| {
         let file = resolve_file(assets, key)?;
         spawn_file_depth(world, gfx, assets, registry, &file, key, None, 0, false)
-    })?
+    })??;
+    let active = ctx.resources.get_or_default::<ActiveScene>();
+    if mode == LoadMode::Single || active.0.is_empty() {
+        active.0 = key.to_string();
+    }
+    Ok(roots)
 }
 
 /// Instantiates a prefab file: a new entity named after it (with [`PrefabInstance`]) whose
@@ -523,6 +528,45 @@ impl Plugin for ScenePlugin {
     fn build(&mut self, ctx: &mut Context) {
         ctx.resources.get_or_default::<SceneRegistry>();
     }
+    fn late_update(&mut self, ctx: &mut Context) {
+        let pending = match ctx.resources.get_mut::<SceneRequests>() {
+            Some(r) if !r.0.is_empty() => std::mem::take(&mut r.0),
+            _ => return,
+        };
+        for (key, mode) in pending {
+            if let Err(e) = load_scene(ctx, &key, mode) {
+                goat_core::error!("loadScene {key}: {e}");
+            }
+        }
+    }
+}
+
+/// Scene loads asked for during the frame (`SceneManager.loadScene`), done at the end of
+/// `late_update` so nothing is despawned while behaviours run (Unity loads on the next frame too).
+#[derive(Default)]
+pub struct SceneRequests(pub Vec<(String, LoadMode)>);
+
+/// The key of the last scene loaded in Single mode (or the first one loaded): Unity's active scene.
+#[derive(Default)]
+pub struct ActiveScene(pub String);
+
+/// Resolves `name_or_index` against the project's Build Settings: a number = the n-th enabled
+/// scene, a name = the build scene whose file stem matches (`"level1"` → `scenes/level1.scene.json`),
+/// anything else = an asset key as is.
+pub fn resolve_scene(settings: Option<&goat_runtime::ProjectSettings>, name_or_index: &str) -> Option<String> {
+    let scenes: Vec<&str> = settings.map(|s| s.build_scenes()).unwrap_or_default();
+    if let Ok(i) = name_or_index.parse::<usize>() {
+        return scenes.get(i).map(|s| s.to_string());
+    }
+    let stem = |p: &str| p.rsplit('/').next().unwrap_or(p).trim_end_matches(".json").trim_end_matches(".scene").to_string();
+    scenes.iter().find(|s| stem(s) == name_or_index || **s == name_or_index).map(|s| s.to_string()).or_else(|| Some(name_or_index.to_string()))
+}
+
+/// Queues a scene load for the end of the frame (see [`SceneRequests`]).
+pub fn request_scene(ctx: &mut Context, name_or_index: &str, mode: LoadMode) -> Result<String, SceneError> {
+    let key = resolve_scene(ctx.resources.get::<goat_runtime::ProjectSettings>(), name_or_index).ok_or_else(|| SceneError::Format(name_or_index.into(), "no such scene in Build Settings".into()))?;
+    ctx.resources.get_or_default::<SceneRequests>().0.push((key.clone(), mode));
+    Ok(key)
 }
 
 #[cfg(test)]

@@ -162,6 +162,11 @@ impl Engine {
         if !self.started {
             self.started = true;
             self.each_plugin(gfx, |p, ctx| p.build(ctx));
+            // project settings (assets/project.json, loaded by AssetsPlugin): time steps
+            if let Some(s) = self.resources.get::<crate::settings::ProjectSettings>() {
+                self.time.fixed_delta = s.fixed_timestep.clamp(1e-3, 1.0);
+                self.time.max_delta = s.max_delta.max(self.time.fixed_delta);
+            }
             let time = self.time;
             let mut ctx = Context { world: &mut self.world, time: &time, input: &self.input, gfx, displays: &self.displays, resources: &mut self.resources, quit: &mut self.quit };
             self.game.start(&mut ctx);

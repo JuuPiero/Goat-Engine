@@ -652,7 +652,11 @@ pub struct PhysicsPlugin;
 
 impl Plugin for PhysicsPlugin {
     fn build(&mut self, ctx: &mut Context) {
-        ctx.resources.get_or_default::<Physics>();
+        let gravity = ctx.resources.get::<goat_runtime::ProjectSettings>().map(|s| s.gravity);
+        let p = ctx.resources.get_or_default::<Physics>();
+        if let Some(g) = gravity {
+            p.gravity = g;
+        }
         #[cfg(feature = "scene")]
         goat_scene::registry(ctx)
             .component(goat_scene::serde_codec::<RigidBody>("RigidBody"))

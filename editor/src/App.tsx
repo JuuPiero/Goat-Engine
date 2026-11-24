@@ -15,6 +15,7 @@ import { Viewport } from './panels/Viewport';
 import { AnimatorWindow } from './panels/AnimatorWindow';
 import { getEngine, openScene, saveScene, startPlay, stepFrame, stopPlay, togglePause } from './engine';
 import { ProfilerPanel } from './panels/ProfilerPanel';
+import { BuildSettingsWindow, ProjectSettingsWindow } from './panels/SettingsWindows';
 import { ContextMenuHost, MenuBar, type MenuItem } from './ui/Menu';
 import * as commands from './commands';
 import { copy, cut, deleteSelection, duplicate, gameObjectMenu, hasClipboard, installShortcuts, mutate, paste, redo, selectAll, undo } from './commands';
@@ -31,6 +32,8 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
   console: () => <div className="panel-scroll"><Console /></div>,
   animator: () => <AnimatorWindow />,
   profiler: () => <ProfilerPanel />,
+  build: () => <div className="panel-scroll"><BuildSettingsWindow /></div>,
+  settings: () => <ProjectSettingsWindow />,
 };
 
 function defaultLayout(dv: DockviewApi) {
@@ -71,6 +74,13 @@ export function App() {
     });
     void installDropHandling();
     const offKeys = installShortcuts();
+    const windowKeys = (ev: KeyboardEvent) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.code === 'KeyB') {
+        ev.preventDefault();
+        showPanel(dv.current, 'build', 'Build Settings');
+      }
+    };
+    window.addEventListener('keydown', windowKeys);
     const un = listen('assets-changed', () => refresh());
     // C# translation results (tools/goat-cs, run by the backend when .cs files change)
     void listen<{ level: 'info' | 'warn' | 'error'; text: string }>('script-log', (ev) => log(ev.payload.text, ev.payload.level));
@@ -78,6 +88,7 @@ export function App() {
     (window as unknown as { __goat: unknown }).__goat = { getState, setState, handleDrop, api, engine: getEngine, dock: () => dv.current, openScene, startPlay, stopPlay, commands };
     return () => {
       offKeys();
+      window.removeEventListener('keydown', windowKeys);
       void un.then((f) => f());
     };
   }, []);
@@ -194,7 +205,7 @@ function menus(dv: React.RefObject<DockviewApi | null>, resetLayout: () => void,
         },
         { label: 'Save', shortcut: 'Ctrl+S', disabled: noScene(), action: () => void saveScene() },
         '-',
-        { label: 'Build Settings…', disabled: true },
+        { label: 'Build Settings…', shortcut: 'Ctrl+Shift+B', action: () => showPanel(dv.current, 'build', 'Build Settings') },
         '-',
         { label: 'New Window', action: newWindow },
       ],
@@ -217,6 +228,8 @@ function menus(dv: React.RefObject<DockviewApi | null>, resetLayout: () => void,
         { label: s().playing ? 'Stop' : 'Play', shortcut: 'Ctrl+P', action: () => (s().playing ? stopPlay() : void startPlay()) },
         { label: 'Pause', shortcut: 'Ctrl+Shift+P', checked: s().paused, disabled: !s().playing, action: togglePause },
         { label: 'Step', shortcut: 'Ctrl+Alt+P', disabled: !s().playing, action: stepFrame },
+        '-',
+        { label: 'Project Settings…', action: () => showPanel(dv.current, 'settings', 'Project Settings') },
       ],
     },
     {
