@@ -1,6 +1,7 @@
 //! Images → [`TextureData`] (RGBA8, rows top to bottom): PNG of any color type / bit depth.
 //! Import settings (`<texture>.import.json`, like Unity's texture importer):
-//! `{ "filter": "nearest"|"linear", "wrap": "repeat"|"clamp", "mipmaps": true, "format": "rgba8"|"rgb565"|"rgba4"|"rgba5551", "max_size": 256 }`.
+//! `{ "filter": "nearest"|"linear", "wrap": "repeat"|"clamp", "mipmaps": true, "format": "rgba8"|"rgb565"|"rgba4"|"rgba5551"|"etc1"|"etc1a4", "max_size": 256 }`.
+//! `etc1` / `etc1a4` are block-compressed on the 3DS (4 / 8 bits per pixel); desktop keeps RGBA8.
 
 use goat_gfx::{Filter, TextureData, TextureFormat, Wrap};
 use serde::Deserialize;
@@ -56,6 +57,8 @@ impl TextureImport {
             Some("rgb565") => TextureFormat::Rgb565,
             Some("rgba4") => TextureFormat::Rgba4,
             Some("rgba5551") => TextureFormat::Rgba5551,
+            Some("etc1") => TextureFormat::Etc1,
+            Some("etc1a4") => TextureFormat::Etc1A4,
             _ => t.format,
         };
         if let Some(max) = self.max_size {

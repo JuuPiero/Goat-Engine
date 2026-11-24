@@ -49,6 +49,10 @@ pub enum TextureFormat {
     Rgba4,
     /// 5-5-5-1 (cut-out alpha).
     Rgba5551,
+    /// ETC1 block compression, 4 bits per pixel, no alpha (encoded at load / build time).
+    Etc1,
+    /// ETC1 + 4-bit alpha, 8 bits per pixel.
+    Etc1A4,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

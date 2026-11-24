@@ -13,7 +13,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ citro3d: fragment lighting per-pixel, LUT specular, SSAA 2×2, stereo 3D theo thanh trượt, texture tile Morton, sắp xếp opaque/blend
 - ✅ wgpu (Vulkan): Blinn-Phong, nhiều viewport, layout xem trước 2 màn hình 3DS, chụp màn hình, color space linear
 - ✅ Mipmap (cả hai backend), định dạng 16-bit cho 3DS: RGB565 / RGBA4 / RGBA5551
-- ⬜ ETC1 / ETC1A4 (nén ở bước import trên PC — giai đoạn 2)
+- ✅ ETC1 / ETC1A4 trên 3DS (`"format": "etc1" | "etc1a4"` trong file import: 4 / 8 bit mỗi pixel; bộ mã hóa thử cả hai cách chia khối, chế độ individual / differential và 8 bảng cường độ; desktop giữ RGBA8). Hiện nén lúc nạp, bản build sẽ nén sẵn.
 - ✅ 8 đèn mỗi view: directional / point (LUT suy giảm theo khoảng cách) / spot (LUT hình nón), chọn đèn gần camera nhất
 - ✅ Fog tuyến tính (khối fog của PICA); 3DS dùng **w-buffer** → depth tuyến tính, chính xác đều cả gần lẫn xa
 - ✅ Viewport một phần trên 3DS (camera picture-in-picture, clear từng phần)
@@ -46,7 +46,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ glTF 2.0 / GLB: mesh (tự tách khi > 65 535 đỉnh, tự tính normal), material PBR → Blinn-Phong, ảnh PNG nhúng, cây node; `spawn_model`
 - ✅ Material file `*.mat.json`
 - ✅ `goat-scene`: scene / prefab JSON, registry component + behaviour (serde), model / prefab instance, lưu ra file (round-trip có test)
-- ⬜ Animation / skin của glTF (giai đoạn 3 — animation), JPEG, KTX / ETC1 nén sẵn
+- ⬜ Animation / skin của glTF (giai đoạn 3 — animation), JPEG, KTX
 - ⬜ GUID + `.meta` (đổi tên file không vỡ tham chiếu), override sâu trong prefab, prefab variant
 - ⬜ Bản build: chuyển JSON → nhị phân, nén texture trước cho từng nền tảng
 - ⬜ Hot reload asset trên desktop

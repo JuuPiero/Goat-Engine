@@ -18,12 +18,16 @@ mod pica;
 #[cfg(target_os = "horizon")]
 pub use pica::Citro3dBackend;
 
-/// Bytes per texel of a storage format on the PICA200.
-pub fn bytes_per_texel(format: goat_gfx::TextureFormat) -> usize {
+pub mod etc1;
+
+/// Bits per texel of a storage format on the PICA200.
+pub fn bits_per_texel(format: goat_gfx::TextureFormat) -> usize {
     use goat_gfx::TextureFormat::*;
     match format {
-        Rgba8 => 4,
-        Rgb565 | Rgba4 | Rgba5551 => 2,
+        Rgba8 => 32,
+        Rgb565 | Rgba4 | Rgba5551 => 16,
+        Etc1A4 => 8,
+        Etc1 => 4,
     }
 }
 
@@ -37,6 +41,7 @@ fn encode_texel(format: goat_gfx::TextureFormat, [r, g, b, a]: [u8; 4], out: &mu
         Rgb565 => out.copy_from_slice(&((q(r, 5) << 11) | (q(g, 6) << 5) | q(b, 5)).to_le_bytes()),
         Rgba4 => out.copy_from_slice(&((q(r, 4) << 12) | (q(g, 4) << 8) | (q(b, 4) << 4) | q(a, 4)).to_le_bytes()),
         Rgba5551 => out.copy_from_slice(&((q(r, 5) << 11) | (q(g, 5) << 6) | (q(b, 5) << 1) | (a >= 128) as u16).to_le_bytes()),
+        Etc1 | Etc1A4 => unreachable!("block formats are encoded by etc1::encode_pica"),
     }
 }
 
@@ -44,8 +49,12 @@ fn encode_texel(format: goat_gfx::TextureFormat, [r, g, b, a]: [u8; 4], out: &mu
 /// (bottom-up), 8×8 tiles in
 /// row order, Morton order inside a tile. Width / height must be multiples of 8.
 pub fn tile_texture(width: u32, height: u32, rgba: &[u8], format: goat_gfx::TextureFormat) -> Vec<u8> {
+    use goat_gfx::TextureFormat::{Etc1, Etc1A4};
+    if matches!(format, Etc1 | Etc1A4) {
+        return etc1::encode_pica(width, height, rgba, format == Etc1A4);
+    }
     let (w, h) = (width as usize, height as usize);
-    let bpp = bytes_per_texel(format);
+    let bpp = bits_per_texel(format) / 8;
     let mut out = vec![0u8; w * h * bpp];
     for y in 0..h {
         for x in 0..w {

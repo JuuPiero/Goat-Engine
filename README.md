@@ -81,7 +81,7 @@ Vì vậy hai nền tảng cùng màu gốc. Khác biệt duy nhất là lightin
 - **Lighting per-pixel bằng phần cứng**: fragment lighting của PICA200 (Lambert + Blinn-Phong) với **8 đèn**: directional, point (LUT suy giảm theo khoảng cách) và spot (LUT hình nón). Vertex shader xuất normal dạng quaternion + view vector; bảng LUT specular được tạo theo `shininess` và cache lại.
 - **Fog** bằng khối fog của PICA. Depth dùng **w-buffer** nên tuyến tính: fog chính xác và độ chính xác depth đều từ gần tới xa.
 - **Nhiều camera trên một màn hình**: viewport một phần (ví dụ picture-in-picture), clear riêng từng vùng.
-- **Texture**: mipmap; định dạng RGBA8 / RGB565 / RGBA4 / RGBA5551 (16-bit tốn một nửa bộ nhớ và băng thông).
+- **Texture**: mipmap; định dạng RGBA8 / RGB565 / RGBA4 / RGBA5551 / ETC1 / ETC1A4 (ETC1 nén khối 4 bit/pixel trên 3DS; 16-bit tốn một nửa bộ nhớ và băng thông).
 - **Khử răng cưa SSAA 2×2**: màn trên render ở 480×800 rồi thu nhỏ bằng display transfer (`GX_TRANSFER_SCALE_XY`). Khi bật thanh trượt 3D thì tự chuyển sang **stereo** (2 target 240×400, `Mtx_PerspStereoTilt`).
 - Vertex/index buffer nằm trong linear memory. Texture được lật dọc (PICA đọc ảnh từ dưới lên) và tile Morton 8×8 khi upload (`tile_texture`, có test trên host).
 - **Frustum culling** chạy ở runtime cho mọi backend: vật nằm ngoài tầm nhìn camera không được gửi xuống GPU. Mỗi view chỉ nhận 8 đèn quan trọng nhất (directional trước, rồi các đèn gần camera).

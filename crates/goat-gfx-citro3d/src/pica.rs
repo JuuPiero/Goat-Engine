@@ -1027,6 +1027,8 @@ impl GraphicsBackend for Citro3dBackend {
             TextureFormat::Rgb565 => ctru::GPU_RGB565,
             TextureFormat::Rgba4 => ctru::GPU_RGBA4,
             TextureFormat::Rgba5551 => ctru::GPU_RGBA5551,
+            TextureFormat::Etc1 => ctru::GPU_ETC1,
+            TextureFormat::Etc1A4 => ctru::GPU_ETC1A4,
         };
         // the PICA stops at 8×8
         let levels = t.mip_chain(8);
