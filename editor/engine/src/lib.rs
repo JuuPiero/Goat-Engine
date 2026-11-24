@@ -3,6 +3,7 @@
 
 pub mod core;
 pub mod editing;
+pub mod gizmos;
 pub mod navpreview;
 pub mod tools;
 

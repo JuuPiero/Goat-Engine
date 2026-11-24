@@ -281,6 +281,16 @@ mod tests {
     }
 
     #[test]
+    fn gizmos_for_selected_components() {
+        let (mut c, _gfx) = core();
+        assert!(c.gizmo_lines().mesh.vertices.is_empty(), "nothing selected: no gizmo");
+        for name in ["Main Camera", "Sun", "Lamp"] {
+            let e = named(&c, name).unwrap();
+            c.select_many(vec![e]);
+            assert!(!c.gizmo_lines().mesh.vertices.is_empty(), "{name} has a gizmo");
+        }
+    }
+    #[test]
     fn pause_step_and_profiler() {
         let (mut c, mut gfx) = core();
         c.play();

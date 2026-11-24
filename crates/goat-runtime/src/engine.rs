@@ -136,15 +136,27 @@ impl Engine {
                 self.started = true;
                 self.each_plugin(gfx, |p, ctx| p.build(ctx));
             }
+            let t0 = crate::profiler::now();
             propagate_transforms(&mut self.world);
+            let t1 = crate::profiler::now();
             self.each_plugin(gfx, |p, ctx| {
                 if p.in_edit_mode() {
                     p.late_update(ctx)
                 }
             });
+            let t2 = crate::profiler::now();
             let mut views = extract_views(&self.world, &self.displays, &*gfx, self.view_camera);
             views.iter_mut().for_each(|v| v.time = self.time.unscaled_elapsed);
+            let t3 = crate::profiler::now();
             self.last_stats = gfx.render(&views);
+            let t4 = crate::profiler::now();
+            let prof = self.resources.get_or_default::<crate::profiler::Profiler>();
+            prof.add("Transforms", t1 - t0);
+            prof.add("Culling", t3 - t2);
+            prof.add("Render", t4 - t3);
+            prof.draw_calls = self.last_stats.draw_calls;
+            prof.triangles = self.last_stats.triangles;
+            prof.end_frame();
             return;
         }
         if !self.started {

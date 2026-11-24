@@ -112,6 +112,7 @@ pub struct EditorCore {
     pub(crate) undo: Vec<crate::editing::UndoStep>,
     pub(crate) redo: Vec<crate::editing::UndoStep>,
     pub(crate) nav_preview: crate::navpreview::NavPreview,
+    pub(crate) gizmos: crate::gizmos::Gizmos,
     /// Play mode paused (the game view keeps drawing) / one frame requested.
     pub paused: bool,
     pub step_once: bool,
@@ -151,6 +152,7 @@ impl EditorCore {
             undo: Vec::new(),
             redo: Vec::new(),
             nav_preview: Default::default(),
+            gizmos: Default::default(),
             paused: false,
             step_once: false,
             tools: Default::default(),
@@ -423,6 +425,7 @@ impl EditorCore {
         self.update_selection_box(gfx);
         self.update_tools(gfx);
         self.update_nav_preview(gfx);
+        self.update_gizmos(gfx);
         self.edit.frame(dt, gfx);
     }
 
