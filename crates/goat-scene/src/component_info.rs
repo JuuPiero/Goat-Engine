@@ -22,7 +22,10 @@ pub(crate) fn describe_engine_components(r: &mut SceneRegistry) {
         "hinge": { "limits": null, "motor_speed": 0, "motor_torque": 0 },
         "slider": { "axis": [1, 0], "limits": null },
         "spring": { "rest_length": 1, "stiffness": 20, "damping": 1 },
-        "distance": { "max_distance": 2 }
+        "distance": { "max_distance": 2 },
+        "wheel": { "suspension_angle": 90, "frequency": 2, "damping_ratio": 0.7, "motor_speed": 0, "motor_torque": 0 },
+        "friction": { "max_force": 1, "max_torque": 1 },
+        "relative": { "linear_offset": [0, 0], "angular_offset": 0, "max_force": 1000, "max_torque": 1000 }
     });
     let list: Vec<(&str, I)> = vec![
         ("Transform", I::new("")),

@@ -1,4 +1,5 @@
-﻿//! 2D joints (Unity's FixedJoint2D, HingeJoint2D, SliderJoint2D, SpringJoint2D, DistanceJoint2D):
+//! 2D joints (Unity's FixedJoint2D, HingeJoint2D, SliderJoint2D, SpringJoint2D, DistanceJoint2D,
+//! WheelJoint2D, FrictionJoint2D, RelativeJoint2D):
 //! connect this entity's body to another (`connected`, by name) or to the world.
 
 use std::collections::HashMap;
@@ -32,6 +33,44 @@ pub enum JointKind2D {
     Spring { rest_length: f32, stiffness: f32, damping: f32 },
     /// At most `max_distance` apart (DistanceJoint2D with Max Distance Only).
     Distance { max_distance: f32 },
+    /// A car wheel (WheelJoint2D): free rotation (+ motor) on a suspension spring along
+    /// `suspension_angle` (degrees, 90 = up) of the connected frame.
+    Wheel {
+        #[serde(default = "deg90")]
+        suspension_angle: f32,
+        /// Suspension spring frequency (Hz) and damping ratio (0..1).
+        #[serde(default = "two")]
+        frequency: f32,
+        #[serde(default = "seven_tenths")]
+        damping_ratio: f32,
+        #[serde(default)]
+        motor_speed: f32,
+        #[serde(default)]
+        motor_torque: f32,
+    },
+    /// Resists relative motion with at most `max_force` / `max_torque` (FrictionJoint2D: top-down
+    /// games' floor friction).
+    Friction { max_force: f32, max_torque: f32 },
+    /// Keeps the bodies at `linear_offset` / `angular_offset` (degrees) from each other with at most
+    /// `max_force` / `max_torque` (RelativeJoint2D).
+    Relative {
+        #[serde(default)]
+        linear_offset: Vec2,
+        #[serde(default)]
+        angular_offset: f32,
+        max_force: f32,
+        max_torque: f32,
+    },
+}
+
+fn deg90() -> f32 {
+    90.0
+}
+fn two() -> f32 {
+    2.0
+}
+fn seven_tenths() -> f32 {
+    0.7
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -89,6 +128,39 @@ impl Joint2D {
             }
             JointKind2D::Spring { rest_length, stiffness, damping } => SpringJointBuilder::new(rest_length, stiffness, damping).local_anchor1(a1).local_anchor2(a2).into(),
             JointKind2D::Distance { max_distance } => RopeJointBuilder::new(max_distance).local_anchor1(a1).local_anchor2(a2).into(),
+            JointKind2D::Wheel { suspension_angle, frequency, damping_ratio, motor_speed, motor_torque } => {
+                // joint frame X = the suspension axis: X free on a spring, Y locked, rotation free (+ motor)
+                let frame1 = Isometry::new(v(self.anchor), suspension_angle.to_radians());
+                let frame2 = Isometry::new(v(self.connected_anchor), suspension_angle.to_radians());
+                let mut j = GenericJointBuilder::new(JointAxesMask::LIN_Y).local_frame1(frame1).local_frame2(frame2).build();
+                // a spring of `frequency` Hz (acceleration-based: independent of the mass)
+                let w = std::f32::consts::TAU * frequency.max(0.01);
+                j.set_motor_model(JointAxis::LinX, MotorModel::AccelerationBased);
+                j.set_motor(JointAxis::LinX, 0.0, 0.0, w * w, 2.0 * damping_ratio * w);
+                if motor_torque > 0.0 {
+                    j.set_motor_velocity(JointAxis::AngX, motor_speed.to_radians(), motor_torque);
+                    j.set_motor_max_force(JointAxis::AngX, motor_torque);
+                }
+                j
+            }
+            JointKind2D::Friction { max_force, max_torque } => {
+                let mut j = GenericJointBuilder::new(JointAxesMask::empty()).local_anchor1(a1).local_anchor2(a2).build();
+                for (axis, max) in [(JointAxis::LinX, max_force), (JointAxis::LinY, max_force), (JointAxis::AngX, max_torque)] {
+                    j.set_motor_model(axis, MotorModel::ForceBased);
+                    j.set_motor_velocity(axis, 0.0, 1e4);
+                    j.set_motor_max_force(axis, max.max(0.0));
+                }
+                j
+            }
+            JointKind2D::Relative { linear_offset, angular_offset, max_force, max_torque } => {
+                let mut j = GenericJointBuilder::new(JointAxesMask::empty()).local_anchor1(a1).local_anchor2(a2).build();
+                for (axis, target, max) in [(JointAxis::LinX, -linear_offset.x, max_force), (JointAxis::LinY, -linear_offset.y, max_force), (JointAxis::AngX, -angular_offset.to_radians(), max_torque)] {
+                    j.set_motor_model(axis, MotorModel::AccelerationBased);
+                    j.set_motor(axis, target, 0.0, 60.0, 12.0);
+                    j.set_motor_max_force(axis, max.max(0.0));
+                }
+                j
+            }
         };
         j.set_contacts_enabled(self.enable_collision);
         j

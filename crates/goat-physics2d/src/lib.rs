@@ -18,6 +18,7 @@ mod joint;
 pub mod script;
 
 pub use joint::{Joint2D, JointKind2D};
+pub use forces::{PlatformEffector2D, SurfaceEffector2D};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -179,6 +180,52 @@ struct Tracked {
 #[derive(Default)]
 struct EventSink(Mutex<Vec<rapier2d::geometry::CollisionEvent>>);
 
+/// Contact modification of the 2D effectors: one-way platforms and conveyor surfaces.
+#[derive(Default)]
+struct EffectorHooks {
+    /// platform collider → (allowed normal from the platform, in its local frame; half arc, radians)
+    platforms: HashMap<ColliderHandle, (Vec2, f32)>,
+    /// surface collider → tangential speed along its local +X
+    surfaces: HashMap<ColliderHandle, f32>,
+}
+
+impl PhysicsHooks for EffectorHooks {
+    fn modify_solver_contacts(&self, context: &mut ContactModificationContext) {
+        const UNKNOWN: u32 = 0;
+        const FORBIDDEN: u32 = 2;
+        for (handle, from_first) in [(context.collider1, true), (context.collider2, false)] {
+            let Some((cos, sin)) = context.colliders.get(handle).map(|c| (c.position().rotation.cos_angle(), c.position().rotation.sin_angle())) else { continue };
+            // world normal pointing from this collider towards the other one
+            let n = if from_first { *context.normal } else { -*context.normal };
+            if let Some((up_local, half)) = self.platforms.get(&handle) {
+                let up = vector![up_local.x * cos - up_local.y * sin, up_local.x * sin + up_local.y * cos];
+                let allowed = n.dot(&up).clamp(-1.0, 1.0).acos() <= *half + 1e-4;
+                // a body passing through stays passing until it separates (no pop-up mid-way)
+                if *context.user_data == FORBIDDEN {
+                    if context.manifold.points.iter().all(|p| p.dist >= 0.0) {
+                        *context.user_data = UNKNOWN;
+                    } else {
+                        context.solver_contacts.clear();
+                        continue;
+                    }
+                }
+                if !allowed {
+                    *context.user_data = FORBIDDEN;
+                    context.solver_contacts.clear();
+                    continue;
+                }
+            }
+            if let Some(speed) = self.surfaces.get(&handle) {
+                // the surface moves along its local +X: the other body is carried that way
+                let dir = vector![cos, sin];
+                let tv = dir * (*speed * if from_first { 1.0 } else { -1.0 });
+                for c in context.solver_contacts.iter_mut() {
+                    c.tangent_velocity = tv;
+                }
+            }
+        }
+    }
+}
 impl EventHandler for EventSink {
     fn handle_collision_event(&self, _b: &RigidBodySet, _c: &ColliderSet, event: rapier2d::geometry::CollisionEvent, _pair: Option<&ContactPair>) {
         if let Ok(mut v) = self.0.lock() {
@@ -401,6 +448,38 @@ impl Physics2D {
         }
     }
 
+    /// Platform / surface effectors of this step: their colliders get the contact hook.
+    fn effector_hooks(&mut self, world: &World) -> EffectorHooks {
+        let mut hooks = EffectorHooks::default();
+        let add = |p: &mut Self, e: Entity| -> Option<ColliderHandle> {
+            let body = p.tracked.get(&e)?.body;
+            let h = *p.bodies.get(body)?.colliders().first()?;
+            if let Some(c) = p.colliders.get_mut(h) {
+                c.set_active_hooks(ActiveHooks::MODIFY_SOLVER_CONTACTS);
+            }
+            Some(h)
+        };
+        let platforms: Vec<(Entity, forces::PlatformEffector2D)> = world.query::<&forces::PlatformEffector2D>().without::<&goat_runtime::InactiveInHierarchy>().iter().map(|(e, p)| (e, *p)).collect();
+        for (e, pe) in platforms {
+            if !pe.use_one_way {
+                continue;
+            }
+            if let Some(h) = add(self, e) {
+                let off = pe.rotational_offset.to_radians();
+                hooks.platforms.insert(h, (Vec2::new(-off.sin(), off.cos()), (pe.surface_arc.clamp(0.0, 360.0) * 0.5).to_radians()));
+            }
+        }
+        let surfaces: Vec<(Entity, forces::SurfaceEffector2D)> = world.query::<&forces::SurfaceEffector2D>().without::<&goat_runtime::InactiveInHierarchy>().iter().map(|(e, s)| (e, *s)).collect();
+        for (e, se) in surfaces {
+            if let Some(h) = add(self, e) {
+                self.effector_seed = self.effector_seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let r = (self.effector_seed >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0;
+                hooks.surfaces.insert(h, se.speed + se.speed_variation * r);
+            }
+        }
+        hooks
+    }
+
     /// One fixed step: sync from the world, simulate, write back.
     pub fn step(&mut self, world: &mut World, dt: f32) {
         let gone: Vec<Entity> = self.tracked.keys().copied().filter(|&e| !world.contains(e) || world.get::<&goat_runtime::InactiveInHierarchy>(e).is_ok() || world.get::<&Collider2D>(e).is_err()).collect();
@@ -439,6 +518,7 @@ impl Physics2D {
         }
 
         self.params.dt = dt;
+        let hooks = self.effector_hooks(world);
         let sink = EventSink::default();
         self.pipeline.step(
             &v(self.gravity),
@@ -452,7 +532,7 @@ impl Physics2D {
             &mut self.multibody_joints,
             &mut self.ccd,
             Some(&mut self.queries),
-            &(),
+            &hooks,
             &sink,
         );
 
@@ -569,7 +649,9 @@ impl Plugin for Physics2DPlugin {
             .component(goat_scene::serde_codec::<forces::AreaEffector2D>("AreaEffector2D"))
             .component(goat_scene::serde_codec::<forces::PointEffector2D>("PointEffector2D"))
             .component(goat_scene::serde_codec::<forces::BuoyancyEffector2D>("BuoyancyEffector2D"))
-            .component(goat_scene::serde_codec::<forces::TargetJoint2D>("TargetJoint2D"));
+            .component(goat_scene::serde_codec::<forces::TargetJoint2D>("TargetJoint2D"))
+            .component(goat_scene::serde_codec::<forces::PlatformEffector2D>("PlatformEffector2D"))
+            .component(goat_scene::serde_codec::<forces::SurfaceEffector2D>("SurfaceEffector2D"));
         #[cfg(feature = "scene")]
         {
             use goat_scene::ComponentInfo as I;
@@ -578,6 +660,8 @@ impl Plugin for Physics2DPlugin {
             r.describe("ConstantForce2D", I::new("Physics 2D/Constant Force 2D").requires(&["Rigidbody2D"]));
             r.describe("AreaEffector2D", I::new("Physics 2D/Area Effector 2D").requires(&["Collider2D"]).range("force_angle", -360.0, 360.0));
             r.describe("PointEffector2D", I::new("Physics 2D/Point Effector 2D").requires(&["Collider2D"]).options("force_mode", &["Constant", "InverseLinear", "InverseSquared"]).tip("force_magnitude", "Positive pushes away, negative attracts"));
+            r.describe("PlatformEffector2D", I::new("Physics 2D/Platform Effector 2D").requires(&["Collider2D"]).range("surface_arc", 0.0, 360.0).range("rotational_offset", -180.0, 180.0).tip("use_one_way", "Solid only from the surface side: bodies jump up through it"));
+            r.describe("SurfaceEffector2D", I::new("Physics 2D/Surface Effector 2D").requires(&["Collider2D"]).tip("speed", "Conveyor speed along the collider's local X"));
             r.describe("BuoyancyEffector2D", I::new("Physics 2D/Buoyancy Effector 2D").requires(&["Collider2D"]).tip("surface_level", "Local Y of the fluid surface").tip("density", "Bodies float when the fluid is denser than 1"));
         }
         #[cfg(feature = "script")]

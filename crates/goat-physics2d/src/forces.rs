@@ -96,6 +96,32 @@ impl Default for BuoyancyEffector2D {
     }
 }
 
+/// One-way platforms (Unity's PlatformEffector2D): solid only from the side within `surface_arc`
+/// (degrees, centred on the effector's local up turned by `rotational_offset`); bodies coming
+/// from elsewhere (jumping up through it) pass. Contacts are filtered in the solver (lib.rs hooks).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlatformEffector2D {
+    pub use_one_way: bool,
+    pub surface_arc: f32,
+    pub rotational_offset: f32,
+}
+
+impl Default for PlatformEffector2D {
+    fn default() -> Self {
+        PlatformEffector2D { use_one_way: true, surface_arc: 180.0, rotational_offset: 0.0 }
+    }
+}
+
+/// Conveyor surfaces (Unity's SurfaceEffector2D): bodies touching the collider are carried along
+/// its local +X at `speed` (+ random `speed_variation`), friction-driven like Unity's.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SurfaceEffector2D {
+    pub speed: f32,
+    pub speed_variation: f32,
+}
+
 /// Pulls the body's anchor toward a world target with a spring (Unity's TargetJoint2D:
 /// dragging objects with the mouse / a finger).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -298,5 +324,55 @@ mod tests {
         let (yf, ys) = (pos(&w, floats).y, pos(&w, sinks).y);
         assert!(yf > -0.6 && yf < 0.6, "floats at the surface: {yf}");
         assert!(ys < -4.0, "sinks: {ys}");
+    }
+
+    #[test]
+    fn one_way_platform_and_conveyor() {
+        let mut w = World::new();
+        // a ball thrown up from below passes through the platform and lands on it
+        w.spawn((Transform::from_position(Vec3::new(0.0, 0.0, 0.0)), GlobalTransform::default(), Collider2D::new(Shape2D::Box(Vec2::new(2.0, 0.1))), PlatformEffector2D::default()));
+        let up = ball(&mut w, Vec3::new(0.0, -1.0, 0.0));
+        w.get::<&mut Rigidbody2D>(up).unwrap().velocity = Vec2::new(0.0, 8.0);
+        // without the effector the same platform stops it from below
+        w.spawn((Transform::from_position(Vec3::new(10.0, 0.0, 0.0)), GlobalTransform::default(), Collider2D::new(Shape2D::Box(Vec2::new(2.0, 0.1)))));
+        let blocked = ball(&mut w, Vec3::new(10.0, -1.0, 0.0));
+        w.get::<&mut Rigidbody2D>(blocked).unwrap().velocity = Vec2::new(0.0, 8.0);
+        // a box on a conveyor moving +X
+        w.spawn((Transform::from_position(Vec3::new(30.0, -0.5, 0.0)), GlobalTransform::default(), Collider2D::new(Shape2D::Box(Vec2::new(10.0, 0.5))), SurfaceEffector2D { speed: 3.0, speed_variation: 0.0 }));
+        let crate_ = w.spawn((Transform::from_position(Vec3::new(30.0, 0.25, 0.0)), GlobalTransform::default(), Collider2D::new(Shape2D::Box(Vec2::new(0.25, 0.25))), Rigidbody2D::dynamic()));
+        run(&mut w, 2.5);
+        let y = pos(&w, up).y;
+        assert!(y > 0.2 && y < 0.5, "landed on top of the one-way platform: {y}");
+        assert!(pos(&w, blocked).y < 0.0, "a normal platform blocks from below: {}", pos(&w, blocked).y);
+        assert!(pos(&w, crate_).x > 33.0, "carried by the conveyor: {}", pos(&w, crate_).x);
+    }
+
+    #[test]
+    fn wheel_friction_and_relative_joints() {
+        use crate::{Joint2D, JointKind2D};
+        let mut w = World::new();
+        // wheel on a suspension to the world: sags a bit, spins at the motor speed
+        let wheel = ball(&mut w, Vec3::new(0.0, 0.0, 0.0));
+        w.insert_one(wheel, Joint2D::new(JointKind2D::Wheel { suspension_angle: 90.0, frequency: 2.0, damping_ratio: 0.7, motor_speed: 180.0, motor_torque: 1000.0 })).unwrap();
+        // friction joint to the world: a sliding body stops (no gravity on it)
+        let slide = ball(&mut w, Vec3::new(10.0, 0.0, 0.0));
+        {
+            let mut rb = w.get::<&mut Rigidbody2D>(slide).unwrap();
+            rb.velocity = Vec2::new(5.0, 0.0);
+            rb.gravity_scale = 0.0;
+        }
+        w.insert_one(slide, Joint2D::new(JointKind2D::Friction { max_force: 1.0, max_torque: 1.0 }).at(Vec2::ZERO, Vec2::new(10.0, 0.0))).unwrap();
+        // relative joint: held at an offset from the world anchor
+        let held = ball(&mut w, Vec3::new(20.0, 0.0, 0.0));
+        w.get::<&mut Rigidbody2D>(held).unwrap().gravity_scale = 0.0;
+        w.insert_one(held, Joint2D::new(JointKind2D::Relative { linear_offset: Vec2::new(3.0, 0.0), angular_offset: 0.0, max_force: 1000.0, max_torque: 1000.0 }).at(Vec2::ZERO, Vec2::new(20.0, 0.0))).unwrap();
+        run(&mut w, 3.0);
+        let p = pos(&w, wheel);
+        assert!(p.x.abs() < 0.05 && p.y < 0.0 && p.y > -0.3, "wheel on its suspension: {p}");
+        let sx = pos(&w, slide).x;
+        // 1 N on ~0.2 kg: ≈ 5 m/s² → stops after ≈ 2.5 m
+        assert!(sx > 11.0 && sx < 14.0, "friction stopped the slide: {sx}");
+        let hx = pos(&w, held).x;
+        assert!(((hx - 20.0).abs() - 3.0).abs() < 0.1, "held 3 units from the anchor: {hx}");
     }
 }

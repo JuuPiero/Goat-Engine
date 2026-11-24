@@ -452,6 +452,8 @@ let hit = goat_physics2d::physics2d(ctx).raycast(origin, Vec2::NEG_Y, 20.0);
 - `Physics2D`: `gravity`, `events` (Enter / Exit / TriggerEnter / TriggerExit), `raycast`, `overlap_point`, `apply_impulse`.
 - Scene mẫu: `scenes/physics2d.scene.json`. Trong scene: `"Rigidbody2D": {}`, `"Collider2D": { "shape": { "circle": 0.5 } }`.
 - Lực và effector (như Unity): `ConstantForce2D` (lực theo trục thế giới / theo hướng của body, mô-men); `AreaEffector2D` (gió / dòng chảy trong vùng collider: góc, độ lớn, dao động, lực cản); `PointEffector2D` (hút khi âm, đẩy khi dương; Constant / InverseLinear / InverseSquared); `BuoyancyEffector2D` (nước: `surface_level`, mật độ > 1 thì vật nổi, lực cản, dòng chảy); `TargetJoint2D` (kéo vật về một điểm như kéo bằng ngón tay). Effector tác động lên body động có tâm nằm trong collider của nó (thường là trigger).
+- `PlatformEffector2D`: platform một chiều (nhảy xuyên từ dưới lên, đứng được ở trên; `surface_arc`, `rotational_offset`, `use_one_way`). `SurfaceEffector2D`: băng chuyền, đẩy vật đang chạm theo trục X của collider (`speed`, `speed_variation`).
+- Joint 2D thêm: `wheel` (bánh xe: lò xo giảm xóc theo `suspension_angle`, `frequency`, `damping_ratio`, motor), `friction` (ma sát giữ vật lại với lực / mô-men tối đa, kiểu sàn nhìn từ trên xuống), `relative` (giữ hai vật lệch nhau `linear_offset` / `angular_offset` với lực tối đa).
 - 3D: `ConstantForce` (`force`, `relative_force`, `torque`, `relative_torque`).
 
 ## Input actions
