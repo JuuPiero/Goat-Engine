@@ -920,6 +920,10 @@ impl GraphicsBackend for Citro3dBackend {
         Ok(self.materials.insert(mat.clone()))
     }
 
+    fn material_desc(&self, id: MaterialId) -> Option<MaterialDesc> {
+        self.materials.get(id).cloned()
+    }
+
     fn update_material(&mut self, id: MaterialId, mat: &MaterialDesc) {
         if let Some(m) = self.materials.get_mut(id) {
             *m = mat.clone();

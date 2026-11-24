@@ -466,6 +466,10 @@ pub trait GraphicsBackend {
     }
     fn create_material(&mut self, mat: &MaterialDesc) -> Result<MaterialId, GfxError>;
     fn update_material(&mut self, id: MaterialId, mat: &MaterialDesc);
+    /// A material's description (baking, tools). Backends keep it for drawing anyway.
+    fn material_desc(&self, _id: MaterialId) -> Option<MaterialDesc> {
+        None
+    }
     fn destroy_mesh(&mut self, id: MeshId);
     fn destroy_texture(&mut self, id: TextureId);
     fn destroy_material(&mut self, id: MaterialId);

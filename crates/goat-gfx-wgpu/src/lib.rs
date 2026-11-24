@@ -676,6 +676,10 @@ impl GraphicsBackend for WgpuBackend {
         Ok(id)
     }
 
+    fn material_desc(&self, id: MaterialId) -> Option<MaterialDesc> {
+        self.materials.get(id).cloned()
+    }
+
     fn update_material(&mut self, id: MaterialId, mat: &MaterialDesc) {
         if self.materials.get(id).is_none() {
             return;

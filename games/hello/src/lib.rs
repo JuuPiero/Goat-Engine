@@ -409,6 +409,14 @@ impl Game for HelloGame {
             }
             Err(e) => goat_runtime::warn!("hud logo: {e}"),
         }
+        // a low wall of builtin cubes, merged into one draw with its lighting baked in
+        if let (Ok(cube), Ok(mat)) = (goat_assets::mesh(ctx, "builtin:cube"), goat_assets::material(ctx, "materials/logo.mat.json")) {
+            let wall = ctx.world.spawn((Name("Baked Wall".into()), Transform::from_position(Vec3::new(-4.5, 0.0, -1.5)), StaticBatching { bake_lighting: true }));
+            for i in 0..6 {
+                let h = 0.4 + (i % 3) as f32 * 0.25;
+                ctx.world.spawn((Name(format!("Wall Block {i}")), Transform::from_position(Vec3::new(0.0, h * 0.5, i as f32 * 0.65)).with_scale(Vec3::new(0.6, h, 0.6)), Parent(wall), MeshRenderer::new(cube, mat)));
+            }
+        }
         // a firework made in Unity, exported by tools/unity-goat-exporter
         match goat_scene::instantiate(ctx, "fx/Firework.prefab.json", None) {
             Ok(fw) => {

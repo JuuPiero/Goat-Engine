@@ -217,11 +217,14 @@ fn load_lod(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
     insert(ctx, e, goat_runtime::LodGroup { levels, cull: j.cull })
 }
 
+/// `"StaticBatching": { "bake_lighting": true }`
 fn save_static(ctx: &SaveContext, e: Entity) -> Option<Value> {
-    ctx.world.get::<&goat_runtime::StaticBatching>(e).ok().map(|_| Value::Object(Default::default()))
+    let s = *ctx.world.get::<&goat_runtime::StaticBatching>(e).ok()?;
+    Some(if s.bake_lighting { serde_json::json!({ "bake_lighting": true }) } else { Value::Object(Default::default()) })
 }
-fn load_static(ctx: &mut LoadContext, e: Entity, _: &Value) -> Result<(), String> {
-    insert(ctx, e, goat_runtime::StaticBatching)
+fn load_static(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
+    let bake_lighting = v.get("bake_lighting").and_then(|b| b.as_bool()).unwrap_or(false);
+    insert(ctx, e, goat_runtime::StaticBatching { bake_lighting })
 }
 
 // ------------------------------------------------------------------ lights, settings

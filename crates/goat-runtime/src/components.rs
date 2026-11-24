@@ -161,7 +161,12 @@ impl LodGroup {
 /// (Unity's static batching): far fewer draw calls for level geometry. The merged objects must
 /// not move afterwards. Done by `goat_assets::StaticBatchPlugin`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct StaticBatching;
+pub struct StaticBatching {
+    /// Bake the scene's lights (ambient / hemisphere, directional, point, spot) into the merged
+    /// vertices and draw them unlit: static geometry costs no fragment lighting, the hardware
+    /// lights stay for moving objects. Lights changed later don't affect the baked meshes.
+    pub bake_lighting: bool,
+}
 
 /// Layer helpers: `layer_mask(&[0, 5])` = a culling mask with those layers.
 pub fn layer_mask(layers: &[u8]) -> u32 {
