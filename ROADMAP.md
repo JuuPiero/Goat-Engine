@@ -46,7 +46,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ glTF 2.0 / GLB: mesh (tự tách khi > 65 535 đỉnh, tự tính normal), material PBR → Blinn-Phong, ảnh PNG nhúng, cây node; `spawn_model`
 - ✅ Material file `*.mat.json`
 - ✅ `goat-scene`: scene / prefab JSON, registry component + behaviour (serde), model / prefab instance, lưu ra file (round-trip có test)
-- ⬜ Animation / skin của glTF (giai đoạn 3 — animation), JPEG, KTX
+- ✅ JPEG (zune-jpeg; cả ảnh JPEG trong glTF), KTX 1.1: ETC1 nén sẵn (`TextureData.compressed`: 3DS chỉ xếp lại khối, không nén lại trên máy), RGBA8 / RGB8; ví dụ `to_ktx`
 - ⬜ GUID + `.meta` (đổi tên file không vỡ tham chiếu), override sâu trong prefab, prefab variant
 - ⬜ Bản build: chuyển JSON → nhị phân, nén texture trước cho từng nền tảng
 - ⬜ Hot reload asset trên desktop

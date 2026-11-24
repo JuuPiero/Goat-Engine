@@ -145,23 +145,26 @@ pub fn parse_model(io: &AssetIo, key: &str, bytes: &[u8]) -> Result<ModelData, A
             gltf::image::Source::View { view, mime_type } => {
                 let b = &buffers[view.buffer().index()];
                 let slice = b.get(view.offset()..view.offset() + view.length()).map(|s| s.to_vec());
-                if mime_type != "image/png" {
-                    goat_core::warn!("{key}: image {} is {mime_type}, only PNG is supported", img.index());
+                if mime_type != "image/png" && mime_type != "image/jpeg" {
+                    goat_core::warn!("{key}: image {} is {mime_type}, only PNG / JPEG are supported", img.index());
                     None
                 } else {
                     slice
                 }
             }
             gltf::image::Source::Uri { uri, .. } => {
-                if uri.to_ascii_lowercase().ends_with(".png") || uri.starts_with("data:image/png") {
+                let lower = uri.to_ascii_lowercase();
+                if [".png", ".jpg", ".jpeg"].iter().any(|e| lower.ends_with(e)) || uri.starts_with("data:image/png") || uri.starts_with("data:image/jpeg") {
                     Some(uri_bytes(io, key, uri)?)
                 } else {
-                    goat_core::warn!("{key}: image {uri} skipped (only PNG is supported)");
+                    goat_core::warn!("{key}: image {uri} skipped (only PNG / JPEG are supported)");
                     None
                 }
             }
         };
-        images.push(data.and_then(|d| match crate::image::decode_png(&d) {
+        // JPEG starts with FF D8, PNG with 89 'P' 'N' 'G'
+        let decode = |d: &[u8]| if d.starts_with(&[0xFF, 0xD8]) { crate::image::decode_jpeg(d) } else { crate::image::decode_png(d) };
+        images.push(data.and_then(|d| match decode(&d) {
             Ok(t) => Some(t),
             Err(e) => {
                 goat_core::warn!("{key}: image {}: {e}", img.index());

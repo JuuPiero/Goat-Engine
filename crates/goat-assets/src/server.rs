@@ -108,7 +108,9 @@ impl AssetServer {
         let bytes = self.io.read(key)?;
         let t = match ext_of(key).as_str() {
             "png" => decode_png(&bytes).map_err(|e| AssetError::Format(key.into(), e))?,
-            other => return Err(AssetError::Format(key.into(), format!("unsupported image format .{other} (PNG only)"))),
+            "jpg" | "jpeg" => crate::image::decode_jpeg(&bytes).map_err(|e| AssetError::Format(key.into(), e))?,
+            "ktx" => crate::image::decode_ktx(&bytes).map_err(|e| AssetError::Format(key.into(), e))?,
+            other => return Err(AssetError::Format(key.into(), format!("unsupported image format .{other} (PNG, JPEG, KTX)"))),
         };
         let import_key = format!("{key}.import.json");
         let import: TextureImport = match self.io.read_string(&import_key) {
@@ -480,5 +482,5 @@ fn sky_face(i: usize) -> TextureData {
             rgba.extend_from_slice(&[(c.x * 255.0) as u8, (c.y * 255.0) as u8, (c.z * 255.0) as u8, 255]);
         }
     }
-    TextureData { width: n, height: n, rgba, filter: goat_gfx::Filter::Linear, wrap: goat_gfx::Wrap::Clamp, mipmaps: false, format: Default::default() }
+    TextureData { width: n, height: n, rgba, filter: goat_gfx::Filter::Linear, wrap: goat_gfx::Wrap::Clamp, mipmaps: false, format: Default::default(), compressed: None }
 }

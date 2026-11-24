@@ -1030,8 +1030,21 @@ impl GraphicsBackend for Citro3dBackend {
             TextureFormat::Etc1 => ctru::GPU_ETC1,
             TextureFormat::Etc1A4 => ctru::GPU_ETC1A4,
         };
+        // precompressed ETC1 (KTX, builds): swizzled as is, no encoding on the console
+        let pre = t.compressed.as_ref().filter(|c| matches!((t.format, c.alpha), (TextureFormat::Etc1, false) | (TextureFormat::Etc1A4, true)));
         // the PICA stops at 8×8
-        let levels = t.mip_chain(8);
+        let levels: Vec<(u32, u32, Vec<u8>)> = match pre {
+            Some(c) => c
+                .levels
+                .iter()
+                .enumerate()
+                .map(|(i, blocks)| (t.width >> i, t.height >> i, blocks))
+                .take_while(|(w, h, _)| *w >= 8 && *h >= 8)
+                .take(if t.mipmaps { usize::MAX } else { 1 })
+                .map(|(w, h, blocks)| (w, h, crate::etc1::from_blocks(w, h, blocks, c.alpha)))
+                .collect(),
+            None => t.mip_chain(8).into_iter().map(|(w, h, rgba)| (w, h, tile_texture(w, h, &rgba, t.format))).collect(),
+        };
         // SAFETY: C3D_Tex boxed (stable address); each level uploaded once.
         unsafe {
             let mut tex: Box<c3d::C3D_Tex> = Box::new(std::mem::zeroed());
@@ -1045,8 +1058,7 @@ impl GraphicsBackend for Citro3dBackend {
             if !c3d::C3D_TexInitWithParams(&mut *tex, std::ptr::null_mut(), params) {
                 return Err(GfxError::OutOfMemory("texture".into()));
             }
-            for (level, (w, h, rgba)) in levels.iter().enumerate() {
-                let tiled = tile_texture(*w, *h, rgba, t.format);
+            for (level, (_, _, tiled)) in levels.iter().enumerate() {
                 c3d::C3D_TexLoadImage(&mut *tex, tiled.as_ptr() as *const c_void, ctru::GPU_TEXFACE_2D, level as i32);
             }
             c3d::C3D_TexFlush(&mut *tex);

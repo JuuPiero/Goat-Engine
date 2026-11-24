@@ -23,7 +23,102 @@ pub fn decode_png(bytes: &[u8]) -> Result<TextureData, String> {
         png::ColorType::Grayscale => src.iter().flat_map(|&g| [g, g, g, 255]).collect(),
         png::ColorType::Indexed => return Err("indexed PNG not expanded".into()),
     };
-    Ok(TextureData { width: w, height: h, rgba, filter: Filter::Linear, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8 })
+    Ok(TextureData { width: w, height: h, rgba, filter: Filter::Linear, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None })
+}
+
+/// Decodes a JPEG (baseline / progressive, any color space) into RGBA8.
+pub fn decode_jpeg(bytes: &[u8]) -> Result<TextureData, String> {
+    use zune_core::{colorspace::ColorSpace, options::DecoderOptions};
+    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+    let mut d = zune_jpeg::JpegDecoder::new_with_options(bytes, options);
+    let rgba = d.decode().map_err(|e| format!("{e:?}"))?;
+    let info = d.info().ok_or("no JPEG header")?;
+    Ok(TextureData { width: info.width as u32, height: info.height as u32, rgba, filter: Filter::Linear, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None })
+}
+
+const KTX_ID: [u8; 12] = [0xAB, b'K', b'T', b'X', b' ', b'1', b'1', 0xBB, b'\r', b'\n', 0x1A, b'\n'];
+const GL_ETC1_RGB8_OES: u32 = 0x8D64;
+const GL_RGBA8: u32 = 0x8058;
+const GL_RGB8: u32 = 0x8051;
+
+/// Decodes a KTX 1.1 texture: ETC1 (kept precompressed for the 3DS, decoded for other GPUs),
+/// RGBA8 or RGB8, with its mip levels. Cube maps / arrays / 3D textures aren't supported.
+pub fn decode_ktx(bytes: &[u8]) -> Result<TextureData, String> {
+    if bytes.len() < 64 || bytes[..12] != KTX_ID {
+        return Err("not a KTX 1.1 file".into());
+    }
+    let swap = match u32::from_le_bytes(bytes[12..16].try_into().unwrap()) {
+        0x0403_0201 => false,
+        0x0102_0304 => true,
+        _ => return Err("bad KTX endianness".into()),
+    };
+    let word = |at: usize| -> Result<u32, String> {
+        let b: [u8; 4] = bytes.get(at..at + 4).ok_or("KTX truncated")?.try_into().unwrap();
+        Ok(if swap { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) })
+    };
+    let internal = word(28)?;
+    let (width, height, depth) = (word(36)?, word(40)?.max(1), word(44)?);
+    let (array, faces, mips, kv) = (word(48)?, word(52)?, word(56)?.max(1), word(60)? as usize);
+    if depth > 1 || array > 0 || faces != 1 {
+        return Err("KTX: only plain 2D textures are supported".into());
+    }
+    let mut at = 64 + kv;
+    let mut levels: Vec<&[u8]> = Vec::new();
+    for _ in 0..mips {
+        let size = word(at)? as usize;
+        levels.push(bytes.get(at + 4..at + 4 + size).ok_or("KTX truncated")?);
+        at += 4 + size.div_ceil(4) * 4;
+    }
+    let base = TextureData { width, height, rgba: Vec::new(), filter: Filter::Linear, wrap: Wrap::Repeat, mipmaps: mips > 1, format: TextureFormat::Rgba8, compressed: None };
+    match internal {
+        GL_ETC1_RGB8_OES => {
+            let blocks: Vec<Vec<u64>> = levels.iter().map(|l| l.chunks_exact(8).map(|b| u64::from_be_bytes(b.try_into().unwrap())).collect()).collect();
+            let expected = width.div_ceil(4) as usize * height.div_ceil(4) as usize;
+            if blocks[0].len() < expected {
+                return Err("KTX: ETC1 level 0 too small".into());
+            }
+            let rgba = goat_gfx::etc1::decode_image(width, height, &blocks[0], false);
+            Ok(TextureData { rgba, format: TextureFormat::Etc1, compressed: Some(goat_gfx::etc1::Etc1Levels { alpha: false, levels: blocks }), ..base })
+        }
+        GL_RGBA8 | GL_RGB8 => {
+            let bpp = if internal == GL_RGBA8 { 4 } else { 3 };
+            // rows are padded to 4 bytes
+            let stride = (width as usize * bpp).div_ceil(4) * 4;
+            let src = levels[0];
+            if src.len() < stride * height as usize {
+                return Err("KTX: level 0 too small".into());
+            }
+            let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+            for y in 0..height as usize {
+                for p in src[y * stride..y * stride + width as usize * bpp].chunks_exact(bpp) {
+                    rgba.extend_from_slice(&[p[0], p[1], p[2], if bpp == 4 { p[3] } else { 255 }]);
+                }
+            }
+            Ok(TextureData { rgba, ..base })
+        }
+        other => Err(format!("KTX: unsupported internal format 0x{other:04X} (ETC1, RGBA8, RGB8)")),
+    }
+}
+
+/// Encodes a texture as an ETC1 KTX 1.1 file (with its mip chain when `t.mipmaps`): what builds
+/// and tools write so the console never compresses.
+pub fn encode_ktx_etc1(t: &TextureData) -> Vec<u8> {
+    let levels: Vec<Vec<u64>> = match &t.compressed {
+        Some(c) if !c.alpha => c.levels.clone(),
+        _ => t.mip_chain(1).iter().map(|(w, h, rgba)| goat_gfx::etc1::encode_image(*w, *h, rgba, false)).collect(),
+    };
+    let mut out = KTX_ID.to_vec();
+    // endianness, glType, glTypeSize, glFormat, internal, base internal (GL_RGB), size, depth, array, faces, mips, kv bytes
+    for v in [0x0403_0201, 0, 1, 0, GL_ETC1_RGB8_OES, 0x1907, t.width, t.height, 0, 0, 1, levels.len() as u32, 0] {
+        out.extend_from_slice(&u32::to_le_bytes(v));
+    }
+    for l in &levels {
+        out.extend_from_slice(&((l.len() * 8) as u32).to_le_bytes());
+        for b in l {
+            out.extend_from_slice(&b.to_be_bytes());
+        }
+    }
+    out
 }
 
 /// `<texture>.import.json`.
@@ -132,6 +227,40 @@ mod tests {
         assert_eq!(t.rgba, vec![255, 0, 0, 255, 0, 0, 255, 255]);
         let g = decode_png(&encode(1, 1, png::ColorType::GrayscaleAlpha, &[100, 50])).unwrap();
         assert_eq!(g.rgba, vec![100, 100, 100, 50]);
+    }
+
+    #[test]
+    fn jpeg_decodes_to_rgba() {
+        let t = decode_jpeg(include_bytes!("../tests/fixtures/red.jpg")).unwrap();
+        assert_eq!((t.width, t.height, t.rgba.len()), (16, 8, 16 * 8 * 4));
+        let p = &t.rgba[4 * 20..4 * 21];
+        assert!(p[0] > 200 && p[1] < 60 && p[2] < 60 && p[3] == 255, "{p:?}");
+    }
+
+    #[test]
+    fn ktx_etc1_round_trip() {
+        let t = TextureData { width: 16, height: 8, rgba: (0..128).flat_map(|i| [(i * 2) as u8, 90, 200, 255]).collect(), ..TextureData::solid(goat_core::Color::WHITE) }.with_mipmaps();
+        let ktx = encode_ktx_etc1(&t);
+        let back = decode_ktx(&ktx).unwrap();
+        assert_eq!((back.width, back.height, back.format, back.mipmaps), (16, 8, TextureFormat::Etc1, true));
+        let c = back.compressed.as_ref().unwrap();
+        // 16×8, 8×4, 4×2, 2×1 (the chain stops when a side can't halve; blocks padded to 4×4)
+        assert_eq!(c.levels.iter().map(|l| l.len()).collect::<Vec<_>>(), vec![8, 2, 1, 1]);
+        assert!((back.rgba[4 * 40 + 1] as i32 - 90).abs() < 16 && (back.rgba[4 * 40 + 2] as i32 - 200).abs() < 16);
+        // re-encoding keeps the blocks (no second compression)
+        assert_eq!(decode_ktx(&encode_ktx_etc1(&back)).unwrap().compressed, back.compressed);
+        assert!(decode_ktx(b"not a ktx file at all, definitely not, no no no no no no no no no").is_err());
+    }
+
+    #[test]
+    fn ktx_rgba8() {
+        let mut f = KTX_ID.to_vec();
+        for v in [0x0403_0201u32, 0x1401, 1, 0x1908, GL_RGBA8, 0x1908, 2, 1, 0, 0, 1, 1, 0, 8] {
+            f.extend_from_slice(&v.to_le_bytes());
+        }
+        f.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let t = decode_ktx(&f).unwrap();
+        assert_eq!((t.width, t.height, t.rgba.clone(), t.compressed.is_none()), (2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8], true));
     }
 
     #[test]

@@ -10,6 +10,7 @@
 //! that every target can draw *well*: per-pixel Blinn-Phong lighting with one directional light +
 //! ambient (fragment lighting on the 3DS), a base color texture, vertex colors, alpha blending.
 
+pub mod etc1;
 pub mod mesh;
 pub mod null;
 
@@ -36,6 +37,9 @@ pub struct TextureData {
     pub mipmaps: bool,
     /// How the GPU stores it. Backends that can't store a format keep RGBA8 (desktop does).
     pub format: TextureFormat,
+    /// Already-compressed ETC1 levels (KTX files, precompressed builds): used as is when
+    /// `format` is Etc1 / Etc1A4 and the backend stores ETC1; `rgba` still holds the pixels.
+    pub compressed: Option<etc1::Etc1Levels>,
 }
 
 /// GPU storage of a texture. On the 3DS 16-bit formats halve VRAM / bandwidth.
@@ -81,12 +85,12 @@ impl TextureData {
                 rgba.extend_from_slice(&c);
             }
         }
-        TextureData { width: size, height: size, rgba, filter: Filter::Nearest, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8 }
+        TextureData { width: size, height: size, rgba, filter: Filter::Nearest, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None }
     }
 
     /// Same settings, no pixels (what backends keep after uploading).
     pub fn clone_meta(&self) -> Self {
-        TextureData { rgba: Vec::new(), ..*self }
+        TextureData { width: self.width, height: self.height, rgba: Vec::new(), filter: self.filter, wrap: self.wrap, mipmaps: self.mipmaps, format: self.format, compressed: None }
     }
 
     /// Builder-style setters.
@@ -128,7 +132,7 @@ impl TextureData {
 
     /// A 1×1 texture of one color.
     pub fn solid(c: Color) -> Self {
-        TextureData { width: 8, height: 8, rgba: c.to_rgba8().repeat(64), filter: Filter::Nearest, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8 }
+        TextureData { width: 8, height: 8, rgba: c.to_rgba8().repeat(64), filter: Filter::Nearest, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None }
     }
 }
 

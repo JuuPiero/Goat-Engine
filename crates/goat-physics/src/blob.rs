@@ -41,7 +41,7 @@ fn blob_texture() -> TextureData {
             [0u8, 0, 0, (a * a * (3.0 - 2.0 * a) * 255.0) as u8]
         })
         .collect();
-    TextureData { width: n, height: n, rgba, filter: Filter::Linear, wrap: Wrap::Clamp, mipmaps: false, format: Default::default() }
+    TextureData { width: n, height: n, rgba, filter: Filter::Linear, wrap: Wrap::Clamp, mipmaps: false, format: Default::default(), compressed: None }
 }
 
 /// Draws the [`BlobShadow`]s (add it after PhysicsPlugin).

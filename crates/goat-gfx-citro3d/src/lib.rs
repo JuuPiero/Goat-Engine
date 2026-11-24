@@ -17,7 +17,6 @@ mod pica;
 
 #[cfg(target_os = "horizon")]
 pub use pica::Citro3dBackend;
-
 pub mod etc1;
 
 /// Bits per texel of a storage format on the PICA200.

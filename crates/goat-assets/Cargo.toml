@@ -13,4 +13,6 @@ serde.workspace = true
 serde_json.workspace = true
 png = "0.17"
 base64 = "0.22"
+zune-jpeg = { version = "0.4", default-features = false, features = ["std"] }
+zune-core = "0.4"
 gltf = { version = "1", default-features = false, features = ["utils", "names"] }

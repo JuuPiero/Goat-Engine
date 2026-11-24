@@ -22,7 +22,7 @@ crates/goat-runtime       Engine::frame (Game → Behaviours → transforms → 
 crates/goat-gfx-wgpu      desktop backend (WGSL Blinn-Phong, dynamic-offset uniforms, per-viewport clears, screenshots)
 crates/goat-gfx-citro3d   3DS backend; ALL citro3d FFI is in src/pica.rs (cfg horizon); lib.rs = portable helpers (tile_rgba8)
 crates/goat-sprites       2D: Sprite / SpriteRenderer, SpritePlugin batches sprites per texture into dynamic meshes
-crates/goat-assets        AssetIo (romfs:/ on 3DS, assets/ next to exe), PNG, glTF/GLB, *.mat.json, AssetServer (keys <-> handles)
+crates/goat-assets        AssetIo (romfs:/ on 3DS, assets/ next to exe), PNG / JPEG / KTX (ETC1 codec in goat-gfx etc1.rs, PICA layout in goat-gfx-citro3d etc1.rs), glTF/GLB, *.mat.json, AssetServer (keys <-> handles)
 crates/goat-scene         scene / prefab JSON, SceneRegistry (component codecs, serde behaviours), load / instantiate / save
 crates/goat-text          TTF fonts (fontdue) → dynamic glyph atlas, Text component + layout, batched through goat_sprites::Batcher
 crates/goat-physics       Rapier 3D: RigidBody / Collider, fixed-step sync, collision events, raycast (Physics resource)

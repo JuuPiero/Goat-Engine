@@ -215,7 +215,7 @@ Asset được gọi bằng **key** là đường dẫn tương đối:
 
 | Loại | Định dạng |
 |---|---|
-| Ảnh | PNG. Thiết lập import đặt trong `<ảnh>.import.json`: `{ "mipmaps": true, "format": "rgb565", "filter": "nearest", "max_size": 256 }` |
+| Ảnh | PNG, JPEG, KTX 1.1 (ETC1 nén sẵn — 3DS nạp thẳng các khối, máy khác giải mã; hoặc RGBA8 / RGB8). Tạo KTX: `cargo run -p goat-assets --example to_ktx -- in.png out.ktx`. Thiết lập import đặt trong `<ảnh>.import.json`: `{ "mipmaps": true, "format": "rgb565", "filter": "nearest", "max_size": 256 }` |
 | Model | glTF 2.0 / GLB: mesh, material, ảnh nhúng, cây node |
 | Material | `*.mat.json`: `{ "base_color": "#3d8bff", "texture": "../textures/a.png", "shininess": 64, "blend": "alpha" }` |
 | Scene / Prefab | `*.scene.json` / `*.prefab.json` (xem `crates/goat-scene/src/lib.rs`) |

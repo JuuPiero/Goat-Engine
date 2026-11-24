@@ -277,7 +277,7 @@ impl Game for HelloGame {
                     [120, 84, 52, (a * 255.0) as u8]
                 })
                 .collect();
-            gfx.create_texture(&TextureData { width: n, height: n, rgba, filter: goat_runtime::gfx::Filter::Linear, wrap: goat_runtime::gfx::Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8 }).expect("texture")
+            gfx.create_texture(&TextureData { width: n, height: n, rgba, filter: goat_runtime::gfx::Filter::Linear, wrap: goat_runtime::gfx::Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None }).expect("texture")
         };
         let fence = gfx.create_material(&MaterialDesc { texture: Some(fence_tex), alpha_cutoff: 0.5, alpha_dither: true, cull: goat_runtime::gfx::CullMode::None, specular: Color::BLACK, ..Default::default() }).expect("material");
         let world = &mut *ctx.world;
@@ -427,6 +427,11 @@ impl Game for HelloGame {
         // a cel-shaded ball: toon bands, rim light, black outline (materials/toon.mat.json)
         if let (Ok(sphere), Ok(mat)) = (goat_assets::mesh(ctx, "builtin:sphere"), goat_assets::material(ctx, "materials/toon.mat.json")) {
             ctx.world.spawn((Name("Toon Ball".into()), Transform::from_position(Vec3::new(0.9, 0.55, 2.2)).with_scale(Vec3::splat(1.1)), MeshRenderer::new(sphere, mat)));
+        }
+        // a JPEG texture and an ETC1 KTX (precompressed: the 3DS uploads its blocks as they are)
+        if let (Ok(cube), Ok(photo), Ok(pattern)) = (goat_assets::mesh(ctx, "builtin:cube"), goat_assets::material(ctx, "materials/photo.mat.json"), goat_assets::material(ctx, "materials/pattern.mat.json")) {
+            ctx.world.spawn((Name("JPEG Crate".into()), Transform::from_position(Vec3::new(2.3, 0.35, 2.9)).with_scale(Vec3::splat(0.7)), MeshRenderer::new(cube, photo)));
+            ctx.world.spawn((Name("KTX Crate".into()), Transform::from_position(Vec3::new(3.2, 0.35, 2.3)).with_scale(Vec3::splat(0.7)), MeshRenderer::new(cube, pattern)));
         }
         // procedural materials (3DS: the proctex unit): a pond and a flame
         if let (Ok(plane), Ok(cube), Ok(water), Ok(fire)) = (goat_assets::mesh(ctx, "builtin:plane"), goat_assets::mesh(ctx, "builtin:cube"), goat_assets::material(ctx, "materials/water.mat.json"), goat_assets::material(ctx, "materials/fire.mat.json")) {
