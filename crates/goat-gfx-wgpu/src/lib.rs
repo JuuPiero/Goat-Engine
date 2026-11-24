@@ -96,6 +96,29 @@ struct FrameUniform {
     /// x = start, y = end
     fog_range: [f32; 4],
     lights: [GpuLight; MAX_LIGHTS],
+    /// World → shadow map clip space of the shadow-casting light.
+    light_view_proj: [[f32; 4]; 4],
+    /// x = shadowed light index + 1 (0 = no shadows), y = depth bias, z = 1 / map size
+    shadow: [f32; 4],
+}
+
+const SHADOW_SIZE: u32 = 2048;
+/// Half-size of the area the shadow map covers around the camera's focus (world units).
+const SHADOW_EXTENT: f32 = 14.0;
+
+/// World → light clip matrix of a directional light covering the area in front of the camera,
+/// snapped to shadow-map texels so edges don't crawl while the camera moves.
+fn shadow_matrix(light_dir: Vec3, cam: Vec3, cam_forward: Vec3) -> Mat4 {
+    let d = light_dir.normalize_or(Vec3::NEG_Y);
+    let up = if d.y.abs() > 0.95 { Vec3::Z } else { Vec3::Y };
+    let focus = cam + cam_forward * (SHADOW_EXTENT * 0.6);
+    let view = Mat4::look_at_rh(Vec3::ZERO, d, up);
+    // snap the focus in light space
+    let texel = 2.0 * SHADOW_EXTENT / SHADOW_SIZE as f32;
+    let f = view.transform_point3(focus);
+    let snapped = Vec3::new((f.x / texel).floor() * texel, (f.y / texel).floor() * texel, f.z);
+    let proj = Mat4::orthographic_rh(snapped.x - SHADOW_EXTENT, snapped.x + SHADOW_EXTENT, snapped.y - SHADOW_EXTENT, snapped.y + SHADOW_EXTENT, -snapped.z - 60.0, -snapped.z + 60.0);
+    proj * view
 }
 
 #[repr(C)]
@@ -144,6 +167,9 @@ pub struct WgpuBackend {
     material_layout: wgpu::BindGroupLayout,
     clear_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
+    shadow_view: wgpu::TextureView,
+    shadow_bind: wgpu::BindGroup,
+    shadow_pipeline: wgpu::RenderPipeline,
     pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
     clear_pipeline: wgpu::RenderPipeline,
     clear_depth_pipeline: wgpu::RenderPipeline,
@@ -260,11 +286,67 @@ impl WgpuBackend {
                 wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
             ],
         });
+        // shadow map: depth from the light, sampled with comparisons (PCF)
+        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison), count: None },
+            ],
+        });
+        let shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow map"),
+            size: wgpu::Extent3d { width: SHADOW_SIZE, height: SHADOW_SIZE, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let shadow_view = shadow_tex.create_view(&Default::default());
+        let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor { compare: Some(wgpu::CompareFunction::LessEqual), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
+        let shadow_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow"),
+            layout: &shadow_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&shadow_view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&shadow_sampler) }],
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("standard"),
-            bind_group_layouts: &[&frame_layout, &object_layout, &material_layout],
+            bind_group_layouts: &[&frame_layout, &object_layout, &material_layout, &shadow_layout],
             push_constant_ranges: &[],
         });
+        let shadow_pipeline = {
+            let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("shadow"), bind_group_layouts: &[&frame_layout, &object_layout], push_constant_ranges: &[] });
+            let attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4];
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("shadow"),
+                layout: Some(&pl),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_shadow"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout { array_stride: Vertex::SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attrs }],
+                },
+                fragment: None,
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: None, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: Default::default(),
+                    bias: wgpu::DepthBiasState { constant: 2, slope_scale: 2.0, clamp: 0.0 },
+                }),
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
         // clears: color + depth, or depth only (cameras that draw over earlier ones)
         let clear_pipeline_with = |write_mask| {
             let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("clear"), bind_group_layouts: &[&clear_layout], push_constant_ranges: &[] });
@@ -317,6 +399,9 @@ impl WgpuBackend {
             material_layout,
             clear_layout,
             pipeline_layout,
+            shadow_view,
+            shadow_bind,
+            shadow_pipeline,
             pipelines: HashMap::new(),
             clear_pipeline,
             clear_depth_pipeline,
@@ -780,6 +865,14 @@ impl GraphicsBackend for WgpuBackend {
             objects: Vec<(MeshId, MaterialId, u32)>,
         }
         let lin = self.config.format.is_srgb();
+        // the shadow map follows the first perspective view with a shadow-casting light
+        let shadow_src = views.iter().position(|v| v.lighting.shadow.is_some() && matches!(v.projection, Projection::Perspective { .. }));
+        let light_vp = shadow_src.and_then(|i| {
+            let v = &views[i];
+            let l = v.lighting.lights.get(v.lighting.shadow?)?;
+            let cw = v.view.inverse();
+            Some(shadow_matrix(l.direction, cw.w_axis.truncate(), cw.transform_vector3(Vec3::NEG_Z)))
+        });
         let mut planned = Vec::with_capacity(views.len());
         for v in views {
             let Some((dx, dy, dw, dh)) = self.display_rect(v.display) else { continue };
@@ -813,6 +906,11 @@ impl GraphicsBackend for WgpuBackend {
                 fog_color: fog.map(|f| { let c = c4(f.color, lin); [c[0], c[1], c[2], 1.0] }).unwrap_or([0.0; 4]),
                 fog_range: fog.map(|f| [f.start, f.end.max(f.start + 1e-3), 0.0, 0.0]).unwrap_or([0.0; 4]),
                 lights,
+                light_view_proj: light_vp.unwrap_or(Mat4::IDENTITY).to_cols_array_2d(),
+                shadow: match (light_vp, v.lighting.shadow) {
+                    (Some(_), Some(i)) => [i as f32 + 1.0, 0.0015, 1.0 / SHADOW_SIZE as f32, 0.0],
+                    _ => [0.0; 4],
+                },
             };
             let frame_off = put(bytemuck::bytes_of(&fu));
             let order = v.draw_order(|m| self.gpu_materials.get(&m.index()).map(|m| m.desc.blend));
@@ -863,6 +961,38 @@ impl GraphicsBackend for WgpuBackend {
         });
 
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+        // shadow pass: the opaque objects of the view the map follows, depth only
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            if let (Some(i), Some(_)) = (shadow_src, light_vp) {
+                // `planned` skips views without a display: find the plan of view i
+                let plan_index = views[..i].iter().filter(|v| self.display_rect(v.display).is_some()).count();
+                if let Some(p) = planned.get(plan_index) {
+                    pass.set_pipeline(&self.shadow_pipeline);
+                    pass.set_bind_group(0, &frame_bg, &[p.frame_off]);
+                    for &(mesh, material, off) in &p.objects {
+                        let (Some(gm), Some(mat)) = (self.gpu_meshes.get(&mesh.index()), self.gpu_materials.get(&material.index())) else { continue };
+                        if gm.index_count == 0 || mat.desc.blend != BlendMode::Opaque || !mat.desc.depth_write {
+                            continue;
+                        }
+                        pass.set_bind_group(1, &object_bg, &[off]);
+                        pass.set_vertex_buffer(0, gm.vertices.slice(..));
+                        pass.set_index_buffer(gm.indices.slice(..), wgpu::IndexFormat::Uint16);
+                        pass.draw_indexed(0..gm.index_count, 0, 0..1);
+                    }
+                }
+            }
+        }
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
@@ -909,6 +1039,7 @@ impl GraphicsBackend for WgpuBackend {
                     pass.set_pipeline(pipe);
                     pass.set_bind_group(1, &object_bg, &[off]);
                     pass.set_bind_group(2, &mat.bind_group, &[]);
+                    pass.set_bind_group(3, &self.shadow_bind, &[]);
                     pass.set_vertex_buffer(0, gm.vertices.slice(..));
                     pass.set_index_buffer(gm.indices.slice(..), wgpu::IndexFormat::Uint16);
                     pass.draw_indexed(0..gm.index_count, 0, 0..1);

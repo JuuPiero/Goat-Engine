@@ -19,6 +19,8 @@ struct Frame {
     fog_color: vec4<f32>,        // w = 1 when fog is on
     fog_range: vec4<f32>,        // x start, y end
     lights: array<Light, 8>,
+    light_view_proj: mat4x4<f32>,
+    shadow: vec4<f32>,           // x = shadowed light + 1 (0 = none), y = bias, z = 1 / map size
 };
 
 struct Object {
@@ -43,6 +45,8 @@ struct Object {
 @group(2) @binding(2) var emissive_tex: texture_2d<f32>;
 @group(2) @binding(3) var env_cube: texture_cube<f32>;
 @group(2) @binding(4) var env_sampler: sampler;
+@group(3) @binding(0) var shadow_map: texture_depth_2d;
+@group(3) @binding(1) var shadow_sampler: sampler_comparison;
 
 struct VsIn {
     @location(0) position: vec3<f32>,
@@ -70,6 +74,29 @@ fn vs_main(v: VsIn) -> VsOut {
     // vertex colors are authored in sRGB like every engine color
     o.color = select(v.color, vec4<f32>(pow(v.color.rgb, vec3<f32>(2.2)), v.color.a), frame.camera_forward.w > 0.5);
     return o;
+}
+
+/// 0 = in shadow, 1 = lit (3×3 PCF over the shadow map).
+fn shadow_factor(world_pos: vec3<f32>) -> f32 {
+    let p = frame.light_view_proj * vec4<f32>(world_pos, 1.0);
+    let ndc = p.xyz / p.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+    var sum = 0.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let o = vec2<f32>(f32(x), f32(y)) * frame.shadow.z;
+            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, ndc.z - frame.shadow.y);
+        }
+    }
+    return sum / 9.0;
+}
+
+@vertex
+fn vs_shadow(v: VsIn) -> @builtin(position) vec4<f32> {
+    return frame.light_view_proj * (object.model * vec4<f32>(v.position, 1.0));
 }
 
 fn attenuation(d: f32, range: f32) -> f32 {
@@ -166,6 +193,9 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
                 }
             }
             var ndl = max(dot(n, l), 0.0);
+            if (f32(k) + 1.0 == frame.shadow.x) {
+                strength *= shadow_factor(i.world_pos);
+            }
             let h = normalize(l + v);
             var spec = select(0.0, pow(max(dot(n, h), 0.0), object.specular.w), ndl > 0.0);
             if (object.toon.x > 0.5) {

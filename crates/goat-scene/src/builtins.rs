@@ -240,21 +240,24 @@ struct LightJson {
     spot_angle: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     inner_spot_angle: Option<f32>,
+    /// Directional lights: casts shadow maps (default true).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shadows: Option<bool>,
 }
 
 impl Default for LightJson {
     fn default() -> Self {
-        LightJson { color: FileColor(Color::WHITE), intensity: 1.0, range: None, spot_angle: None, inner_spot_angle: None }
+        LightJson { color: FileColor(Color::WHITE), intensity: 1.0, range: None, spot_angle: None, inner_spot_angle: None, shadows: None }
     }
 }
 
 fn save_directional(ctx: &SaveContext, e: Entity) -> Option<Value> {
     let l = *ctx.world.get::<&DirectionalLight>(e).ok()?;
-    to_value(LightJson { color: FileColor(l.color), intensity: l.intensity, ..Default::default() })
+    to_value(LightJson { color: FileColor(l.color), intensity: l.intensity, shadows: (!l.shadows).then_some(false), ..Default::default() })
 }
 fn load_directional(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
     let j: LightJson = from_value(v)?;
-    insert(ctx, e, DirectionalLight { color: j.color.0, intensity: j.intensity })
+    insert(ctx, e, DirectionalLight { color: j.color.0, intensity: j.intensity, shadows: j.shadows.unwrap_or(true) })
 }
 fn save_point(ctx: &SaveContext, e: Entity) -> Option<Value> {
     let l = *ctx.world.get::<&PointLight>(e).ok()?;
@@ -266,7 +269,7 @@ fn load_point(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String>
 }
 fn save_spot(ctx: &SaveContext, e: Entity) -> Option<Value> {
     let l = *ctx.world.get::<&SpotLight>(e).ok()?;
-    to_value(LightJson { color: FileColor(l.color), intensity: l.intensity, range: Some(l.range), spot_angle: Some(l.spot_angle), inner_spot_angle: Some(l.inner_spot_angle) })
+    to_value(LightJson { color: FileColor(l.color), intensity: l.intensity, range: Some(l.range), spot_angle: Some(l.spot_angle), inner_spot_angle: Some(l.inner_spot_angle), shadows: None })
 }
 fn load_spot(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
     let j: LightJson = from_value(v)?;

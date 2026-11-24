@@ -178,11 +178,13 @@ pub fn layer_mask(layers: &[u8]) -> u32 {
 pub struct DirectionalLight {
     pub color: Color,
     pub intensity: f32,
+    /// Casts shadow maps (the first such light; desktop — the 3DS uses blob shadows).
+    pub shadows: bool,
 }
 
 impl Default for DirectionalLight {
     fn default() -> Self {
-        DirectionalLight { color: Color::rgb(1.0, 0.97, 0.9), intensity: 1.0 }
+        DirectionalLight { color: Color::rgb(1.0, 0.97, 0.9), intensity: 1.0, shadows: true }
     }
 }
 

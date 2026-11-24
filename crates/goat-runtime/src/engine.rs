@@ -321,9 +321,13 @@ fn forward_of(m: &Mat4) -> Vec3 {
 }
 
 /// Every light of the world (world space).
-fn collect_lights(world: &World) -> (Vec<Light>, Vec<Light>) {
+fn collect_lights(world: &World) -> (Vec<Light>, Vec<Light>, Option<usize>) {
     let mut directional = Vec::new();
+    let mut shadow = None;
     for (_, (l, g)) in world.query::<(&DirectionalLight, &GlobalTransform)>().iter() {
+        if l.shadows && shadow.is_none() && directional.len() < MAX_LIGHTS {
+            shadow = Some(directional.len());
+        }
         directional.push(Light { kind: LightKind::Directional, position: g.0.w_axis.truncate(), direction: forward_of(&g.0), color: scaled(l.color, l.intensity), range: 0.0 });
     }
     let mut local = Vec::new();
@@ -342,7 +346,7 @@ fn collect_lights(world: &World) -> (Vec<Light>, Vec<Light>) {
             range: l.range.max(0.01),
         });
     }
-    (directional, local)
+    (directional, local, shadow)
 }
 
 /// The [`MAX_LIGHTS`] lights that matter for a view: directional lights first, then point / spot
@@ -363,7 +367,7 @@ fn pick_lights(directional: &[Light], local: &[Light], camera: Vec3, frustum: &F
 /// renderers inside its frustum.
 pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn GraphicsBackend, only: Option<Entity>) -> Vec<RenderView> {
     let settings = world.query::<&RenderSettings>().iter().next().map(|(_, s)| *s).unwrap_or_default();
-    let (directional, local) = collect_lights(world);
+    let (directional, local, shadow) = collect_lights(world);
     // world-space bounding spheres (None = always drawn), layer bit, LOD levels
     let renderers: Vec<(DrawItem, Option<(Vec3, f32)>, u32, Option<LodGroup>)> = world
         .query::<(&MeshRenderer, &GlobalTransform, Option<&LodGroup>)>()
@@ -415,7 +419,7 @@ pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn Graphics
                 projection: c.projection,
                 clear: c.clear,
                 clear_depth: c.clear_depth,
-                lighting: Lighting { ambient: settings.ambient, ambient_ground: settings.ambient_ground, lights: pick_lights(&directional, &local, g.0.w_axis.truncate(), &frustum) },
+                lighting: Lighting { ambient: settings.ambient, ambient_ground: settings.ambient_ground, lights: pick_lights(&directional, &local, g.0.w_axis.truncate(), &frustum), shadow },
                 fog: settings.fog,
                 items,
                 depth: c.depth,

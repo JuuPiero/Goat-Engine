@@ -32,7 +32,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ Rim light (`rim_color` / `rim_power`; 3DS: specular1 × LUT D1 theo N·V), phản chiếu cubemap
 - ✅ Procedural texture (`procedural`: water / fire / noise; 3DS: đơn vị proctex của PICA, desktop: noise trong shader)
 - ⬜ Fog gas cho khói
-- ⬜ Shadow: blob / projected trên 3DS, shadow map trên desktop
+- ✅ Shadow map trên desktop (đèn directional `shadows`, 2048², PCF 3×3, đi theo camera); 3DS dùng blob shadow
 - ⬜ Post-process trên desktop; trên 3DS chỉ màn hình phẳng (pha màu bằng texenv)
 - ✅ Sprite / 2D (crate `goat-sprites`): Sprite + sprite sheet, SpriteRenderer (tint, flip, layer, sorting order), gom lô theo texture → 1 draw call mỗi lô
 - ✅ Plugin (cách subsystem gắn vào frame: build / fixed_update / update / late_update), fixed timestep, `Behaviour::fixed_update` / `late_update`

@@ -355,11 +355,13 @@ pub struct Lighting {
     /// `ambient` from above along the surface normal.
     pub ambient_ground: Option<Color>,
     pub lights: Vec<Light>,
+    /// Index in `lights` of the directional light casting shadow maps (desktop backends).
+    pub shadow: Option<usize>,
 }
 
 impl Default for Lighting {
     fn default() -> Self {
-        Lighting { ambient: Color::rgb(0.22, 0.24, 0.3), ambient_ground: None, lights: Vec::new() }
+        Lighting { ambient: Color::rgb(0.22, 0.24, 0.3), ambient_ground: None, lights: Vec::new(), shadow: None }
     }
 }
 
