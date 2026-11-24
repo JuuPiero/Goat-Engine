@@ -346,6 +346,13 @@ UI còn có (tên giống Unity, đều dùng được trong file scene):
 - `UiScrollRect`: kéo bằng tay có quán tính, bật lại khi kéo quá mép; con tên "Content" là phần cuộn.
 - `UiInputField`: con "Text" và "Placeholder"; giới hạn ký tự, kiểu số nguyên / số thực / mật khẩu. Desktop gõ phím, trên 3DS chạm vào là mở bàn phím hệ thống.
 - `UiDropdown`: con "Label"; danh sách mở đè lên mọi thứ khác.
+- `UiRawImage`: texture vẽ nguyên dạng với `uv_rect` (lặp texture, render texture).
+- `UiCanvasGroup`: `alpha` nhân cho cả cây con; `interactable` / `blocks_raycasts` tắt tương tác của cả cây (`ignore_parent_groups`).
+- `UiAspectRatioFitter`: giữ tỉ lệ khung (WidthControlsHeight, HeightControlsWidth, FitInParent, EnvelopeParent).
+- `UiToggleGroup`: các toggle nằm dưới nó chỉ một cái được bật (`allow_switch_off`).
+- `UiScrollbar`: con "Handle", `value` / `size` / `direction`; điền tên ScrollRect vào `scroll_rect` để kéo thanh cuộn danh sách và ngược lại.
+- `UiRectMask2D`: cắt cây con theo khung, không vẽ gì (như `UiMask` không hiện graphic).
+- `UiShadow` / `UiOutline`: bóng đổ / viền cho Image, RawImage, Text (khoảng cách tính bằng pixel).
 - `UiEventSystem` (`navigation: true`): D-pad / cần analog di chuyển vùng chọn, A để bấm, B để thoát ô nhập / đóng danh sách. Vùng chọn có màu riêng.
 
 ### Animator Controller

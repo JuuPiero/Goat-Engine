@@ -114,6 +114,17 @@ pub fn spawn(ctx: &mut Context) {
     let dl = spawn_ui(world, "Label", drop, RectTransform::stretch(5.0));
     let _ = world.insert_one(dl, UiText { align: Align::Left, valign: VAlign::Middle, ..UiText::new("", FONT, 10.0) });
     let _ = world.insert_one(view, Scripts::new().with(ListActions { view, bar, drop }));
+
+    // uGUI extras: a vertical Scrollbar linked to the list (drag it, or scroll the list), a drop
+    // shadow under the panel, an outlined button label, a RawImage with a CanvasGroup fade
+    let sb = spawn_ui(world, "List Scrollbar", canvas, RectTransform { anchor_min: Vec2::new(0.0, 1.0), anchor_max: Vec2::new(0.0, 1.0), pivot: Vec2::new(0.0, 1.0), offset: Vec2::new(120.0, -36.0), size: Vec2::new(7.0, 96.0) });
+    let _ = world.insert(sb, (UiImage::color(Color::rgba(0.08, 0.09, 0.12, 0.82)), UiScrollbar { direction: ScrollbarDirection::BottomToTop, value: 1.0, scroll_rect: "List".into(), ..Default::default() }));
+    let sh = spawn_ui(world, "Handle", sb, RectTransform::stretch(0.0));
+    let _ = world.insert_one(sh, UiImage::color(Color::hex(0x8a93a6)));
+    let _ = world.insert_one(panel, UiShadow { color: Color::rgba(0.0, 0.0, 0.0, 0.55), distance: [3.0, 3.0] });
+    let _ = world.insert_one(label, UiOutline { color: Color::rgba(0.0, 0.0, 0.0, 0.8), distance: [1.0, 1.0] });
+    let logo = spawn_ui(world, "Logo", canvas, RectTransform { anchor_min: Vec2::ZERO, anchor_max: Vec2::ZERO, pivot: Vec2::ZERO, offset: Vec2::new(6.0, 6.0), size: Vec2::new(56.0, 56.0) });
+    let _ = world.insert(logo, (UiRawImage { texture: Some("textures/logo.png".into()), ..Default::default() }, UiCanvasGroup { alpha: 0.85, ..Default::default() }, UiShadow::default()));
 }
 
 /// The list's scroll position → the filled bar; the dropdown zooms the map camera.

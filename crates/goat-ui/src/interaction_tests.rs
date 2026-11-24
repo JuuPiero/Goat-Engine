@@ -207,3 +207,88 @@ fn text_box_dropdown_and_navigation() {
     let sel = e.resources.get::<UiSelection>().unwrap().selected.unwrap();
     assert_eq!(e.world.get::<&Name>(sel).unwrap().0, "Drop", "right of the list, nearest: the dropdown");
 }
+
+struct ExtrasGame;
+impl Game for ExtrasGame {
+    fn start(&mut self, ctx: &mut Context) {
+        let w = &mut *ctx.world;
+        let canvas = w.spawn((Transform::default(), GlobalTransform::default(), Canvas::new(Display::Secondary)));
+        let node = |w: &mut World, name: &str, parent: Entity, rt: RectTransform| w.spawn((Name(name.into()), Transform::default(), GlobalTransform::default(), Parent(parent), rt));
+        // a toggle group (left half, top) with two toggles 40×20
+        let group = node(w, "Group", canvas, RectTransform::anchored(Vec2::new(0.25, 0.9), Vec2::ZERO, Vec2::new(120.0, 30.0)));
+        w.insert_one(group, UiToggleGroup::default()).unwrap();
+        let a = node(w, "A", group, RectTransform::anchored(Vec2::new(0.2, 0.5), Vec2::ZERO, Vec2::new(40.0, 20.0)));
+        w.insert_one(a, UiToggle { is_on: true, changed: false, check: None }).unwrap();
+        let b = node(w, "B", group, RectTransform::anchored(Vec2::new(0.8, 0.5), Vec2::ZERO, Vec2::new(40.0, 20.0)));
+        w.insert_one(b, UiToggle::default()).unwrap();
+        // a faded, non-interactable group holding a button at the center
+        let faded = node(w, "Faded", canvas, RectTransform::anchored(Vec2::splat(0.5), Vec2::ZERO, Vec2::new(100.0, 40.0)));
+        w.insert_one(faded, UiCanvasGroup { alpha: 0.5, interactable: false, ..Default::default() }).unwrap();
+        let btn = node(w, "Locked", faded, RectTransform::stretch(0.0));
+        w.insert(btn, (UiImage::color(Color::WHITE), UiButton::default())).unwrap();
+        // a vertical scroll view (right half) + a scrollbar beside it linked by name
+        let view = node(w, "View", canvas, RectTransform::anchored(Vec2::new(0.75, 0.3), Vec2::ZERO, Vec2::new(100.0, 100.0)));
+        w.insert(view, (UiScrollRect::default(), UiMask::default(), UiImage::color(Color::WHITE))).unwrap();
+        let content = node(w, "Content", view, RectTransform { anchor_min: Vec2::new(0.0, 1.0), anchor_max: Vec2::new(1.0, 1.0), pivot: Vec2::new(0.5, 1.0), offset: Vec2::ZERO, size: Vec2::new(0.0, 400.0) });
+        let _ = content;
+        let bar = node(w, "Bar", canvas, RectTransform::anchored(Vec2::new(0.95, 0.3), Vec2::ZERO, Vec2::new(10.0, 100.0)));
+        w.insert(bar, (UiImage::color(Color::WHITE), UiScrollbar { direction: ScrollbarDirection::BottomToTop, value: 1.0, scroll_rect: "View".into(), ..Default::default() })).unwrap();
+        let handle = node(w, "Handle", bar, RectTransform::stretch(0.0));
+        w.insert_one(handle, UiImage::color(Color::WHITE)).unwrap();
+        // a raw image with an aspect fitter (2:1 inside its 100×100 rect: width controls height)
+        let raw = node(w, "Raw", canvas, RectTransform::anchored(Vec2::new(0.25, 0.3), Vec2::ZERO, Vec2::new(100.0, 100.0)));
+        w.insert(raw, (UiRawImage::default(), UiAspectRatioFitter { mode: AspectMode::WidthControlsHeight, aspect_ratio: 2.0 }, UiShadow::default())).unwrap();
+    }
+    fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+        vec![Box::new(UiPlugin::default())]
+    }
+}
+
+#[test]
+fn toggle_groups_canvas_groups_scrollbars_raw_images() {
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(ExtrasGame);
+    e.frame(0.0, &mut gfx);
+    e.frame(1.0 / 60.0, &mut gfx);
+    let (a, b, locked, bar, raw) = (find(&e, "A"), find(&e, "B"), find(&e, "Locked"), find(&e, "Bar"), find(&e, "Raw"));
+    let rect = |e: &Engine, x: Entity| e.resources.get::<UiLayout>().unwrap().rects[&x];
+    // screen point (y down) of an element's center
+    let center = |e: &Engine, x: Entity| {
+        let (lo, hi) = rect(e, x);
+        let c = (lo + hi) * 0.5;
+        (c.x, 240.0 - c.y)
+    };
+    // clicking B switches A off (one on at a time); clicking B again keeps it on
+    let pb = center(&e, b);
+    touch(&mut e, &mut gfx, Some(pb), true);
+    touch(&mut e, &mut gfx, Some(pb), false);
+    assert!(!e.world.get::<&UiToggle>(a).unwrap().is_on && e.world.get::<&UiToggle>(b).unwrap().is_on);
+    touch(&mut e, &mut gfx, Some(pb), true);
+    touch(&mut e, &mut gfx, Some(pb), false);
+    assert!(e.world.get::<&UiToggle>(b).unwrap().is_on, "the group keeps one on");
+    // the non-interactable CanvasGroup blocks the button
+    let pl = center(&e, locked);
+    touch(&mut e, &mut gfx, Some(pl), true);
+    touch(&mut e, &mut gfx, Some(pl), false);
+    assert!(!e.world.get::<&UiButton>(locked).unwrap().clicked);
+    // aspect fitter: 100 wide → 50 high
+    let (lo, hi) = rect(&e, raw);
+    assert!(((hi - lo) - Vec2::new(100.0, 50.0)).length() < 0.01, "{:?}", hi - lo);
+    // the scrollbar follows the view (content 4× the view: handle size 1/4) and drags it
+    for _ in 0..3 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    let s: UiScrollbar = (*e.world.get::<&UiScrollbar>(bar).unwrap()).clone();
+    assert!((s.size - 0.25).abs() < 0.02 && (s.value - 1.0).abs() < 0.02, "{} {}", s.size, s.value);
+    let (blo, bhi) = rect(&e, bar);
+    let x = (blo.x + bhi.x) * 0.5;
+    touch(&mut e, &mut gfx, Some((x, 240.0 - (bhi.y - 5.0))), true);
+    touch(&mut e, &mut gfx, Some((x, 240.0 - (blo.y + 5.0))), true);
+    touch(&mut e, &mut gfx, None, false);
+    for _ in 0..3 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    let view = find(&e, "View");
+    let n = e.world.get::<&UiScrollRect>(view).unwrap().normalized;
+    assert!(n.y < 0.1, "dragged to the bottom: {n:?}");
+}

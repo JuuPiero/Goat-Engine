@@ -17,6 +17,7 @@
 //! - Drawing: per canvas, in hierarchy order (open dropdown lists last), images and texts in one
 //!   quad batcher.
 
+pub mod extras;
 pub mod layout;
 #[cfg(feature = "script")]
 pub mod script;
@@ -33,6 +34,7 @@ use goat_sprites::{Batcher, Quad};
 use goat_text::{Align, Fonts, Text, VAlign};
 use serde::{Deserialize, Serialize};
 
+pub use extras::{AspectMode, ScrollbarDirection, UiAspectRatioFitter, UiCanvasGroup, UiOutline, UiRawImage, UiRectMask2D, UiScrollbar, UiShadow, UiToggleGroup};
 pub use layout::{LayoutKind, UiContentSizeFitter, UiLayoutElement, UiLayoutGroup, UiMask};
 pub use goat_runtime::{KeyboardRequest, SoftwareKeyboard};
 pub use widgets::{ContentType, UiDropdown, UiEventSystem, UiInputField, UiOverlay, UiScrollRect, UiSelection};
@@ -352,11 +354,57 @@ fn is_ancestor(world: &World, ancestor: Entity, mut e: Entity) -> bool {
 
 /// Whether the pointer / navigation can act on this element.
 fn interactive(world: &World, e: Entity) -> bool {
-    world.get::<&UiButton>(e).is_ok_and(|b| b.interactable)
+    let control = world.get::<&UiButton>(e).is_ok_and(|b| b.interactable)
         || world.get::<&UiToggle>(e).is_ok()
         || world.get::<&UiSlider>(e).is_ok()
+        || world.get::<&UiScrollbar>(e).is_ok_and(|s| s.interactable)
         || world.get::<&UiInputField>(e).is_ok_and(|f| f.interactable)
-        || world.get::<&UiDropdown>(e).is_ok_and(|d| d.interactable)
+        || world.get::<&UiDropdown>(e).is_ok_and(|d| d.interactable);
+    control && group_allows(world, e)
+}
+
+/// CanvasGroups above `e` let it be clicked (interactable and blocking raycasts).
+fn group_allows(world: &World, mut e: Entity) -> bool {
+    for _ in 0..64 {
+        if let Ok(g) = world.get::<&UiCanvasGroup>(e) {
+            if !g.interactable || !g.blocks_raycasts {
+                return false;
+            }
+            if g.ignore_parent_groups {
+                return true;
+            }
+        }
+        match world.get::<&Parent>(e) {
+            Ok(p) => e = p.0,
+            Err(_) => return true,
+        }
+    }
+    true
+}
+
+/// A toggle switched: the other toggles of its group (below the nearest UiToggleGroup) follow.
+fn apply_toggle_group(world: &mut World, toggle: Entity) {
+    let mut g = world.get::<&Parent>(toggle).ok().map(|p| p.0);
+    let mut group = None;
+    for _ in 0..64 {
+        let Some(x) = g else { break };
+        if world.get::<&UiToggleGroup>(x).is_ok() {
+            group = Some(x);
+            break;
+        }
+        g = world.get::<&Parent>(x).ok().map(|p| p.0);
+    }
+    let Some(group) = group else { return };
+    let rule = world.get::<&UiToggleGroup>(group).map(|g| *g).unwrap_or_default();
+    let members: Vec<(Entity, bool)> = world.query::<&UiToggle>().iter().filter(|(e, _)| is_ancestor(world, group, *e)).map(|(e, t)| (e, t.is_on)).collect();
+    for (e, on) in extras::resolve_toggle_group(&rule, &members, toggle) {
+        if let Ok(mut t) = world.get::<&mut UiToggle>(e) {
+            if t.is_on != on {
+                t.is_on = on;
+                t.changed = true;
+            }
+        }
+    }
 }
 
 fn intersect(a: Option<(Vec2, Vec2)>, b: (Vec2, Vec2)) -> (Vec2, Vec2) {
@@ -375,9 +423,15 @@ impl UiPlugin {
         if let Ok(mut b) = ctx.world.get::<&mut UiButton>(e) {
             b.clicked = b.interactable;
         }
-        if let Ok(mut t) = ctx.world.get::<&mut UiToggle>(e) {
+        let toggled = if let Ok(mut t) = ctx.world.get::<&mut UiToggle>(e) {
             t.is_on = !t.is_on;
             t.changed = true;
+            true
+        } else {
+            false
+        };
+        if toggled {
+            apply_toggle_group(ctx.world, e);
         }
         let item = ctx.world.get::<&DropdownItem>(e).ok().map(|i| *i);
         if let Some(item) = item {
@@ -576,7 +630,25 @@ impl Plugin for UiPlugin {
                 .component(serde_codec::<UiLayoutElement>("UiLayoutElement"))
                 .component(serde_codec::<UiContentSizeFitter>("UiContentSizeFitter"))
                 .component(serde_codec::<UiMask>("UiMask"))
-                .component(serde_codec::<UiEventSystem>("UiEventSystem"));
+                .component(serde_codec::<UiEventSystem>("UiEventSystem"))
+                .component(serde_codec::<UiRawImage>("UiRawImage"))
+                .component(serde_codec::<UiCanvasGroup>("UiCanvasGroup"))
+                .component(serde_codec::<UiAspectRatioFitter>("UiAspectRatioFitter"))
+                .component(serde_codec::<UiToggleGroup>("UiToggleGroup"))
+                .component(serde_codec::<UiScrollbar>("UiScrollbar"))
+                .component(serde_codec::<UiRectMask2D>("UiRectMask2D"))
+                .component(serde_codec::<UiShadow>("UiShadow"))
+                .component(serde_codec::<UiOutline>("UiOutline"));
+            use goat_scene::ComponentInfo as I;
+            let r = goat_scene::registry(ctx);
+            r.describe("UiRawImage", I::new("UI/Raw Image").requires(&["RectTransform"]).asset("texture", "texture"));
+            r.describe("UiCanvasGroup", I::new("Layout/Canvas Group").range("alpha", 0.0, 1.0));
+            r.describe("UiAspectRatioFitter", I::new("Layout/Aspect Ratio Fitter").requires(&["RectTransform"]).options("mode", &["None", "WidthControlsHeight", "HeightControlsWidth", "FitInParent", "EnvelopeParent"]));
+            r.describe("UiToggleGroup", I::new("UI/Toggle Group").tip("allow_switch_off", "Toggles below this object are exclusive; may all be off?"));
+            r.describe("UiScrollbar", I::new("UI/Scrollbar").requires(&["RectTransform", "UiImage"]).options("direction", &["LeftToRight", "RightToLeft", "BottomToTop", "TopToBottom"]).range("value", 0.0, 1.0).range("size", 0.0, 1.0).kind("scroll_rect", "entity"));
+            r.describe("UiRectMask2D", I::new("UI/Rect Mask 2D").requires(&["RectTransform"]));
+            r.describe("UiShadow", I::new("UI/Effects/Shadow"));
+            r.describe("UiOutline", I::new("UI/Effects/Outline"));
         }
         #[cfg(feature = "script")]
         script::register(goat_script::extensions(ctx));
@@ -641,7 +713,7 @@ impl Plugin for UiPlugin {
         if let (true, Some(p)) = (down, p) {
             let mut scrolled = None;
             if let Some(d) = self.drag.as_mut() {
-                let slider_drag = self.pressed.is_some_and(|e| ctx.world.get::<&UiSlider>(e).is_ok());
+                let slider_drag = self.pressed.is_some_and(|e| ctx.world.get::<&UiSlider>(e).is_ok() || ctx.world.get::<&UiScrollbar>(e).is_ok());
                 if let (Some(s), false) = (d.scroll, slider_drag) {
                     if !d.active && (p - d.start).length() > 8.0 {
                         // the content follows from where the finger went down
@@ -662,6 +734,13 @@ impl Plugin for UiPlugin {
                 let rect = ctx.resources.get::<UiLayout>().and_then(|l| l.rects.get(&e).copied());
                 if let (Ok(mut s), Some((a, b))) = (ctx.world.get::<&mut UiSlider>(e), rect) {
                     let v = ((p.x - a.x) / (b.x - a.x).max(1.0)).clamp(0.0, 1.0);
+                    if (v - s.value).abs() > 1e-4 {
+                        s.value = v;
+                        s.changed = true;
+                    }
+                }
+                if let (Ok(mut s), Some((a, b))) = (ctx.world.get::<&mut UiScrollbar>(e), rect) {
+                    let v = s.value_at(p, a, b);
                     if (v - s.value).abs() > 1e-4 {
                         s.value = v;
                         s.changed = true;
@@ -698,6 +777,7 @@ impl Plugin for UiPlugin {
             }
             settle_scroll(ctx, s, dragging == Some(s), dt);
         }
+        sync_scrollbars(ctx);
         // typing into the focused text box
         let kb_result = ctx.resources.get_mut::<SoftwareKeyboard>().and_then(|k| k.result.take());
         for (_, f) in ctx.world.query_mut::<&mut UiInputField>() {
@@ -744,7 +824,7 @@ impl Plugin for UiPlugin {
         // textures of images given by asset key
         let mut textures: HashMap<Entity, (TextureId, (u32, u32))> = HashMap::new();
         if let Some(server) = ctx.resources.get_mut::<AssetServer>() {
-            let keyed: Vec<(Entity, String)> = ctx.world.query::<&UiImage>().iter().filter_map(|(e, i)| i.texture.clone().map(|k| (e, k))).collect();
+            let keyed: Vec<(Entity, String)> = ctx.world.query::<&UiImage>().iter().filter_map(|(e, i)| i.texture.clone().map(|k| (e, k))).chain(ctx.world.query::<&UiRawImage>().iter().filter_map(|(e, i)| i.texture.clone().map(|k| (e, k)))).collect();
             for (e, key) in keyed {
                 if let Ok(t) = server.texture(ctx.gfx, &key) {
                     textures.insert(e, (t, server.texture_size(t).unwrap_or((1, 1))));
@@ -831,17 +911,27 @@ impl Plugin for UiPlugin {
             let origin = state.origin;
             let to_world = |p: Vec2, z: f32| origin + Vec3::new(p.x - w * 0.5, p.y - h * 0.5, z);
             // depth-first, parents before children; overlays (open lists) after everything
-            type Frame = (Entity, Option<(Vec2, Vec2)>, Vec2, Vec2, Option<(Vec2, Vec2)>);
+            // (entity, rect placed by a layout group, parent rect, clip, CanvasGroup alpha)
+            type Frame = (Entity, Option<(Vec2, Vec2)>, Vec2, Vec2, Option<(Vec2, Vec2)>, f32);
             let roots = children.get(canvas_e).cloned().unwrap_or_default();
             let (overlays, normal): (Vec<Entity>, Vec<Entity>) = roots.into_iter().partition(|e| ctx.world.get::<&UiOverlay>(*e).is_ok());
             let mut passes: Vec<Vec<Frame>> = vec![
-                normal.iter().rev().map(|&e| (e, None, Vec2::ZERO, Vec2::new(w, h), None)).collect(),
-                overlays.iter().rev().map(|&e| (e, None, Vec2::ZERO, Vec2::new(w, h), None)).collect(),
+                normal.iter().rev().map(|&e| (e, None, Vec2::ZERO, Vec2::new(w, h), None, 1.0)).collect(),
+                overlays.iter().rev().map(|&e| (e, None, Vec2::ZERO, Vec2::new(w, h), None, 1.0)).collect(),
             ];
             for stack in passes.iter_mut() {
-                while let Some((e, placed, pmin, pmax, clip)) = stack.pop() {
+                while let Some((e, placed, pmin, pmax, clip, parent_alpha)) = stack.pop() {
                     let Ok(rt) = ctx.world.get::<&RectTransform>(e).map(|r| *r) else { continue };
-                    let (a, b) = placed.unwrap_or_else(|| rt.resolve(pmin, pmax));
+                    let (mut a, mut b) = placed.unwrap_or_else(|| rt.resolve(pmin, pmax));
+                    if let Ok(f) = ctx.world.get::<&UiAspectRatioFitter>(e) {
+                        (a, b) = f.fit(a, b, pmin, pmax);
+                    }
+                    let alpha = match ctx.world.get::<&UiCanvasGroup>(e) {
+                        Ok(g) if g.ignore_parent_groups => g.alpha,
+                        Ok(g) => parent_alpha * g.alpha,
+                        Err(_) => parent_alpha,
+                    };
+                    let effects = extras::effect_offsets(ctx.world.get::<&UiShadow>(e).ok().map(|s| *s), ctx.world.get::<&UiOutline>(e).ok().map(|s| *s));
                     rects.insert(e, (a, b));
                     if let Some(c) = clip {
                         clips.insert(e, c);
@@ -849,10 +939,27 @@ impl Plugin for UiPlugin {
                     order.push((e, canvas.display));
                     let z = order.len() as f32 * 0.001;
                     let mut own = Vec::new();
-                    let mask = ctx.world.get::<&UiMask>(e).ok().map(|m| *m);
+                    let mask = ctx.world.get::<&UiMask>(e).ok().map(|m| *m).or_else(|| ctx.world.get::<&UiRectMask2D>(e).ok().map(|_| UiMask { show_graphic: false }));
                     if let Ok(img) = ctx.world.get::<&UiImage>(e) {
                         if img.visible && img.color.a > 0.0 && mask.is_none_or(|m| m.show_graphic) {
                             let (texture, tsize) = textures.get(&e).copied().unwrap_or((white, (1, 1)));
+                            // effect copies (outline, shadow) behind the image
+                            for &(off, ec) in &effects {
+                                image_quads(&img, a + off, b + off, texture, tsize, &mut |qa, qb, uva, uvb| {
+                                    let c = Color::rgba(ec.r, ec.g, ec.b, ec.a * img.color.a);
+                                    own.push(Quad {
+                                        sorting_order: canvas.sorting_order,
+                                        layer: UI_LAYER,
+                                        texture,
+                                        blend: BlendMode::Alpha,
+                                        z: origin.z + z - 0.0002,
+                                        corners: [to_world(qa, z), to_world(Vec2::new(qb.x, qa.y), z), to_world(qb, z), to_world(Vec2::new(qa.x, qb.y), z)],
+                                        normal: Vec3::Z,
+                                        uv: [[uva.x, uva.y], [uvb.x, uva.y], [uvb.x, uvb.y], [uva.x, uvb.y]],
+                                        color: [c.r, c.g, c.b, c.a],
+                                    });
+                                });
+                            }
                             image_quads(&img, a, b, texture, tsize, &mut |qa, qb, uva, uvb| {
                                 let c = img.color;
                                 own.push(Quad {
@@ -869,6 +976,26 @@ impl Plugin for UiPlugin {
                             });
                         }
                     }
+                    if let Ok(r) = ctx.world.get::<&UiRawImage>(e) {
+                        if r.visible && r.color.a > 0.0 {
+                            let texture = textures.get(&e).map(|t| t.0).unwrap_or(white);
+                            let [ux, uy, uw, uh] = r.uv_rect;
+                            // uv v goes down: the rect's bottom = v (1 - uy)
+                            let (uva, uvb) = (Vec2::new(ux, 1.0 - uy), Vec2::new(ux + uw, 1.0 - uy - uh));
+                            let c = r.color;
+                            own.push(Quad {
+                                sorting_order: canvas.sorting_order,
+                                layer: UI_LAYER,
+                                texture,
+                                blend: BlendMode::Alpha,
+                                z: origin.z + z,
+                                corners: [to_world(a, z), to_world(Vec2::new(b.x, a.y), z), to_world(b, z), to_world(Vec2::new(a.x, b.y), z)],
+                                normal: Vec3::Z,
+                                uv: [[uva.x, uva.y], [uvb.x, uva.y], [uvb.x, uvb.y], [uva.x, uvb.y]],
+                                color: [c.r, c.g, c.b, c.a],
+                            });
+                        }
+                    }
                     if let (Ok(t), Some(assets)) = (ctx.world.get::<&UiText>(e), assets.as_deref()) {
                         if t.visible && !t.text.is_empty() {
                             let x = match t.align {
@@ -882,6 +1009,10 @@ impl Plugin for UiPlugin {
                                 VAlign::Bottom => a.y,
                             };
                             let pos = to_world(Vec2::new(x, y), z + 0.0005);
+                            // Shadow / Outline effect components → the text's own effects (fractions of the size)
+                            let px = t.size.max(1.0);
+                            let shadow = t.shadow.or_else(|| ctx.world.get::<&UiShadow>(e).ok().map(|s| (s.color, [s.distance[0] / px, s.distance[1] / px])));
+                            let outline = t.outline.or_else(|| ctx.world.get::<&UiOutline>(e).ok().map(|o| (o.color, o.distance[0].max(o.distance[1]) / px)));
                             let c = t.color;
                             let key = TextKey {
                                 text: t.text.clone(),
@@ -889,12 +1020,12 @@ impl Plugin for UiPlugin {
                                 numbers: [t.size, c.r, c.g, c.b, c.a, (b.x - a.x).max(1.0), pos.x, pos.y, pos.z].map(f32::to_bits),
                                 align: (t.align as u8, t.valign as u8),
                                 atlas: fonts.generation(),
-                                effects: format!("{}{:?}{:?}", t.rich, t.outline, t.shadow),
+                                effects: format!("{}{:?}{:?}", t.rich, outline, shadow),
                             };
                             match self.text_cache.get(&e) {
                                 Some((k, q)) if *k == key => own.extend(q.iter().cloned()),
                                 _ => {
-                                    let text = Text { color: t.color, align: t.align, valign: t.valign, max_width: Some((b.x - a.x).max(1.0)), layer: UI_LAYER, sorting_order: canvas.sorting_order, rich: t.rich, outline: t.outline, shadow: t.shadow, ..Text::new(t.text.clone(), t.font.clone(), t.size) };
+                                    let text = Text { color: t.color, align: t.align, valign: t.valign, max_width: Some((b.x - a.x).max(1.0)), layer: UI_LAYER, sorting_order: canvas.sorting_order, rich: t.rich, outline, shadow, ..Text::new(t.text.clone(), t.font.clone(), t.size) };
                                     let m = Mat4::from_translation(pos);
                                     let q: Vec<Quad> = fonts
                                         .quads(assets, ctx.gfx, &text, &m)
@@ -910,6 +1041,12 @@ impl Plugin for UiPlugin {
                             }
                         }
                     }
+                    // CanvasGroup alpha
+                    if alpha < 1.0 {
+                        for q in own.iter_mut() {
+                            q.color[3] *= alpha;
+                        }
+                    }
                     match clip {
                         Some((c0, c1)) => {
                             let (w0, w1) = (to_world(c0, 0.0), to_world(c1, 0.0));
@@ -923,9 +1060,9 @@ impl Plugin for UiPlugin {
                             Ok(g) => {
                                 let items = layout::items(ctx.world, c);
                                 let placed: HashMap<Entity, (Vec2, Vec2)> = layout::arrange(&g, &items, a, b).into_iter().map(|(e, a, b)| (e, (a, b))).collect();
-                                stack.extend(c.iter().rev().map(|&ch| (ch, placed.get(&ch).copied(), a, b, child_clip)));
+                                stack.extend(c.iter().rev().map(|&ch| (ch, placed.get(&ch).copied(), a, b, child_clip, alpha)));
                             }
-                            Err(_) => stack.extend(c.iter().rev().map(|&ch| (ch, None, a, b, child_clip))),
+                            Err(_) => stack.extend(c.iter().rev().map(|&ch| (ch, None, a, b, child_clip, alpha))),
                         }
                     }
                 }
@@ -1018,6 +1155,13 @@ fn wire_parts(world: &mut World) {
             s.handle = handle;
         }
     }
+    let bars: Vec<Entity> = world.query::<&UiScrollbar>().iter().filter(|(_, s)| s.handle.is_none_or(|h| !world.contains(h))).map(|(e, _)| e).collect();
+    for e in bars {
+        let handle = descendant_named(world, e, "Handle");
+        if let Ok(mut s) = world.get::<&mut UiScrollbar>(e) {
+            s.handle = handle;
+        }
+    }
     let scrolls: Vec<Entity> = world.query::<&UiScrollRect>().iter().filter(|(_, s)| s.content.is_none_or(|c| !world.contains(c))).map(|(e, _)| e).collect();
     for e in scrolls {
         let content = descendant_named(world, e, "Content").or_else(|| first_child(world, e));
@@ -1043,6 +1187,19 @@ fn drive_parts(world: &mut World) {
         if let Some(Ok(mut r)) = s.handle.map(|h| world.get::<&mut RectTransform>(h)) {
             r.anchor_min.x = s.value;
             r.anchor_max.x = s.value;
+        }
+    }
+    let bars: Vec<UiScrollbar> = world.query::<&UiScrollbar>().iter().map(|(_, s)| s.clone()).collect();
+    for s in bars {
+        if let Some(Ok(mut r)) = s.handle.map(|h| world.get::<&mut RectTransform>(h)) {
+            let (lo, hi) = s.handle_anchors();
+            if s.vertical() {
+                (r.anchor_min, r.anchor_max) = (Vec2::new(0.0, lo), Vec2::new(1.0, hi));
+            } else {
+                (r.anchor_min, r.anchor_max) = (Vec2::new(lo, 0.0), Vec2::new(hi, 1.0));
+            }
+            r.size = Vec2::ZERO;
+            r.offset = Vec2::ZERO;
         }
     }
     let fields: Vec<(Entity, String, bool)> = world.query::<&UiInputField>().iter().map(|(e, f)| (e, f.display(f.focused && (f.blink % 1.0) < 0.5), f.text.is_empty() && !f.focused)).collect();
@@ -1080,6 +1237,43 @@ fn scroll_by(world: &mut World, s: Entity, delta: Vec2, from_drag: bool, dt: f32
     drop(sr);
     if let Ok(mut rt) = world.get::<&mut RectTransform>(content) {
         rt.offset += d;
+    }
+}
+
+/// Scrollbars linked to a ScrollRect (by name): dragging one scrolls the view, scrolling the view
+/// moves the bar; `size` = the visible share of the content.
+fn sync_scrollbars(ctx: &mut Context) {
+    let bars: Vec<(Entity, UiScrollbar)> = ctx.world.query::<&UiScrollbar>().iter().filter(|(_, s)| !s.scroll_rect.is_empty()).map(|(e, s)| (e, s.clone())).collect();
+    for (bar, s) in bars {
+        let Some(view) = ctx.world.query::<(&Name, &UiScrollRect)>().iter().find(|(_, (n, _))| n.0 == s.scroll_rect).map(|(e, _)| e) else { continue };
+        let Ok(sr) = ctx.world.get::<&UiScrollRect>(view).map(|r| *r) else { continue };
+        let vertical = s.vertical();
+        // like Unity: a vertical scrollbar's value 1 = top = ScrollRect normalized y 1
+        if s.changed {
+            let mut j = sr.normalized;
+            if vertical {
+                j.y = s.value;
+            } else {
+                j.x = s.value;
+            }
+            if let Ok(mut r) = ctx.world.get::<&mut UiScrollRect>(view) {
+                r.jump = Some(j);
+            }
+        } else {
+            let size = (|| {
+                let layout = ctx.resources.get::<UiLayout>()?;
+                let (va, vb) = *layout.rects.get(&view)?;
+                let (ca, cb) = *layout.rects.get(&sr.content?)?;
+                let (v, c) = if vertical { (vb.y - va.y, cb.y - ca.y) } else { (vb.x - va.x, cb.x - ca.x) };
+                Some((v / c.max(1.0)).clamp(0.05, 1.0))
+            })();
+            if let Ok(mut b) = ctx.world.get::<&mut UiScrollbar>(bar) {
+                b.value = if vertical { sr.normalized.y } else { sr.normalized.x };
+                if let Some(size) = size {
+                    b.size = size;
+                }
+            }
+        }
     }
 }
 

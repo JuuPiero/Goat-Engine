@@ -92,6 +92,7 @@ Mọi ngôn ngữ đi qua cùng một lõi (`goat-script`: component `Script`, t
 - Đuổi kịp PiaEngine (theo yêu cầu 2026-11-24), làm theo đợt:
   - ✅ Trail Renderer + Line Renderer (`goat-lines`), NavMesh: Surface / Agent / Obstacle / Modifier + truy vấn (`goat-navigation`, có nút Bake và lưới phủ trong editor, API script JS / C#)
   - ✅ GameObject active / inactive (cả cây con: vẽ, script, physics, UI, particle, audio, navigation) + tag, trong scene / prefab override / script / editor
+  - ✅ Mesh Capsule / Cylinder / Quad; UI: Raw Image, Canvas Group, Aspect Ratio Fitter, Toggle Group, Scrollbar (nối ScrollRect), Rect Mask 2D, Shadow / Outline
   - ⬜ Đợt 2 — component lõi còn thiếu: Constant Force, joint 3D đủ loại (Character / Configurable) và joint / effector 2D, Sprite Mask, Light / Reflection Probe đơn giản, Animation (legacy), UI: Raw Image, Toggle Group, Scrollbar, Rect Mask 2D, Shadow / Outline, Grid Layout, Aspect Ratio Fitter, Canvas Group, raycaster; mesh dựng sẵn capsule / cylinder / quad
   - ⬜ Đợt 3 — cửa sổ: Game view riêng (Pause / Step, độ phân giải), Profiler, Animation window, Build Settings / Project Settings, Package Manager, prefab mode + Apply / Revert override, Scene view: tool Hand / Rect, Pivot / Center, Local / Global, snap, gizmo cho đèn / camera / collider, sửa nhiều vật cùng lúc trong Inspector, behaviour (script Rust) trong Inspector
 - ⬜ Prefab mode, cửa sổ Input Actions, chạy thử trên 3DS từ editor (`3dslink` + log qua mạng), profiler
