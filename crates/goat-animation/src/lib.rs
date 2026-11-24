@@ -13,12 +13,14 @@
 //!   4 joints per vertex) into a per-instance mesh: portable — the 3DS's vertex shader has too
 //!   few uniforms for real skeletons.
 
+pub mod clip;
 pub mod controller;
 #[cfg(feature = "scene")]
 pub mod scene;
 #[cfg(feature = "script")]
 pub mod script;
 
+pub use clip::{AnimClip, AnimClips, Animation, Curve, Interp, Key};
 pub use controller::{ClipEvent, ControllerData, ControllerState, LayerBlending};
 use std::sync::Arc;
 
@@ -348,12 +350,16 @@ pub struct AnimationPlugin {
 impl Plugin for AnimationPlugin {
     fn build(&mut self, _ctx: &mut Context) {
         #[cfg(feature = "scene")]
-        goat_scene::registry(_ctx).component(scene::CODEC);
+        {
+            goat_scene::registry(_ctx).component(scene::CODEC).component(goat_scene::serde_codec::<Animation>("Animation"));
+            goat_scene::registry(_ctx).describe("Animation", goat_scene::ComponentInfo::new("Miscellaneous/Animation").asset("clip", "animation").tip("clip", "An .anim.json clip (Window ▸ Animation)"));
+        }
         #[cfg(feature = "script")]
         script::register(goat_script::extensions(_ctx));
     }
 
     fn update(&mut self, ctx: &mut Context) {
+        play_authored_clips(ctx);
         let dt = ctx.time.delta;
         let Some(assets) = ctx.resources.get::<AssetServer>() else { return };
         let roots: Vec<Entity> = ctx.world.query::<&Animator>().without::<&goat_runtime::InactiveInHierarchy>().iter().map(|(e, _)| e).collect();
@@ -600,4 +606,84 @@ mod tests {
         assert!(set.contains(&first) && model.nodes[first].children.iter().all(|c| set.contains(c)));
         assert!(set.len() < model.nodes.len() || model.roots.contains(&first));
     }
+}
+
+/// The clip of an `.anim.json` key (loaded once).
+pub fn load_anim_clip(ctx: &mut Context, key: &str) -> Option<Arc<AnimClip>> {
+    if let Some(c) = ctx.resources.get::<AnimClips>().and_then(|c| c.0.get(key)) {
+        return Some(c.clone());
+    }
+    let text = ctx.resources.get::<AssetServer>()?.io.read_string(key).ok()?;
+    match AnimClip::parse(&text) {
+        Ok(c) => {
+            let c = Arc::new(c);
+            ctx.resources.get_or_default::<AnimClips>().0.insert(key.to_string(), c.clone());
+            Some(c)
+        }
+        Err(e) => {
+            goat_core::warn!("{key}: {e}");
+            None
+        }
+    }
+}
+
+/// Animation components: advances and samples their authored clip.
+fn play_authored_clips(ctx: &mut Context) {
+    let dt = ctx.time.delta;
+    let list: Vec<(Entity, Option<String>)> = ctx
+        .world
+        .query_mut::<&mut Animation>()
+        .without::<&goat_runtime::InactiveInHierarchy>()
+        .into_iter()
+        .map(|(e, a)| {
+            if a.playing.is_none() && a.play_automatically && !a.clip.is_empty() && a.time == 0.0 {
+                let c = a.clip.clone();
+                a.play(&c);
+            }
+            a.time += dt * a.speed;
+            (e, a.playing.clone())
+        })
+        .collect();
+    for (e, key) in list {
+        let Some(key) = key else { continue };
+        let Some(clip) = load_anim_clip(ctx, &key) else { continue };
+        let t = ctx.world.get::<&Animation>(e).map(|a| a.time).unwrap_or(0.0);
+        if !clip.looping && t > clip.duration() {
+            if let Ok(mut a) = ctx.world.get::<&mut Animation>(e) {
+                a.time = clip.duration();
+            }
+        }
+        let samples = clip::sample_clip(ctx.world, e, &clip, t);
+        apply_component_samples(ctx, &samples);
+    }
+}
+
+/// Transform values directly, component numbers through the scene codecs (feature `scene`).
+pub fn apply_component_samples(ctx: &mut Context, samples: &[(Entity, String, f32)]) {
+    #[cfg(feature = "scene")]
+    {
+        let registry = ctx.resources.take::<goat_scene::SceneRegistry>();
+        let mut pending: Vec<(Entity, String, Vec<String>, f32)> = Vec::new();
+        clip::apply_samples(ctx.world, samples, |_, e, comp, path, v| pending.push((e, comp.to_string(), path.iter().map(|s| s.to_string()).collect(), v)));
+        if let (Some(reg), false) = (registry.as_ref(), pending.is_empty()) {
+            for (e, comp, path, v) in pending {
+                let Some(codec) = reg.find_component(&comp).copied() else { continue };
+                let value = ctx.resources.get::<AssetServer>().and_then(|a| (codec.save)(&goat_scene::SaveContext { world: ctx.world, assets: a }, e));
+                let Some(mut value) = value else { continue };
+                let parts: Vec<&str> = path.iter().map(String::as_str).collect();
+                if !clip::set_json_number(&mut value, &parts, v) {
+                    continue;
+                }
+                if let Some(assets) = ctx.resources.get_mut::<AssetServer>() {
+                    let mut lc = goat_scene::LoadContext { world: ctx.world, gfx: ctx.gfx, assets, source: "animation" };
+                    let _ = (codec.load)(&mut lc, e, &value);
+                }
+            }
+        }
+        if let Some(r) = registry {
+            ctx.resources.put_back(r);
+        }
+    }
+    #[cfg(not(feature = "scene"))]
+    clip::apply_samples(ctx.world, samples, |_, _, _, _, _| {});
 }
