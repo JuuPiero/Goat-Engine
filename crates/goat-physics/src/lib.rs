@@ -663,21 +663,31 @@ impl Plugin for PhysicsPlugin {
             .component(goat_scene::serde_codec::<Collider>("Collider"))
             .component(goat_scene::serde_codec::<Joint>("Joint"))
             .component(goat_scene::serde_codec::<CharacterController>("CharacterController"))
-            .component(goat_scene::serde_codec::<ConstantForce>("ConstantForce"));
+            .component(goat_scene::serde_codec::<ConstantForce>("ConstantForce"))
+            .component(goat_scene::serde_codec::<PhysicsRaycaster>("PhysicsRaycaster"));
         #[cfg(feature = "scene")]
         goat_scene::registry(ctx).describe("ConstantForce", goat_scene::ComponentInfo::new("Physics/Constant Force").requires(&["RigidBody"]));
+        #[cfg(feature = "scene")]
+        goat_scene::registry(ctx).describe("PhysicsRaycaster", goat_scene::ComponentInfo::new("Event/Physics Raycaster").requires(&["Camera"]).kind("event_mask", "mask"));
         #[cfg(feature = "script")]
         script::register(goat_script::extensions(ctx));
     }
     fn fixed_update(&mut self, ctx: &mut Context) {
         load_meshes(ctx);
         let dt = ctx.time.delta;
+        let mut from = 0;
         if let Some(p) = ctx.resources.get_mut::<Physics>() {
+            from = p.events.len();
             apply_constant_forces(ctx.world, p, dt);
             p.step(ctx.world, dt);
         }
+        #[cfg(feature = "script")]
+        script::send_collision_messages(ctx, from);
+        let _ = from;
     }
     fn update(&mut self, ctx: &mut Context) {
+        #[cfg(feature = "script")]
+        script::send_pointer_messages(ctx);
         // behaviours had this frame to read the events
         if let Some(p) = ctx.resources.get_mut::<Physics>() {
             p.events.clear();
@@ -908,5 +918,20 @@ mod tests {
         }
         let pos = w.get::<&Transform>(hero).unwrap().position;
         assert!(pos.z > 4.0 && (pos.y - 1.2).abs() < 0.08, "climbed the 0.2 m step: {pos}");
+    }
+}
+
+/// On a camera: pointer events (onPointerEnter / Exit / Down / Up / Click) reach scripts on the
+/// colliders under the pointer (Unity's PhysicsRaycaster; OnMouse* callbacks work without it).
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct PhysicsRaycaster {
+    /// Layers the pointer can hit.
+    pub event_mask: u32,
+}
+
+impl Default for PhysicsRaycaster {
+    fn default() -> Self {
+        PhysicsRaycaster { event_mask: u32::MAX }
     }
 }

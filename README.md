@@ -545,6 +545,8 @@ export default class Hover extends Behaviour {
 }
 ```
 
+Callback sự kiện như Unity (gửi trước `update` của frame sau): `onCollisionEnter` / `Stay` / `Exit` (nhận `Collision`: `gameObject`, `contacts`, `relativeVelocity`), `onTriggerEnter` / `Stay` / `Exit` (nhận GameObject kia) và bản `2D` (`onCollisionEnter2D`...); con trỏ trên collider: `onMouseEnter` / `Over` / `Exit` / `Down` / `Drag` / `Up` / `UpAsButton` (luôn có), `onPointerEnter` / `Exit` / `Down` / `Up` / `Click` (nhận `PointerEventData`) khi camera dưới con trỏ có component **Physics Raycaster** / **Physics 2D Raycaster** (Add Component ▸ Event). Con trỏ = màn hình cảm ứng dưới của 3DS / chuột. Từ Rust: `goat_script::send_message(resources, entity, "onX", arg)`; tia từ màn hình: `goat_runtime::screen_point_to_ray` (Camera.ScreenPointToRay).
+
 API:
 - Cơ bản: `Vector2`, `Vector3`, `Quaternion`, `Transform` (position, eulerAngles, rotation, localScale, translate, rotate, lookAt, parent, `do*` tween), `GameObject` (find, create, instantiate, destroy, name, get / set / patch / removeComponent, call), `Behaviour` / `MonoBehaviour` (+ startCoroutine).
 - Thời gian, input, log: `Time` (+ timeScale, unscaled), `Input` (getButton / Down / Up, stick, pointer, action), `Debug` (và `console`), `Mathf`, `Application.quit`.

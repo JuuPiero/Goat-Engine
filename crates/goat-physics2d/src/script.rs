@@ -1,4 +1,4 @@
-﻿//! 2D physics calls for scripts (feature `script`); GameObjects come back as GameObjects.
+//! 2D physics calls for scripts (feature `script`); GameObjects come back as GameObjects.
 //!
 //! - `Physics2D.raycast(origin, direction, maxDistance?, layerMask?)` → `{ gameObject, point, normal, distance }` | null
 //! - `Physics2D.overlapPoint(point)` → GameObject | null, `Physics2D.overlapCircle(center, radius, layerMask?)` → GameObjects
@@ -94,4 +94,73 @@ pub fn register(x: &mut goat_script::Extensions) {
         .add("Physics2D.gravity", gravity)
         .add("Rigidbody2D.addImpulse", add_impulse)
         .add("Rigidbody2D.addForce", add_force);
+}
+
+/// Unity's collision / trigger callbacks for scripts (onCollisionEnter2D / Stay / Exit,
+/// onTriggerEnter2D / Stay / Exit): the events of the last step as messages to both entities,
+/// Stay for every pair still touching.
+pub(crate) fn send_collision_messages(ctx: &mut goat_runtime::Context, from: usize) {
+    use crate::CollisionKind2D as K;
+    #[derive(Default)]
+    struct Touching(std::collections::HashSet<(Entity, Entity, bool)>);
+    let events: Vec<crate::CollisionEvent2D> = match ctx.resources.get::<crate::Physics2D>() {
+        Some(p) => p.events.get(from..).map(|s| s.to_vec()).unwrap_or_default(),
+        None => return,
+    };
+    let mut touching = std::mem::take(&mut ctx.resources.get_or_default::<Touching>().0);
+    let mut fresh = std::collections::HashSet::new();
+    let mut out: Vec<(Entity, String, Value)> = Vec::new();
+    let both = |a: Entity, b: Entity, name: &str, out: &mut Vec<(Entity, String, Value)>| {
+        out.push((a, name.to_string(), serde_json::json!({ "other": goat_script::entity_json(b) })));
+        out.push((b, name.to_string(), serde_json::json!({ "other": goat_script::entity_json(a) })));
+    };
+    for ev in events {
+        let (trigger, enter) = match ev.kind {
+            K::Enter => (false, true),
+            K::Exit => (false, false),
+            K::TriggerEnter => (true, true),
+            K::TriggerExit => (true, false),
+        };
+        let what = if trigger { "Trigger" } else { "Collision" };
+        if enter {
+            touching.insert((ev.a, ev.b, trigger));
+            fresh.insert((ev.a, ev.b, trigger));
+            both(ev.a, ev.b, &format!("on{what}Enter2D"), &mut out);
+        } else {
+            touching.remove(&(ev.a, ev.b, trigger));
+            touching.remove(&(ev.b, ev.a, trigger));
+            both(ev.a, ev.b, &format!("on{what}Exit2D"), &mut out);
+        }
+    }
+    touching.retain(|(a, b, _)| ctx.world.contains(*a) && ctx.world.contains(*b));
+    for (a, b, trigger) in touching.iter().copied() {
+        if !fresh.contains(&(a, b, trigger)) {
+            both(a, b, if trigger { "onTriggerStay2D" } else { "onCollisionStay2D" }, &mut out);
+        }
+    }
+    ctx.resources.get_or_default::<Touching>().0 = touching;
+    for (e, n, v) in out {
+        goat_script::send_message(ctx.resources, e, &n, v);
+    }
+}
+
+/// Pointer callbacks on colliders (OnMouse*; onPointer* with a [`crate::Physics2DRaycaster`] on the camera
+/// under the pointer), once per frame.
+pub(crate) fn send_pointer_messages(ctx: &mut goat_runtime::Context) {
+    let hit_and_events = (|| {
+        let p = ctx.input.pointer?;
+        let display = goat_runtime::pointer_display(ctx.displays);
+        let cam = goat_runtime::camera_at(ctx.world, ctx.displays, display, p)?;
+        let raycaster = ctx.world.get::<&crate::Physics2DRaycaster>(cam).ok().map(|r| r.event_mask);
+        let ray = goat_runtime::screen_point_to_ray(ctx.world, ctx.displays, cam, p)?;
+        let mask = raycaster.unwrap_or(u32::MAX);
+        let _ = mask;
+        let hit = {
+            let at = ray.at_z(0.0).unwrap_or(ray.origin);
+            ctx.resources.get::<crate::Physics2D>().and_then(|ph| ph.overlap_point(goat_core::math::Vec2::new(at.x, at.y))).map(|e| goat_script::pointer::PointerHit { entity: e, world: at, distance: (at - ray.origin).length() })
+        };
+        Some((hit, raycaster.is_some()))
+    })();
+    let (hit, events) = hit_and_events.unwrap_or((None, false));
+    goat_script::pointer::update_pointer(ctx.resources, ctx.input, "2d", hit, events);
 }

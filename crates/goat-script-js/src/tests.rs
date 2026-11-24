@@ -432,3 +432,68 @@ fn scene_manager_loads_build_scenes() {
     assert!(find(&e, "Menu").is_none(), "the menu scene was unloaded");
     assert!(find(&e, "level1:1").is_some(), "level 1 loaded and its script saw the active scene");
 }
+
+/// Unity's callbacks: onCollisionEnter / onTriggerEnter from physics, onMouseDown / onPointerClick
+/// from the pointer over a collider (PhysicsRaycaster on the camera).
+#[test]
+fn collision_trigger_and_pointer_messages() {
+    struct M;
+    fn mio() -> AssetIo {
+        let io = AssetIo::new("/nonexistent-goat-test-root");
+        io.put(
+            "scripts/Probe.ts",
+            br#"
+import { Behaviour } from 'goat';
+export default class Probe extends Behaviour {
+  log: string[] = [];
+  onCollisionEnter(c: any) { this.log.push('hit:' + c.gameObject.name); this.flush(); }
+  onTriggerEnter(o: any) { this.log.push('trigger:' + o.name); this.flush(); }
+  onMouseDown() { this.log.push('mouseDown'); this.flush(); }
+  onPointerClick(e: any) { this.log.push('click:' + e.pointerCurrentRaycast.gameObject.name); this.flush(); }
+  flush() { this.gameObject.name = this.log.join(','); }
+}
+"#
+            .to_vec(),
+        );
+        io
+    }
+    impl Game for M {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(mio()));
+            let w = &mut *ctx.world;
+            // ground + a falling box with the probe script, through a trigger zone
+            w.spawn((Name("Ground".into()), Transform::from_position(Vec3::new(0.0, -0.5, 0.0)).with_scale(Vec3::new(20.0, 1.0, 20.0)), GlobalTransform::default(), goat_physics::Collider::unit_box()));
+            w.spawn((Name("Zone".into()), Transform::from_position(Vec3::new(0.0, 2.0, 0.0)).with_scale(Vec3::new(3.0, 1.0, 3.0)), GlobalTransform::default(), goat_physics::Collider::unit_box().trigger()));
+            w.spawn((Name("Faller".into()), Transform::from_position(Vec3::new(0.0, 4.0, 0.0)), GlobalTransform::default(), goat_physics::RigidBody::dynamic(), goat_physics::Collider::unit_box(), Script::one("scripts/Probe.ts")));
+            // a clickable box in front of a camera on the touch screen
+            w.spawn((Name("Button3D".into()), Transform::from_position(Vec3::new(30.0, 0.0, 0.0)), GlobalTransform::default(), goat_physics::Collider::unit_box(), Script::one("scripts/Probe.ts")));
+            w.spawn((
+                Name("Cam".into()),
+                Transform::from_position(Vec3::new(30.0, 0.0, 5.0)),
+                GlobalTransform::default(),
+                goat_runtime::Camera { display: goat_gfx::Display::Secondary, ..Default::default() },
+                goat_physics::PhysicsRaycaster::default(),
+            ));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(goat_physics::PhysicsPlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(mio())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(M);
+    for i in 0..150 {
+        e.input.begin_frame();
+        // tap the middle of the touch screen (320 x 240) around frame 100
+        if (100..104).contains(&i) {
+            e.input.pointer = Some(goat_core::math::Vec2::new(160.0, 120.0));
+            e.input.pointer_down = i < 103;
+        } else {
+            e.input.pointer = None;
+            e.input.pointer_down = false;
+        }
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    let names: Vec<String> = e.world.query::<&Name>().iter().map(|(_, n)| n.0.clone()).collect();
+    assert!(names.iter().any(|n| n.contains("trigger:Zone") && n.contains("hit:Ground")), "{names:?}");
+    assert!(names.iter().any(|n| n.contains("mouseDown") && n.contains("click:")), "{names:?}");
+}

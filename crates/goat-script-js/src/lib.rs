@@ -463,6 +463,8 @@ pub struct JsHost {
     apply_props: Option<JsObject>,
     /// goat.js `__tick` (coroutines, awaitables, tween callbacks), once the module is loaded.
     tick: Option<JsObject>,
+    /// goat.js `__message` (SendMessage-like callbacks: collisions, triggers, pointer events).
+    message: Option<JsObject>,
 }
 
 impl JsHost {
@@ -484,7 +486,7 @@ impl JsHost {
         }
         let natives = natives.build();
         ctx.register_global_property(js_string!("__goat"), natives, Attribute::all()).expect("__goat");
-        JsHost { ctx, loader, handles: Rc::new(RefCell::new(Handles::default())), classes: HashMap::new(), instances: HashMap::new(), next: 0, apply_props: None, tick: None }
+        JsHost { ctx, loader, handles: Rc::new(RefCell::new(Handles::default())), classes: HashMap::new(), instances: HashMap::new(), next: 0, apply_props: None, tick: None, message: None }
     }
 
     /// Runs `f` with the bridge to `api` installed.
@@ -534,6 +536,7 @@ impl JsHost {
             let goat = self.evaluate("goat")?;
             self.apply_props = goat.get(js_string!("__applyProps"), &mut self.ctx).ok().and_then(|v| v.as_object());
             self.tick = goat.get(js_string!("__tick"), &mut self.ctx).ok().and_then(|v| v.as_object());
+            self.message = goat.get(js_string!("__message"), &mut self.ctx).ok().and_then(|v| v.as_object());
         }
         self.classes.insert(src.to_string(), class.clone());
         Ok(class)
@@ -603,6 +606,23 @@ impl ScriptHost for JsHost {
 
     fn destroy(&mut self, instance: u32) {
         self.instances.remove(&instance);
+    }
+
+    fn message(&mut self, api: &mut Api, instance: u32, _entity: Entity, name: &str, arg: &Value) -> Result<(), String> {
+        let (Some(obj), Some(dispatch)) = (self.instances.get(&instance).map(|i| i.object.clone()), self.message.clone()) else { return Ok(()) };
+        let name = name.to_string();
+        let mut arg = arg.clone();
+        self.enter(api, |h| {
+            // entities → GameObject handles
+            map_objects(&mut arg, &mut |o| {
+                let e = goat_script::entity_arg(&Value::Object(o.clone()))?;
+                Some(serde_json::json!({ "$go": h.handles.borrow_mut().of(e) }))
+            });
+            let a = JsValue::from_json(&arg, &mut h.ctx).map_err(|e| h.describe(e))?;
+            dispatch.call(&JsValue::undefined(), &[obj.into(), JsValue::from(js_string!(name.as_str())), a], &mut h.ctx).map_err(|e| h.describe(e))?;
+            h.ctx.run_jobs().map_err(|e| h.describe(e))?;
+            Ok(())
+        })
     }
 
     fn tick(&mut self, api: &mut Api) -> Result<(), String> {

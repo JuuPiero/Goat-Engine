@@ -96,6 +96,7 @@ Mọi ngôn ngữ đi qua cùng một lõi (`goat-script`: component `Script`, t
   - ✅ Constant Force (3D / 2D), Area / Point / Buoyancy Effector 2D, Target Joint 2D
   - ✅ Sprite Mask (hình chữ nhật, Visible Inside / Outside)
   - ✅ Platform / Surface Effector 2D, Wheel / Friction / Relative Joint 2D
+  - ✅ Callback cho script: onCollision* / onTrigger* (3D + 2D), onMouse*, onPointer* (Physics Raycaster / Physics 2D Raycaster), Camera.ScreenPointToRay
   - ⬜ Đợt 2 — component lõi còn thiếu: Constant Force, joint 3D đủ loại (Character / Configurable) và joint / effector 2D, Sprite Mask, Light / Reflection Probe đơn giản, Animation (legacy), UI: Raw Image, Toggle Group, Scrollbar, Rect Mask 2D, Shadow / Outline, Grid Layout, Aspect Ratio Fitter, Canvas Group, raycaster; mesh dựng sẵn capsule / cylinder / quad
   - ✅ Pause / Step, cửa sổ Profiler (đồng hồ cho wasm, lịch sử frame)
   - ✅ Gizmo của component trong Scene view (collider, camera, đèn, audio, navigation)

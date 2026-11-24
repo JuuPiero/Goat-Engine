@@ -349,6 +349,42 @@ namespace GoatEngine
         public static NavMeshPath CalculatePath(Vector3 source, Vector3 target, int areaMask = -1) => null!;
         public static NavMeshHit Raycast(Vector3 source, Vector3 target) => null!;
     }
+    /// <summary>A contact of a collision.</summary>
+    public class ContactPoint
+    {
+        public Vector3 point;
+        public Vector3 normal;
+    }
+
+    /// <summary>What OnCollisionEnter / Stay / Exit (and the 2D ones) receive.</summary>
+    public class Collision
+    {
+        public GameObject gameObject = null!;
+        public Transform transform => null!;
+        public ContactPoint[] contacts = [];
+        public Vector3 relativeVelocity;
+        public int contactCount => 0;
+        public ContactPoint GetContact(int index) => null!;
+    }
+
+    /// <summary>The raycast result of a pointer event.</summary>
+    public class RaycastResult
+    {
+        public GameObject gameObject = null!;
+        public Vector3 worldPosition;
+        public float distance;
+    }
+
+    /// <summary>What OnPointerEnter / Exit / Down / Up / Click receive (PhysicsRaycaster on the camera).</summary>
+    public class PointerEventData
+    {
+        public Vector2 position;
+        public int button;
+        public int clickCount;
+        public RaycastResult pointerCurrentRaycast = null!;
+        public GameObject pointerPress => null!;
+    }
+
     public enum LoadSceneMode { Single, Additive }
 
     /// <summary>A loaded scene (Unity's Scene struct, the parts GoatEngine has).</summary>

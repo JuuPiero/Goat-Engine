@@ -15,6 +15,7 @@
 //!   frame (after the Rust behaviours), FixedUpdate at the fixed rate, OnDestroy when the entity
 //!   or the script goes away. A script that throws is logged and disabled.
 
+pub mod pointer;
 use std::collections::HashMap;
 
 use goat_core::math::{EulerRot, Quat, Vec2, Vec3};
@@ -99,6 +100,11 @@ pub trait ScriptHost: 'static {
     fn call(&mut self, api: &mut Api, instance: u32, entity: Entity, method: Method) -> Result<(), String>;
     /// Forgets an instance (after OnDestroy).
     fn destroy(&mut self, instance: u32);
+    /// A message (Unity's SendMessage: `onCollisionEnter`, `onTriggerEnter`, `onPointerClick`...):
+    /// calls `name(arg)` if the script defines it. Entities in `arg` are `{"$entity": bits}`.
+    fn message(&mut self, _api: &mut Api, _instance: u32, _entity: Entity, _name: &str, _arg: &Value) -> Result<(), String> {
+        Ok(())
+    }
     /// A source changed on disk: the next instances use the new code.
     fn invalidate(&mut self, _src: &str) {}
     /// Once per frame after every Update (Unity runs coroutines there): language-side
@@ -201,6 +207,16 @@ fn register_core(x: &mut Extensions) {
         .add("GameObject.setTag", set_tag)
         .add("GameObject.findWithTag", find_one)
         .add("GameObject.findGameObjectsWithTag", find_all);
+}
+
+/// Messages for scripts, delivered at the next Update (Unity's collision / trigger / pointer
+/// callbacks): `(entity, method name, argument)`. Physics, UI and input systems push them.
+#[derive(Default)]
+pub struct Messages(pub Vec<(Entity, String, Value)>);
+
+/// Queues `name(arg)` for the scripts of `entity`.
+pub fn send_message(resources: &mut goat_runtime::Resources, entity: Entity, name: &str, arg: Value) {
+    resources.get_or_default::<Messages>().0.push((entity, name.to_string(), arg));
 }
 
 /// `goat_script::extensions(ctx).add(...)`.
@@ -525,6 +541,24 @@ impl ScriptPlugin {
         }
     }
 
+    /// Delivers the queued messages ([`Messages`]) to the scripts of their entities.
+    fn deliver(&mut self, ctx: &mut Context) {
+        let Some(list) = ctx.resources.get_mut::<Messages>().map(|m| std::mem::take(&mut m.0)) else { return };
+        for (entity, name, arg) in list {
+            for i in 0..self.instances.len() {
+                let inst = &self.instances[i];
+                if inst.entity != entity || inst.failed || !inst.started || ctx.world.get::<&goat_runtime::InactiveInHierarchy>(entity).is_ok() {
+                    continue;
+                }
+                let (host, id) = (inst.host, inst.id);
+                let mut api = Api::new(ctx);
+                if let Err(err) = self.hosts[host].message(&mut api, id, entity, &name, &arg) {
+                    goat_core::error!("{} {name}: {err}", self.instances[i].src);
+                }
+            }
+        }
+    }
+
     /// Instances alive (tests, the editor's stats).
     pub fn instance_count(&self) -> usize {
         self.instances.iter().filter(|i| !i.failed).count()
@@ -548,6 +582,7 @@ impl Plugin for ScriptPlugin {
     }
     fn update(&mut self, ctx: &mut Context) {
         self.sync(ctx);
+        self.deliver(ctx);
         self.run(ctx, Method::Update);
         for h in self.hosts.iter_mut() {
             let mut api = Api::new(ctx);

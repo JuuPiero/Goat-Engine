@@ -10,6 +10,7 @@
 //! Platform crates feed input and time, and give the engine a [`GraphicsBackend`]; this crate never
 //! touches a window, a GPU or an OS API.
 
+pub mod camera_ray;
 pub mod components;
 pub mod coroutine;
 pub mod engine;
@@ -20,6 +21,7 @@ pub mod resources;
 pub mod script;
 pub mod settings;
 
+pub use camera_ray::{camera_at, pointer_display, screen_point_to_ray, Ray};
 pub use components::*;
 pub use coroutine::{start_coroutine, stop_coroutine, stop_coroutines_of, CoroutineId, Coroutines, Steps, TimeScale, Yield};
 pub use engine::{Context, Engine, Game};

@@ -651,7 +651,8 @@ impl Plugin for Physics2DPlugin {
             .component(goat_scene::serde_codec::<forces::BuoyancyEffector2D>("BuoyancyEffector2D"))
             .component(goat_scene::serde_codec::<forces::TargetJoint2D>("TargetJoint2D"))
             .component(goat_scene::serde_codec::<forces::PlatformEffector2D>("PlatformEffector2D"))
-            .component(goat_scene::serde_codec::<forces::SurfaceEffector2D>("SurfaceEffector2D"));
+            .component(goat_scene::serde_codec::<forces::SurfaceEffector2D>("SurfaceEffector2D"))
+            .component(goat_scene::serde_codec::<Physics2DRaycaster>("Physics2DRaycaster"));
         #[cfg(feature = "scene")]
         {
             use goat_scene::ComponentInfo as I;
@@ -660,6 +661,7 @@ impl Plugin for Physics2DPlugin {
             r.describe("ConstantForce2D", I::new("Physics 2D/Constant Force 2D").requires(&["Rigidbody2D"]));
             r.describe("AreaEffector2D", I::new("Physics 2D/Area Effector 2D").requires(&["Collider2D"]).range("force_angle", -360.0, 360.0));
             r.describe("PointEffector2D", I::new("Physics 2D/Point Effector 2D").requires(&["Collider2D"]).options("force_mode", &["Constant", "InverseLinear", "InverseSquared"]).tip("force_magnitude", "Positive pushes away, negative attracts"));
+            r.describe("Physics2DRaycaster", I::new("Event/Physics 2D Raycaster").requires(&["Camera"]).kind("event_mask", "mask"));
             r.describe("PlatformEffector2D", I::new("Physics 2D/Platform Effector 2D").requires(&["Collider2D"]).range("surface_arc", 0.0, 360.0).range("rotational_offset", -180.0, 180.0).tip("use_one_way", "Solid only from the surface side: bodies jump up through it"));
             r.describe("SurfaceEffector2D", I::new("Physics 2D/Surface Effector 2D").requires(&["Collider2D"]).tip("speed", "Conveyor speed along the collider's local X"));
             r.describe("BuoyancyEffector2D", I::new("Physics 2D/Buoyancy Effector 2D").requires(&["Collider2D"]).tip("surface_level", "Local Y of the fluid surface").tip("density", "Bodies float when the fluid is denser than 1"));
@@ -669,14 +671,21 @@ impl Plugin for Physics2DPlugin {
     }
     fn fixed_update(&mut self, ctx: &mut Context) {
         let dt = ctx.time.delta;
+        let mut from = 0;
         if let Some(p) = ctx.resources.get_mut::<Physics2D>() {
+            from = p.events.len();
             let mut seed = p.effector_seed;
             forces::apply(ctx.world, p, dt, &mut seed);
             p.effector_seed = seed;
             p.step(ctx.world, dt);
         }
+        #[cfg(feature = "script")]
+        script::send_collision_messages(ctx, from);
+        let _ = from;
     }
     fn update(&mut self, ctx: &mut Context) {
+        #[cfg(feature = "script")]
+        script::send_pointer_messages(ctx);
         if let Some(p) = ctx.resources.get_mut::<Physics2D>() {
             p.events.clear();
         }
@@ -765,5 +774,20 @@ mod tests {
         assert!(((bp - Vec2::new(18.0, 0.0)).length() - 2.0).abs() < 0.05, "pendulum length kept: {bp}");
         assert_eq!(p.joint_count(), 1);
         assert_eq!(p.overlap_circle(b.truncate(), 0.05, u32::MAX), vec![ball]);
+    }
+}
+
+/// On a camera: pointer events (onPointerEnter / Exit / Down / Up / Click) reach scripts on the
+/// colliders under the pointer (Unity's Physics2DRaycaster; OnMouse* callbacks work without it).
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Physics2DRaycaster {
+    /// Layers the pointer can hit.
+    pub event_mask: u32,
+}
+
+impl Default for Physics2DRaycaster {
+    fn default() -> Self {
+        Physics2DRaycaster { event_mask: u32::MAX }
     }
 }

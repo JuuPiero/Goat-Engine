@@ -556,6 +556,46 @@ function tickUi() {
 }
 
 /** Host: once per frame after every Update (crates/goat-script-js JsHost::tick). */
+// ------------------------------------------------------------------ messages
+// Unity's callbacks, delivered before Update (the engine queues them: goat_script::Messages):
+//   onCollisionEnter / Stay / Exit (Collision), onTriggerEnter / Stay / Exit (Collider) and their
+//   2D variants, onPointerEnter / Exit / Down / Up / Click (PointerEventData), onMouseDown / Up /
+//   Enter / Exit / UpAsButton (no argument).
+
+/** What a collision callback receives (Unity's Collision / Collision2D). */
+export class Collision {
+  constructor(a) {
+    this.gameObject = a.other;
+    this.contacts = (a.contacts ?? []).map((c) => ({ point: v3(c.point), normal: v3(c.normal) }));
+    this.relativeVelocity = v3(a.relativeVelocity ?? [0, 0, 0]);
+  }
+  get transform() { return this.gameObject?.transform; }
+  get collider() { return this.gameObject; }
+  getContact(i) { return this.contacts[i]; }
+  get contactCount() { return this.contacts.length; }
+}
+
+/** Unity's PointerEventData (onPointer* callbacks). */
+export class PointerEventData {
+  constructor(a) {
+    this.position = new Vector2(a.position[0], a.position[1]);
+    this.button = a.button ?? 0;
+    this.clickCount = a.clickCount ?? 1;
+    this.pointerCurrentRaycast = { gameObject: a.gameObject ?? null, worldPosition: v3(a.worldPosition ?? [0, 0, 0]), distance: a.distance ?? 0 };
+  }
+  get pointerPress() { return this.pointerCurrentRaycast.gameObject; }
+}
+
+export function __message(obj, name, arg) {
+  const f = obj[name];
+  if (typeof f !== 'function') return;
+  const a = fromNative(arg);
+  if (name.startsWith('onCollision')) f.call(obj, new Collision(a));
+  else if (name.startsWith('onTrigger')) f.call(obj, a.other);
+  else if (name.startsWith('onPointer')) f.call(obj, new PointerEventData(a));
+  else f.call(obj, a);
+}
+
 export function __tick() {
   if (uiListeners.length) tickUi();
   if (animListeners.length) tickAnimation();

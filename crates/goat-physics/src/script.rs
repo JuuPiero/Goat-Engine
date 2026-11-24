@@ -107,3 +107,68 @@ pub fn register(x: &mut goat_script::Extensions) {
         .add("CharacterController.move", move_character)
         .add("CharacterController.isGrounded", is_grounded);
 }
+
+/// Unity's collision / trigger callbacks for scripts (onCollisionEnter / Stay / Exit,
+/// onTriggerEnter / Stay / Exit): the events of the last step as messages to both entities,
+/// Stay for every pair still touching.
+pub(crate) fn send_collision_messages(ctx: &mut goat_runtime::Context, from: usize) {
+    use crate::CollisionKind as K;
+    #[derive(Default)]
+    struct Touching(std::collections::HashSet<(Entity, Entity, bool)>);
+    let events: Vec<crate::CollisionEvent> = match ctx.resources.get::<crate::Physics>() {
+        Some(p) => p.events.get(from..).map(|s| s.to_vec()).unwrap_or_default(),
+        None => return,
+    };
+    let mut touching = std::mem::take(&mut ctx.resources.get_or_default::<Touching>().0);
+    let mut fresh = std::collections::HashSet::new();
+    let mut out: Vec<(Entity, String, Value)> = Vec::new();
+    let both = |a: Entity, b: Entity, name: &str, out: &mut Vec<(Entity, String, Value)>| {
+        out.push((a, name.to_string(), serde_json::json!({ "other": goat_script::entity_json(b) })));
+        out.push((b, name.to_string(), serde_json::json!({ "other": goat_script::entity_json(a) })));
+    };
+    for ev in events {
+        let (trigger, enter) = match ev.kind {
+            K::Enter => (false, true),
+            K::Exit => (false, false),
+            K::TriggerEnter => (true, true),
+            K::TriggerExit => (true, false),
+        };
+        let what = if trigger { "Trigger" } else { "Collision" };
+        if enter {
+            touching.insert((ev.a, ev.b, trigger));
+            fresh.insert((ev.a, ev.b, trigger));
+            both(ev.a, ev.b, &format!("on{what}Enter"), &mut out);
+        } else {
+            touching.remove(&(ev.a, ev.b, trigger));
+            touching.remove(&(ev.b, ev.a, trigger));
+            both(ev.a, ev.b, &format!("on{what}Exit"), &mut out);
+        }
+    }
+    touching.retain(|(a, b, _)| ctx.world.contains(*a) && ctx.world.contains(*b));
+    for (a, b, trigger) in touching.iter().copied() {
+        if !fresh.contains(&(a, b, trigger)) {
+            both(a, b, if trigger { "onTriggerStay" } else { "onCollisionStay" }, &mut out);
+        }
+    }
+    ctx.resources.get_or_default::<Touching>().0 = touching;
+    for (e, n, v) in out {
+        goat_script::send_message(ctx.resources, e, &n, v);
+    }
+}
+
+/// Pointer callbacks on colliders (OnMouse*; onPointer* with a [`crate::PhysicsRaycaster`] on the camera
+/// under the pointer), once per frame.
+pub(crate) fn send_pointer_messages(ctx: &mut goat_runtime::Context) {
+    let hit_and_events = (|| {
+        let p = ctx.input.pointer?;
+        let display = goat_runtime::pointer_display(ctx.displays);
+        let cam = goat_runtime::camera_at(ctx.world, ctx.displays, display, p)?;
+        let raycaster = ctx.world.get::<&crate::PhysicsRaycaster>(cam).ok().map(|r| r.event_mask);
+        let ray = goat_runtime::screen_point_to_ray(ctx.world, ctx.displays, cam, p)?;
+        let mask = raycaster.unwrap_or(u32::MAX);
+        let hit = ctx.resources.get::<crate::Physics>().and_then(|ph| ph.raycast_layers(ray.origin, ray.direction, 1000.0, mask)).map(|h| goat_script::pointer::PointerHit { entity: h.entity, world: h.point, distance: h.distance });
+        Some((hit, raycaster.is_some()))
+    })();
+    let (hit, events) = hit_and_events.unwrap_or((None, false));
+    goat_script::pointer::update_pointer(ctx.resources, ctx.input, "3d", hit, events);
+}
