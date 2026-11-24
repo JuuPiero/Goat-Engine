@@ -187,6 +187,15 @@ namespace GoatEngine
         public static GameObject Create(string name = "GameObject") => null!;
         public static GameObject Instantiate(string assetKey, GameObject? parent = null) => null!;
         public static void Destroy(GameObject? go) { }
+        public static GameObject? FindWithTag(string tag) => null;
+        public static GameObject? FindGameObjectWithTag(string tag) => null;
+        public static GameObject[] FindGameObjectsWithTag(string tag) => [];
+        /// <summary>Switches the object (and its children) on / off.</summary>
+        public void SetActive(bool on) { }
+        public bool activeSelf => true;
+        public bool activeInHierarchy => true;
+        public string tag { get; set; } = "Untagged";
+        public bool CompareTag(string tag) => false;
         public string name { get; set; } = "";
         public Transform transform => null!;
         public bool exists => true;

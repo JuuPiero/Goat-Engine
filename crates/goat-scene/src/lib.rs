@@ -52,11 +52,17 @@ pub struct SceneFile {
     pub entities: Vec<EntityEntry>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct EntityEntry {
     pub id: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// `false` = switched off (Unity's `m_IsActive`); omitted when active.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub active: bool,
+    /// Unity's tag (`Player`…); omitted when untagged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<u64>,
     /// With `parent` = a prefab instance: the id path of the real parent inside it.
@@ -199,6 +205,12 @@ fn spawn_file_depth(world: &mut World, gfx: &mut dyn GraphicsBackend, assets: &m
     for entry in &file.entities {
         let index = SceneIndex(NEXT_INDEX.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u64);
         let e = world.spawn((GlobalTransform::default(), index));
+        if !entry.active {
+            let _ = world.insert_one(e, goat_runtime::Inactive);
+        }
+        if let Some(t) = entry.tag.as_ref().filter(|t| !t.is_empty() && *t != "Untagged") {
+            let _ = world.insert_one(e, goat_runtime::Tag(t.clone()));
+        }
         if let Some(n) = &entry.name {
             let _ = world.insert_one(e, Name(n.clone()));
         }
@@ -275,7 +287,7 @@ fn spawn_file_depth(world: &mut World, gfx: &mut dyn GraphicsBackend, assets: &m
             .values()
             .map(|&e| {
                 let (components, scripts) = save_parts(&ctx, registry, e);
-                (e, PrefabBaseline { name: world.get::<&Name>(e).ok().map(|n| n.0.clone()), components, scripts })
+                (e, PrefabBaseline { name: world.get::<&Name>(e).ok().map(|n| n.0.clone()), active: world.get::<&goat_runtime::Inactive>(e).is_err(), components, scripts })
             })
             .collect();
         for (e, b) in baselines {
@@ -392,7 +404,11 @@ fn save_subset(world: &World, assets: &AssetServer, registry: &SceneRegistry, on
         let Some(target) = prefab::path_in_instance(world, &parents, g, root) else { continue };
         let (components, scripts) = save_parts(&ctx, registry, g);
         let name = world.get::<&Name>(g).ok().map(|n| n.0.clone());
+        let active = world.get::<&goat_runtime::Inactive>(g).is_err();
         let mut ov = PrefabOverride { target, ..Default::default() };
+        if active != base.active {
+            ov.active = Some(active);
+        }
         if name.is_some() && name != base.name {
             ov.name = name;
         }
@@ -411,6 +427,8 @@ fn save_subset(world: &World, assets: &AssetServer, registry: &SceneRegistry, on
     for &e in &entities {
         let mut entry = EntityEntry { id: ids[&e], ..Default::default() };
         entry.name = world.get::<&Name>(e).ok().map(|n| n.0.clone());
+        entry.active = world.get::<&goat_runtime::Inactive>(e).is_err();
+        entry.tag = world.get::<&goat_runtime::Tag>(e).ok().map(|t| t.0.clone());
         if let Some(&p) = parents.get(&e) {
             match ids.get(&p) {
                 Some(&id) => entry.parent = Some(id),
@@ -509,3 +527,16 @@ impl Plugin for ScenePlugin {
 
 #[cfg(test)]
 mod tests;
+
+impl Default for EntityEntry {
+    fn default() -> Self {
+        EntityEntry { id: 0, name: None, active: true, tag: None, parent: None, parent_target: Vec::new(), model: None, prefab: None, overrides: Vec::new(), components: Map::new(), scripts: Vec::new() }
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+fn is_true(b: &bool) -> bool {
+    *b
+}

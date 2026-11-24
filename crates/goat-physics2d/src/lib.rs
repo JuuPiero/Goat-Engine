@@ -377,12 +377,12 @@ impl Physics2D {
 
     /// One fixed step: sync from the world, simulate, write back.
     pub fn step(&mut self, world: &mut World, dt: f32) {
-        let gone: Vec<Entity> = self.tracked.keys().copied().filter(|&e| !world.contains(e) || world.get::<&Collider2D>(e).is_err()).collect();
+        let gone: Vec<Entity> = self.tracked.keys().copied().filter(|&e| !world.contains(e) || world.get::<&goat_runtime::InactiveInHierarchy>(e).is_ok() || world.get::<&Collider2D>(e).is_err()).collect();
         for e in gone {
             self.remove(e);
         }
         let new: Vec<(Entity, Option<Rigidbody2D>, Collider2D)> =
-            world.query::<(&Collider2D, Option<&Rigidbody2D>)>().iter().filter(|(e, _)| !self.tracked.contains_key(e)).map(|(e, (c, rb))| (e, rb.copied(), c.clone())).collect();
+            world.query::<(&Collider2D, Option<&Rigidbody2D>)>().without::<&goat_runtime::InactiveInHierarchy>().iter().filter(|(e, _)| !self.tracked.contains_key(e)).map(|(e, (c, rb))| (e, rb.copied(), c.clone())).collect();
         for (e, rb, c) in new {
             let m = world_matrix(world, e);
             self.add(e, &m, rb.as_ref(), &c);

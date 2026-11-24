@@ -68,7 +68,7 @@ impl Plugin for BlobShadowPlugin {
         }
         let Some(texture) = self.texture else { return };
         let Some(physics) = ctx.resources.get::<Physics>() else { return };
-        let casters: Vec<(Entity, BlobShadow, Vec3)> = ctx.world.query::<(&BlobShadow, &GlobalTransform)>().iter().map(|(e, (b, g))| (e, *b, g.0.w_axis.truncate())).collect();
+        let casters: Vec<(Entity, BlobShadow, Vec3)> = ctx.world.query::<(&BlobShadow, &GlobalTransform)>().without::<&goat_runtime::InactiveInHierarchy>().iter().map(|(e, (b, g))| (e, *b, g.0.w_axis.truncate())).collect();
         let mut quads = Vec::with_capacity(casters.len());
         for (e, b, p) in casters {
             // the ground under it (the caster's own colliders ignored)

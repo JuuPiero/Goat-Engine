@@ -31,6 +31,9 @@ pub struct PrefabOverride {
     pub target: Vec<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// SetActive override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub components: Map<String, Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -39,7 +42,7 @@ pub struct PrefabOverride {
 
 impl PrefabOverride {
     pub(crate) fn is_empty(&self) -> bool {
-        self.name.is_none() && self.components.is_empty() && self.scripts.is_none()
+        self.name.is_none() && self.active.is_none() && self.components.is_empty() && self.scripts.is_none()
     }
 }
 
@@ -52,6 +55,9 @@ pub(crate) fn merge_overrides(existing: &[PrefabOverride], mut new: Vec<PrefabOv
             Some(o) => {
                 if ov.name.is_some() {
                     o.name = ov.name;
+                }
+                if ov.active.is_some() {
+                    o.active = ov.active;
                 }
                 if !ov.components.is_empty() {
                     if let Value::Object(m) = compose(&Value::Object(std::mem::take(&mut o.components)), &Value::Object(ov.components)) {
@@ -78,6 +84,7 @@ pub struct PrefabSource(pub u64);
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrefabBaseline {
     pub name: Option<String>,
+    pub active: bool,
     pub components: Map<String, Value>,
     pub scripts: Vec<Value>,
 }
@@ -176,6 +183,9 @@ pub fn apply_overrides(file: &mut SceneFile, overrides: &[PrefabOverride], sourc
         if rest.is_empty() {
             if let Some(n) = &ov.name {
                 entry.name = Some(n.clone());
+            }
+            if let Some(a) = ov.active {
+                entry.active = a;
             }
             if !ov.components.is_empty() {
                 let mut v = Value::Object(std::mem::take(&mut entry.components));

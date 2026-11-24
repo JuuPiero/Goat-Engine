@@ -515,7 +515,7 @@ impl Plugin for TextPlugin {
 
     fn late_update(&mut self, ctx: &mut Context) {
         let Some(mut fonts) = ctx.resources.take::<Fonts>() else { return };
-        let texts: Vec<(Text, Mat4)> = ctx.world.query::<(&Text, &GlobalTransform)>().iter().filter(|(_, (t, _))| t.visible && !t.text.is_empty()).map(|(_, (t, g))| (t.clone(), g.0)).collect();
+        let texts: Vec<(Text, Mat4)> = ctx.world.query::<(&Text, &GlobalTransform)>().without::<&goat_runtime::InactiveInHierarchy>().iter().filter(|(_, (t, _))| t.visible && !t.text.is_empty()).map(|(_, (t, g))| (t.clone(), g.0)).collect();
         let mut quads = Vec::new();
         if let Some(assets) = ctx.resources.get::<AssetServer>() {
             for (t, m) in &texts {

@@ -554,6 +554,17 @@ export class EditorEngine {
         }
     }
     /**
+     * Unity's SetActive (the object and its children).
+     * @param {string} id
+     * @param {boolean} on
+     */
+    set_active(id, on) {
+        const val2 = +on;
+        const ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.editorengine_set_active(this.__wbg_ptr, ptr0, len0, val2);
+    }
+    /**
      * @param {string} id
      * @param {string} name
      * @param {string} json
@@ -604,6 +615,25 @@ export class EditorEngine {
             throw e;
         }
         wasm.editorengine_set_parent(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+    }
+    /**
+     * Sets the tag ("Untagged" / empty removes it).
+     * @param {string} id
+     * @param {string} tag
+     */
+    set_tag(id, tag) {
+        let ptr0, len0, ptr1, len1;
+        try {
+            ptr0 = passStringToWasm0(id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            len0 = WASM_VECTOR_LEN;
+            ptr1 = passStringToWasm0(tag, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            len1 = WASM_VECTOR_LEN;
+        } catch (e) {
+            if (ptr1) { wasm.__wbindgen_free(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_free(ptr0, len0 * 1, 1); }
+            throw e;
+        }
+        wasm.editorengine_set_tag(this.__wbg_ptr, ptr0, len0, ptr1, len1);
     }
     /**
      * @param {string} id

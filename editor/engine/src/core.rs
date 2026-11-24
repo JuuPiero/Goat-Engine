@@ -77,6 +77,10 @@ pub struct HierarchyRow {
     pub parent: Option<String>,
     /// "model" / "prefab" instance roots, "generated" for their children (not saved).
     pub kind: String,
+    /// activeInHierarchy (inactive rows are dimmed) / activeSelf.
+    pub active: bool,
+    pub active_self: bool,
+    pub tag: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -216,7 +220,7 @@ impl EditorCore {
                 } else {
                     "entity"
                 };
-                (e, HierarchyRow { id: id_of(e), name: n.map(|n| n.0.clone()).unwrap_or_else(|| "Entity".into()), parent: p.map(|p| id_of(p.0)), kind: kind.into() })
+                (e, HierarchyRow { id: id_of(e), name: n.map(|n| n.0.clone()).unwrap_or_else(|| "Entity".into()), parent: p.map(|p| id_of(p.0)), kind: kind.into(), active: w.get::<&InactiveInHierarchy>(e).is_err(), active_self: w.get::<&Inactive>(e).is_err(), tag: w.get::<&Tag>(e).map(|t| t.0.clone()).unwrap_or_else(|_| "Untagged".into()) })
             })
             .collect();
         rows.sort_by_key(|(e, _)| e.id());
@@ -313,7 +317,7 @@ impl EditorCore {
         let dir = (r * Vec3::new(ndc.0 * (fov * 0.5).tan() * self.aspect, ndc.1 * (fov * 0.5).tan(), -1.0)).normalize();
         let origin = self.orbit.position();
         let mut best: Option<(f32, Entity)> = None;
-        for (e, (mr, g)) in w.query::<(&MeshRenderer, &GlobalTransform)>().without::<&DontSave>().iter() {
+        for (e, (mr, g)) in w.query::<(&MeshRenderer, &GlobalTransform)>().without::<&DontSave>().without::<&InactiveInHierarchy>().iter() {
             let Some(b) = gfx.mesh_bounds(mr.mesh) else { continue };
             let c = g.0.transform_point3(b.center);
             let rad = b.radius * g.0.to_scale_rotation_translation().0.abs().max_element();

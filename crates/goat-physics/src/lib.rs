@@ -452,7 +452,7 @@ impl Physics {
     /// One fixed step: sync from the world, simulate, write back.
     pub fn step(&mut self, world: &mut World, dt: f32) {
         // removed entities / components
-        let gone: Vec<Entity> = self.tracked.keys().copied().filter(|&e| !world.contains(e) || (world.get::<&Collider>(e).is_err() && world.get::<&CharacterController>(e).is_err())).collect();
+        let gone: Vec<Entity> = self.tracked.keys().copied().filter(|&e| !world.contains(e) || world.get::<&goat_runtime::InactiveInHierarchy>(e).is_ok() || (world.get::<&Collider>(e).is_err() && world.get::<&CharacterController>(e).is_err())).collect();
         for e in gone {
             self.remove(e);
         }
@@ -460,11 +460,12 @@ impl Physics {
         // a CharacterController is its own capsule)
         let new: Vec<(Entity, Mat4, Option<RigidBody>, Collider, bool)> = world
             .query::<(&Collider, Option<&RigidBody>, &GlobalTransform)>()
+            .without::<&goat_runtime::InactiveInHierarchy>()
             .without::<&CharacterController>()
             .iter()
             .filter(|(e, _)| !self.tracked.contains_key(e))
             .map(|(e, (c, rb, g))| (e, g.0, rb.copied(), c.clone(), false))
-            .chain(world.query::<(&CharacterController, &GlobalTransform)>().iter().filter(|(e, _)| !self.tracked.contains_key(e)).map(|(e, (cc, g))| (e, g.0, None, cc.collider(), true)))
+            .chain(world.query::<(&CharacterController, &GlobalTransform)>().without::<&goat_runtime::InactiveInHierarchy>().iter().filter(|(e, _)| !self.tracked.contains_key(e)).map(|(e, (cc, g))| (e, g.0, None, cc.collider(), true)))
             .collect();
         for (e, m, rb, c, character) in new {
             // GlobalTransform is identity until the first propagation: use the Transform chain

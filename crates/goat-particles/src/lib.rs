@@ -519,14 +519,14 @@ impl Plugin for ParticlePlugin {
             .unwrap_or(Quat::IDENTITY);
         let (right, up, fwd) = (cam * Vec3::X, cam * Vec3::Y, cam * Vec3::Z);
         // textures first (needs the GPU), then the systems are read in place (no copies)
-        let keys: Vec<(goat_runtime::Entity, Option<String>)> = ctx.world.query::<&ParticleSystem>().iter().filter(|(_, ps)| !ps.particles.is_empty()).map(|(e, ps)| (e, ps.texture.clone())).collect();
+        let keys: Vec<(goat_runtime::Entity, Option<String>)> = ctx.world.query::<&ParticleSystem>().without::<&goat_runtime::InactiveInHierarchy>().iter().filter(|(_, ps)| !ps.particles.is_empty()).map(|(e, ps)| (e, ps.texture.clone())).collect();
         let mut tex_of = std::collections::HashMap::with_capacity(keys.len());
         for (e, k) in keys {
             let t = k.as_deref().and_then(|k| ctx.resources.get_mut::<AssetServer>().and_then(|a| a.texture(ctx.gfx, k).ok())).unwrap_or(dot);
             tex_of.insert(e, t);
         }
         let mut quads = Vec::new();
-        for (e, (ps, g)) in ctx.world.query::<(&ParticleSystem, &GlobalTransform)>().iter() {
+        for (e, (ps, g)) in ctx.world.query::<(&ParticleSystem, &GlobalTransform)>().without::<&goat_runtime::InactiveInHierarchy>().iter() {
             let Some(&texture) = tex_of.get(&e) else { continue };
             let m = &g.0;
             let to_w = |q: Vec3| if ps.space == Space::Local { m.transform_point3(q) } else { q };

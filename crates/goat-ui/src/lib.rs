@@ -313,12 +313,13 @@ fn descendant_named(world: &World, root: Entity, name: &str) -> Option<Entity> {
 }
 
 fn first_child(world: &World, root: Entity) -> Option<Entity> {
-    world.query::<&Parent>().with::<&RectTransform>().iter().filter(|(_, p)| p.0 == root).map(|(c, _)| c).min_by_key(|c| c.id())
+    world.query::<&Parent>().with::<&RectTransform>().without::<&goat_runtime::InactiveInHierarchy>().iter().filter(|(_, p)| p.0 == root).map(|(c, _)| c).min_by_key(|c| c.id())
 }
 
 fn children_map(world: &World) -> HashMap<Entity, Vec<Entity>> {
     let mut map: HashMap<Entity, Vec<Entity>> = HashMap::new();
-    let mut pairs: Vec<(Entity, Entity)> = world.query::<&Parent>().with::<&RectTransform>().iter().map(|(c, p)| (p.0, c)).collect();
+    // inactive objects (and so their subtrees) are neither laid out, drawn nor hit
+    let mut pairs: Vec<(Entity, Entity)> = world.query::<&Parent>().with::<&RectTransform>().without::<&goat_runtime::InactiveInHierarchy>().iter().map(|(c, p)| (p.0, c)).collect();
     pairs.sort_by_key(|(_, c)| c.id());
     for (p, c) in pairs {
         map.entry(p).or_default().push(c);
@@ -795,7 +796,7 @@ impl Plugin for UiPlugin {
         // driven parts
         drive_parts(ctx.world);
 
-        let canvases: Vec<(Entity, Canvas)> = ctx.world.query::<&Canvas>().iter().map(|(e, c)| (e, *c)).collect();
+        let canvases: Vec<(Entity, Canvas)> = ctx.world.query::<&Canvas>().without::<&goat_runtime::InactiveInHierarchy>().iter().map(|(e, c)| (e, *c)).collect();
         // cameras for new canvases, forget removed ones
         self.canvases.retain(|e, s| {
             let keep = canvases.iter().any(|(c, _)| c == e);

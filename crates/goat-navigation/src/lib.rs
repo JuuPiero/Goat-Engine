@@ -646,7 +646,7 @@ impl Plugin for NavigationPlugin {
 }
 
 fn carve(world: &mut World, navs: &mut NavMeshes, dt: f32) {
-    for (_, (o, g)) in world.query::<(&mut NavMeshObstacle, &GlobalTransform)>().iter() {
+    for (_, (o, g)) in world.query::<(&mut NavMeshObstacle, &GlobalTransform)>().without::<&goat_runtime::InactiveInHierarchy>().iter() {
         let m = g.0;
         let p = m.w_axis.truncate();
         let moved = o.last_pos.is_none_or(|l| (l - p).length() > 1e-5);
@@ -782,9 +782,9 @@ fn move_agents(world: &mut World, navs: &NavMeshes, dt: f32) {
         return;
     }
     // snapshot for avoidance: (entity, pos, radius, height, priority, avoids)
-    let others: Vec<(Entity, Vec3, f32, f32, u8, bool)> = world.query::<&NavMeshAgent>().iter().filter(|(_, a)| a.enabled && a.state.node.is_some()).map(|(e, a)| (e, a.state.pos, a.radius, a.height, a.avoidance_priority, a.obstacle_avoidance != ObstacleAvoidance::None)).collect();
-    let obstacles: Vec<(goat_core::math::Mat4, NavMeshObstacle)> = world.query::<(&NavMeshObstacle, &GlobalTransform)>().iter().filter(|(_, (o, _))| o.enabled && !(o.carve && !o.carve_only_stationary)).map(|(_, (o, g))| (g.0, o.clone())).collect();
-    for (e, (a, t, g)) in world.query::<(&mut NavMeshAgent, &mut Transform, &GlobalTransform)>().iter() {
+    let others: Vec<(Entity, Vec3, f32, f32, u8, bool)> = world.query::<&NavMeshAgent>().without::<&goat_runtime::InactiveInHierarchy>().iter().filter(|(_, a)| a.enabled && a.state.node.is_some()).map(|(e, a)| (e, a.state.pos, a.radius, a.height, a.avoidance_priority, a.obstacle_avoidance != ObstacleAvoidance::None)).collect();
+    let obstacles: Vec<(goat_core::math::Mat4, NavMeshObstacle)> = world.query::<(&NavMeshObstacle, &GlobalTransform)>().without::<&goat_runtime::InactiveInHierarchy>().iter().filter(|(_, (o, _))| o.enabled && !(o.carve && !o.carve_only_stationary)).map(|(_, (o, g))| (g.0, o.clone())).collect();
+    for (e, (a, t, g)) in world.query::<(&mut NavMeshAgent, &mut Transform, &GlobalTransform)>().without::<&goat_runtime::InactiveInHierarchy>().iter() {
         if !a.enabled {
             continue;
         }

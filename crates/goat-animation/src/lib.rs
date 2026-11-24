@@ -356,7 +356,7 @@ impl Plugin for AnimationPlugin {
     fn update(&mut self, ctx: &mut Context) {
         let dt = ctx.time.delta;
         let Some(assets) = ctx.resources.get::<AssetServer>() else { return };
-        let roots: Vec<Entity> = ctx.world.query::<&Animator>().iter().map(|(e, _)| e).collect();
+        let roots: Vec<Entity> = ctx.world.query::<&Animator>().without::<&goat_runtime::InactiveInHierarchy>().iter().map(|(e, _)| e).collect();
         for root in roots {
             let Ok(key) = ctx.world.get::<&goat_assets::ModelInstance>(root).map(|m| m.key.clone()) else { continue };
             let Some(model) = assets.loaded_model(&key) else { continue };

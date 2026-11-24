@@ -517,6 +517,9 @@ function AddComponent({ id, present }: { id: string; present: Set<string> }) {
 
 // ------------------------------------------------------------------ the entity
 
+/** Unity's built-in tags. */
+const TAGS = ['Untagged', 'Respawn', 'Finish', 'EditorOnly', 'MainCamera', 'Player', 'GameController'];
+
 interface TransformEdit {
   position: number[];
   euler: number[];
@@ -529,13 +532,17 @@ export function EntityInspector({ id }: { id: string }) {
   const [t, setT] = useState<TransformEdit | null>(null);
   const [name, setName] = useState('');
   const [kind, setKind] = useState('entity');
+  const [activeSelf, setActiveSelf] = useState(true);
+  const [tag, setTag] = useState('Untagged');
   useEffect(() => {
     const e = getEngine();
     if (!e) return;
     const json = e.transform(id);
     setT(json ? JSON.parse(json) : null);
     const rows: { id: string; name: string; kind: string }[] = JSON.parse(e.hierarchy());
-    const r = rows.find((r) => r.id === id);
+    const r = rows.find((r) => r.id === id) as ({ id: string; name: string; kind: string; active_self?: boolean; tag?: string } | undefined);
+    setActiveSelf(r?.active_self ?? true);
+    setTag(r?.tag ?? 'Untagged');
     setName(r?.name ?? '');
     setKind(r?.kind ?? 'entity');
   }, [id, rev]);
@@ -550,12 +557,38 @@ export function EntityInspector({ id }: { id: string }) {
       <div className="entity-header">
         <span className={`entity-icon ${kind}`}>▣</span>
         <input
+          type="checkbox"
+          title="Active (SetActive)"
+          checked={activeSelf}
+          onChange={(e) => {
+            const on = e.target.checked;
+            setActiveSelf(on);
+            mutate(on ? 'Activate' : 'Deactivate', () => getEngine()?.set_active(id, on));
+          }}
+        />
+        <input
           className="entity-name grow"
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
           onBlur={() => mutate('Rename', () => getEngine()?.rename(id, name))}
         />
+      </div>
+      <div className="tag-row">
+        <span className="dim">Tag</span>
+        <input
+          className="grow"
+          list="goat-tags"
+          value={tag}
+          onChange={(e) => setTag(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          onBlur={(e) => mutate('Change Tag', () => getEngine()?.set_tag(id, e.target.value.trim() || 'Untagged'))}
+        />
+        <datalist id="goat-tags">
+          {TAGS.map((t) => (
+            <option key={t} value={t} />
+          ))}
+        </datalist>
       </div>
       {count > 1 && <div className="dim multi-note">{count} objects selected — editing the active one</div>}
       {kind === 'generated' && <div className="dim multi-note">Part of a prefab / model instance: changes are saved as overrides</div>}

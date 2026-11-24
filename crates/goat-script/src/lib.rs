@@ -144,6 +144,47 @@ pub fn entity_arg(v: &Value) -> Option<Entity> {
     Entity::from_bits(bits as u64)
 }
 
+/// Core GameObject calls every host gets: active state and tags (Unity's SetActive,
+/// activeSelf, activeInHierarchy, tag, CompareTag, FindWithTag, FindGameObjectsWithTag).
+fn register_core(x: &mut Extensions) {
+    fn set_active(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
+        goat_runtime::set_active(api.ctx.world, e, a.first().and_then(|v| v.as_bool()).unwrap_or(true));
+        Ok(Value::Null)
+    }
+    fn active_self(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
+        Ok(Value::Bool(goat_runtime::active_self(api.ctx.world, e)))
+    }
+    fn active_in_hierarchy(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
+        Ok(Value::Bool(goat_runtime::active_in_hierarchy(api.ctx.world, e)))
+    }
+    fn tag(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
+        Ok(Value::String(api.ctx.world.get::<&goat_runtime::Tag>(e).map(|t| t.0.clone()).unwrap_or_else(|_| "Untagged".into())))
+    }
+    fn set_tag(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
+        let t = a.first().and_then(|v| v.as_str()).unwrap_or("Untagged");
+        if t.is_empty() || t == "Untagged" {
+            let _ = api.ctx.world.remove_one::<goat_runtime::Tag>(e);
+        } else {
+            let _ = api.ctx.world.insert_one(e, goat_runtime::Tag(t.into()));
+        }
+        Ok(Value::Null)
+    }
+    fn find_all(api: &mut Api, _: Entity, a: &[Value]) -> Result<Value, String> {
+        let t = a.first().and_then(|v| v.as_str()).unwrap_or("");
+        Ok(Value::Array(goat_runtime::find_with_tag(api.ctx.world, t).into_iter().map(entity_json).collect()))
+    }
+    fn find_one(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
+        Ok(find_all(api, e, a)?.as_array().and_then(|l| l.first().cloned()).unwrap_or(Value::Null))
+    }
+    x.add("GameObject.setActive", set_active)
+        .add("GameObject.activeSelf", active_self)
+        .add("GameObject.activeInHierarchy", active_in_hierarchy)
+        .add("GameObject.tag", tag)
+        .add("GameObject.setTag", set_tag)
+        .add("GameObject.findWithTag", find_one)
+        .add("GameObject.findGameObjectsWithTag", find_all);
+}
+
 /// `goat_script::extensions(ctx).add(...)`.
 pub fn extensions<'a>(ctx: &'a mut Context) -> &'a mut Extensions {
     ctx.resources.get_or_default::<Extensions>()
@@ -442,7 +483,8 @@ impl ScriptPlugin {
     fn run(&mut self, ctx: &mut Context, method: Method) {
         for i in 0..self.instances.len() {
             let inst = &self.instances[i];
-            if inst.failed || !ctx.world.contains(inst.entity) {
+            // inactive objects (self or a parent) don't run (and don't Start until activated)
+            if inst.failed || !ctx.world.contains(inst.entity) || ctx.world.get::<&goat_runtime::InactiveInHierarchy>(inst.entity).is_ok() {
                 continue;
             }
             let (host, id, e) = (inst.host, inst.id, inst.entity);
@@ -479,7 +521,7 @@ impl Default for ScriptPlugin {
 
 impl Plugin for ScriptPlugin {
     fn build(&mut self, ctx: &mut Context) {
-        ctx.resources.get_or_default::<Extensions>();
+        register_core(ctx.resources.get_or_default::<Extensions>());
         goat_scene::registry(ctx).component(CODEC);
     }
     fn fixed_update(&mut self, ctx: &mut Context) {

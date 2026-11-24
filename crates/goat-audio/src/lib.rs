@@ -325,7 +325,7 @@ impl Plugin for AudioPlugin {
             audio.listener_right = g.0.transform_vector3(Vec3::X).normalize_or(Vec3::X);
         }
         // sources
-        let sources: Vec<Entity> = ctx.world.query::<&AudioSource>().iter().map(|(e, _)| e).collect();
+        let sources: Vec<Entity> = ctx.world.query::<&AudioSource>().without::<&goat_runtime::InactiveInHierarchy>().iter().map(|(e, _)| e).collect();
         for e in sources {
             let pos = ctx.world.get::<&GlobalTransform>(e).map(|g| g.0.w_axis.truncate()).unwrap_or(Vec3::ZERO);
             let Ok(mut s) = ctx.world.get::<&mut AudioSource>(e) else { continue };

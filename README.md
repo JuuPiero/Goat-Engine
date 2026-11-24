@@ -238,6 +238,8 @@ let text = goat_scene::save_scene(ctx)?;                             // JSON c�
 Trong file scene, mỗi entity có:
 - `components`: Transform, Camera, MeshRenderer, các loại đèn, RenderSettings, SpriteRenderer…
 - `scripts`: các behaviour đã đăng ký.
+- `active: false`: object bị tắt (Unity `SetActive(false)`): nó và mọi object con không được vẽ, không chạy script / behaviour, không có trong physics, UI, particle, âm thanh, navigation. Rust: `goat_runtime::set_active(world, e, false)`, `active_self`, `active_in_hierarchy`; script: `go.setActive(false)`, `go.activeSelf`, `go.activeInHierarchy`. Editor: checkbox cạnh tên trong Inspector, dòng mờ trong Hierarchy.
+- `tag`: `Player`, `Enemy`…; `goat_runtime::find_with_tag`, script `go.tag`, `go.compareTag(t)`, `GameObject.findWithTag` / `findGameObjectsWithTag`; editor: ô Tag (gợi ý các tag có sẵn của Unity, gõ tag mới được).
 - `model` hoặc `prefab`: con của entity sinh ra từ file đó và **không** lưu lại vào scene. Sửa file prefab thì mọi scene dùng nó đều được cập nhật.
 - `overrides` (chỉ với `prefab`): thay đổi các entity **bên trong** prefab, như property override của Unity:
   ```json

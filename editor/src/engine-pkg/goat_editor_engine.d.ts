@@ -97,12 +97,20 @@ export class EditorEngine {
      * JSON array of the selected ids (active last).
      */
     selection(): string;
+    /**
+     * Unity's SetActive (the object and its children).
+     */
+    set_active(id: string, on: boolean): void;
     set_component(id: string, name: string, json: string): void;
     /**
      * "move" / "rotate" / "scale".
      */
     set_gizmo_mode(mode: string): void;
     set_parent(id: string, parent?: string | null): void;
+    /**
+     * Sets the tag ("Untagged" / empty removes it).
+     */
+    set_tag(id: string, tag: string): void;
     set_transform(id: string, json: string): void;
     /**
      * Draw calls / triangles of the last frame.
@@ -165,9 +173,11 @@ export interface InitOutput {
     readonly editorengine_select_many: (a: number, b: number, c: number) => void;
     readonly editorengine_selected: (a: number) => [number, number];
     readonly editorengine_selection: (a: number) => [number, number];
+    readonly editorengine_set_active: (a: number, b: number, c: number, d: number) => void;
     readonly editorengine_set_component: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly editorengine_set_gizmo_mode: (a: number, b: number, c: number) => void;
     readonly editorengine_set_parent: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly editorengine_set_tag: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_set_transform: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly editorengine_stats: (a: number) => [number, number];
     readonly editorengine_stop: (a: number) => void;

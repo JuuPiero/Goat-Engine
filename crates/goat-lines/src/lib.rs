@@ -305,7 +305,7 @@ impl Plugin for LinePlugin {
     fn update(&mut self, ctx: &mut Context) {
         let dt = ctx.time.delta;
         let mut doomed: Vec<Entity> = Vec::new();
-        for (e, (t, g)) in ctx.world.query::<(&mut TrailRenderer, &GlobalTransform)>().iter() {
+        for (e, (t, g)) in ctx.world.query::<(&mut TrailRenderer, &GlobalTransform)>().without::<&goat_runtime::InactiveInHierarchy>().iter() {
             if t.enabled && t.record(g.0.w_axis.truncate(), dt) {
                 doomed.push(e);
             }
@@ -316,7 +316,7 @@ impl Plugin for LinePlugin {
     }
 
     fn late_update(&mut self, ctx: &mut Context) {
-        let any = ctx.world.query::<&LineRenderer>().iter().next().is_some() || ctx.world.query::<&TrailRenderer>().iter().any(|(_, t)| !t.points.is_empty());
+        let any = ctx.world.query::<&LineRenderer>().without::<&goat_runtime::InactiveInHierarchy>().iter().next().is_some() || ctx.world.query::<&TrailRenderer>().without::<&goat_runtime::InactiveInHierarchy>().iter().any(|(_, t)| !t.points.is_empty());
         if !any {
             self.batcher.submit(ctx, Vec::new());
             return;
@@ -340,10 +340,10 @@ impl Plugin for LinePlugin {
         let cam_fwd = cam_rot * Vec3::Z;
         // textures (asset keys → ids) first
         let mut keys: Vec<String> = Vec::new();
-        for (_, l) in ctx.world.query::<&LineRenderer>().iter() {
+        for (_, l) in ctx.world.query::<&LineRenderer>().without::<&goat_runtime::InactiveInHierarchy>().iter() {
             keys.push(l.texture.clone());
         }
-        for (_, t) in ctx.world.query::<&TrailRenderer>().iter() {
+        for (_, t) in ctx.world.query::<&TrailRenderer>().without::<&goat_runtime::InactiveInHierarchy>().iter() {
             keys.push(t.texture.clone());
         }
         let mut tex: std::collections::HashMap<String, TextureId> = std::collections::HashMap::new();
@@ -358,7 +358,7 @@ impl Plugin for LinePlugin {
         let face_view = |p: Vec3| (cam_pos - p).normalize_or(cam_fwd);
 
         let mut quads = Vec::new();
-        for (_, (l, g)) in ctx.world.query::<(&LineRenderer, Option<&GlobalTransform>)>().iter() {
+        for (_, (l, g)) in ctx.world.query::<(&LineRenderer, Option<&GlobalTransform>)>().without::<&goat_runtime::InactiveInHierarchy>().iter() {
             if !l.enabled || l.positions.len() < 2 {
                 continue;
             }
@@ -384,7 +384,7 @@ impl Plugin for LinePlugin {
                 LineAlignment::TransformZ => ribbon(&pts, |_| z, cam_fwd, &style, &mut quads),
             }
         }
-        for (_, (t, g)) in ctx.world.query::<(&TrailRenderer, &GlobalTransform)>().iter() {
+        for (_, (t, g)) in ctx.world.query::<(&TrailRenderer, &GlobalTransform)>().without::<&goat_runtime::InactiveInHierarchy>().iter() {
             if !t.enabled || t.points.is_empty() {
                 continue;
             }

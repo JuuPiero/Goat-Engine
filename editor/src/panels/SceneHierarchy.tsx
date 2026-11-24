@@ -14,6 +14,8 @@ interface Row {
   name: string;
   parent: string | null;
   kind: string;
+  /** activeInHierarchy (false: dimmed, like Unity). */
+  active: boolean;
 }
 
 export function SceneHierarchy() {
@@ -201,7 +203,7 @@ export function SceneHierarchy() {
         return (
           <div
             key={r.id}
-            className={`tree-row${selected ? ' active' : ''}${r.id === active && entities.length > 1 ? ' primary' : ''}${r.kind === 'generated' ? ' generated' : ''}${r.kind === 'prefab' ? ' prefab' : ''}${dragging?.over === r.id && !dragging.ids.includes(r.id) ? ' drop-into' : ''}`}
+            className={`tree-row${selected ? ' active' : ''}${r.id === active && entities.length > 1 ? ' primary' : ''}${r.kind === 'generated' ? ' generated' : ''}${r.kind === 'prefab' ? ' prefab' : ''}${r.active === false ? ' inactive' : ''}${dragging?.over === r.id && !dragging.ids.includes(r.id) ? ' drop-into' : ''}`}
             style={{ paddingLeft: 6 + depth * 14 }}
             data-entity={r.id}
             onClick={(ev) => clickRow(ev, r.id)}

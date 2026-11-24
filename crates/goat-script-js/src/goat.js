@@ -133,6 +133,16 @@ export class GameObject {
    *  can be passed and come back as GameObjects. */
   call(name, ...args) { return fromNative(N.call(name, this._h, args)); }
   equals(o) { return o != null && o._h === this._h; }
+  /** Switches the object (and its children) on / off: Unity's SetActive. */
+  setActive(on) { call('GameObject.setActive', this, [!!on]); }
+  get activeSelf() { return call('GameObject.activeSelf', this, []); }
+  get activeInHierarchy() { return call('GameObject.activeInHierarchy', this, []); }
+  get tag() { return call('GameObject.tag', this, []); }
+  set tag(t) { call('GameObject.setTag', this, [t]); }
+  compareTag(t) { return this.tag === t; }
+  static findWithTag(tag) { return call('GameObject.findWithTag', null, [tag]); }
+  static findGameObjectWithTag(tag) { return GameObject.findWithTag(tag); }
+  static findGameObjectsWithTag(tag) { return call('GameObject.findGameObjectsWithTag', null, [tag]) ?? []; }
   /** Plays the object's TweenAnimation(s) (DOTweenAnimation.DOPlay); with an id, only those. */
   doPlay(id) { N.call('Tween.playAnimation', this._h, id == null ? [] : [id]); }
 }

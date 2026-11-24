@@ -3,7 +3,7 @@
 use goat_core::math::{Mat4, Quat, Vec3};
 use goat_core::Color;
 use goat_gfx::{Display, MaterialId, MeshId, Projection, Viewport};
-use hecs::Entity;
+use hecs::{Entity, World};
 
 /// A display name (Hierarchy label, lookups by name).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -238,6 +238,53 @@ impl Default for RenderSettings {
     }
 }
 
+/// The object is switched off (Unity's `SetActive(false)`): it and its children aren't drawn,
+/// updated, simulated. Set with [`set_active`]; [`InactiveInHierarchy`] is derived from it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Inactive;
+
+/// Present while the object or an ancestor is [`Inactive`] (Unity's `!activeInHierarchy`).
+/// Kept up to date by `propagate_transforms` (each frame and on demand): systems skip these
+/// entities with `.without::<&InactiveInHierarchy>()`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InactiveInHierarchy;
+
+/// A tag (Unity's GameObject.tag): "Player", "Enemy"… Untagged objects have none.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tag(pub String);
+
+/// Unity's `SetActive`: switches an object (and its children) on / off.
+pub fn set_active(world: &mut World, e: Entity, active: bool) {
+    if active {
+        let _ = world.remove_one::<Inactive>(e);
+    } else {
+        let _ = world.insert_one(e, Inactive);
+    }
+    crate::engine::refresh_active(world);
+}
+
+/// Unity's `activeSelf`.
+pub fn active_self(world: &World, e: Entity) -> bool {
+    world.get::<&Inactive>(e).is_err()
+}
+
+/// Unity's `activeInHierarchy`.
+pub fn active_in_hierarchy(world: &World, e: Entity) -> bool {
+    let mut cur = Some(e);
+    for _ in 0..256 {
+        let Some(x) = cur else { return true };
+        if world.get::<&Inactive>(x).is_ok() {
+            return false;
+        }
+        cur = world.get::<&Parent>(x).ok().map(|p| p.0);
+    }
+    true
+}
+
+/// Objects with a tag (Unity's FindGameObjectsWithTag), active ones only.
+pub fn find_with_tag(world: &World, tag: &str) -> Vec<Entity> {
+    world.query::<&Tag>().without::<&InactiveInHierarchy>().iter().filter(|(_, t)| t.0 == tag).map(|(e, _)| e).collect()
+}
 /// Never saved in scenes / prefabs (helper entities rebuilt by their owner, e.g. sprite batches).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DontSave;

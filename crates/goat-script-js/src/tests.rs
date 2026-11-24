@@ -342,3 +342,63 @@ export default class Probe extends Behaviour {
     let name = e.world.query::<(&Name, &goat_physics::CharacterController)>().iter().next().map(|(_, (n, _))| n.0.clone()).unwrap();
     assert_eq!(name, "Ground|0.00|true|true", "{name}");
 }
+
+fn toggle_io() -> AssetIo {
+    let io = AssetIo::new("/nonexistent-goat-test-root");
+    io.put(
+        "scripts/Toggler.ts",
+        br#"
+import { Behaviour, GameObject } from "goat";
+export default class Toggler extends Behaviour {
+  frames = 0;
+  update(): void {
+    this.frames++;
+    const lamp = GameObject.find("Lamp");
+    if (this.frames === 1) {
+      lamp.tag = "Light";
+      lamp.setActive(false);
+      const found = GameObject.findGameObjectsWithTag("Light").length;
+      this.gameObject.name = `t:${lamp.tag}:${lamp.activeSelf}:${lamp.activeInHierarchy}:${found}:${lamp.compareTag("Light")}`;
+    }
+    if (this.frames === 6) lamp.setActive(true);
+  }
+}
+"#
+        .to_vec(),
+    );
+    io.put("scripts/Counter.ts", b"import { Behaviour } from \"goat\";\nexport default class Counter extends Behaviour { n = 0; update(): void { this.n++; this.gameObject.name = 'n' + this.n; } }\n".to_vec());
+    io
+}
+
+/// SetActive / tags from scripts: an inactive object's scripts (children too) don't run.
+#[test]
+fn set_active_and_tags_from_scripts() {
+    struct T;
+    impl Game for T {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(toggle_io()));
+            let w = &mut *ctx.world;
+            w.spawn((Name("Toggler".into()), Transform::default(), GlobalTransform::default(), Script::one("scripts/Toggler.ts")));
+            let lamp = w.spawn((Name("Lamp".into()), Transform::default(), GlobalTransform::default()));
+            w.spawn((Name("n0".into()), Transform::default(), GlobalTransform::default(), goat_runtime::Parent(lamp), Script::one("scripts/Counter.ts")));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(toggle_io())))]
+        }
+    }
+    let mut e = Engine::new(T);
+    let mut gfx = NullBackend::new();
+    for _ in 0..3 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    // frame 1: the lamp went inactive (its child counter ran once, in the frame it was switched off at most)
+    assert!(find(&e, "t:Light:false:false:0:true").is_some(), "{:?}", e.world.query::<&Name>().iter().map(|(_, n)| n.0.clone()).collect::<Vec<_>>());
+    let counted = |e: &Engine| e.world.query::<&Name>().iter().find_map(|(_, n)| n.0.strip_prefix('n').and_then(|v| v.parse::<u32>().ok()));
+    let before = counted(&e).unwrap_or(0);
+    e.frame(1.0 / 60.0, &mut gfx);
+    assert_eq!(counted(&e).unwrap_or(0), before, "the inactive child's script is paused");
+    for _ in 0..3 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    assert!(counted(&e).unwrap_or(0) > before, "running again once reactivated");
+}

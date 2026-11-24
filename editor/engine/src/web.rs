@@ -157,6 +157,22 @@ impl EditorEngine {
         }
         Ok(())
     }
+    /// Unity's SetActive (the object and its children).
+    pub fn set_active(&mut self, id: &str, on: bool) {
+        if let Some(e) = entity_of(id) {
+            goat_runtime::set_active(&mut self.core.edit.world, e, on);
+        }
+    }
+    /// Sets the tag ("Untagged" / empty removes it).
+    pub fn set_tag(&mut self, id: &str, tag: &str) {
+        if let Some(e) = entity_of(id) {
+            if tag.is_empty() || tag == "Untagged" {
+                let _ = self.core.edit.world.remove_one::<goat_runtime::Tag>(e);
+            } else {
+                let _ = self.core.edit.world.insert_one(e, goat_runtime::Tag(tag.to_string()));
+            }
+        }
+    }
     pub fn rename(&mut self, id: &str, name: &str) {
         if let Some(e) = entity_of(id) {
             self.core.rename(e, name);

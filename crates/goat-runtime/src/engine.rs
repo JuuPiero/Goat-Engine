@@ -235,7 +235,7 @@ impl Engine {
 
     fn run_scripts_inner(&mut self, gfx: &mut dyn GraphicsBackend, phase: Phase) {
         // Take each entity's Scripts out while they run, so behaviours can borrow the world freely.
-        let owners: Vec<Entity> = self.world.query::<&Scripts>().iter().map(|(e, _)| e).collect();
+        let owners: Vec<Entity> = self.world.query::<&Scripts>().without::<&InactiveInHierarchy>().iter().map(|(e, _)| e).collect();
         let time = self.time;
         for e in owners {
             let Ok(mut scripts) = self.world.remove_one::<Scripts>(e) else { continue };
@@ -311,6 +311,41 @@ pub fn propagate_transforms(world: &mut World) {
     for (e, m) in missing {
         let _ = world.insert_one(e, GlobalTransform(m));
     }
+    // activeInHierarchy (nothing to do in the common case: no inactive object)
+    if world.query::<()>().with::<&Inactive>().iter().next().is_some() || world.query::<()>().with::<&InactiveInHierarchy>().iter().next().is_some() {
+        refresh_active(world);
+    }
+}
+
+/// Brings [`InactiveInHierarchy`] in step with [`Inactive`] (self or an ancestor).
+pub fn refresh_active(world: &mut World) {
+    let parents: std::collections::HashMap<Entity, Entity> = world.query::<&Parent>().iter().map(|(c, p)| (c, p.0)).collect();
+    let inactive: std::collections::HashSet<Entity> = world.query::<()>().with::<&Inactive>().iter().map(|(e, _)| e).collect();
+    let mut memo: std::collections::HashMap<Entity, bool> = std::collections::HashMap::new();
+    fn off(e: Entity, parents: &std::collections::HashMap<Entity, Entity>, inactive: &std::collections::HashSet<Entity>, memo: &mut std::collections::HashMap<Entity, bool>, depth: u32) -> bool {
+        if let Some(&v) = memo.get(&e) {
+            return v;
+        }
+        let v = inactive.contains(&e) || (depth < 256 && parents.get(&e).is_some_and(|&p| off(p, parents, inactive, memo, depth + 1)));
+        memo.insert(e, v);
+        v
+    }
+    let mut add = Vec::new();
+    let mut remove = Vec::new();
+    for (e, marked) in world.query::<Option<&InactiveInHierarchy>>().iter() {
+        let want = off(e, &parents, &inactive, &mut memo, 0);
+        if want && marked.is_none() {
+            add.push(e);
+        } else if !want && marked.is_some() {
+            remove.push(e);
+        }
+    }
+    for e in add {
+        let _ = world.insert_one(e, InactiveInHierarchy);
+    }
+    for e in remove {
+        let _ = world.remove_one::<InactiveInHierarchy>(e);
+    }
 }
 fn scaled(c: Color, intensity: f32) -> Color {
     Color::rgba(c.r * intensity, c.g * intensity, c.b * intensity, 1.0)
@@ -324,17 +359,17 @@ fn forward_of(m: &Mat4) -> Vec3 {
 fn collect_lights(world: &World) -> (Vec<Light>, Vec<Light>, Option<usize>) {
     let mut directional = Vec::new();
     let mut shadow = None;
-    for (_, (l, g)) in world.query::<(&DirectionalLight, &GlobalTransform)>().iter() {
+    for (_, (l, g)) in world.query::<(&DirectionalLight, &GlobalTransform)>().without::<&InactiveInHierarchy>().iter() {
         if l.shadows && shadow.is_none() && directional.len() < MAX_LIGHTS {
             shadow = Some(directional.len());
         }
         directional.push(Light { kind: LightKind::Directional, position: g.0.w_axis.truncate(), direction: forward_of(&g.0), color: scaled(l.color, l.intensity), range: 0.0 });
     }
     let mut local = Vec::new();
-    for (_, (l, g)) in world.query::<(&PointLight, &GlobalTransform)>().iter() {
+    for (_, (l, g)) in world.query::<(&PointLight, &GlobalTransform)>().without::<&InactiveInHierarchy>().iter() {
         local.push(Light { kind: LightKind::Point, position: g.0.w_axis.truncate(), direction: forward_of(&g.0), color: scaled(l.color, l.intensity), range: l.range.max(0.01) });
     }
-    for (_, (l, g)) in world.query::<(&SpotLight, &GlobalTransform)>().iter() {
+    for (_, (l, g)) in world.query::<(&SpotLight, &GlobalTransform)>().without::<&InactiveInHierarchy>().iter() {
         let half = |deg: f32| (deg.clamp(0.1, 179.0) * 0.5).to_radians().cos();
         let cos_outer = half(l.spot_angle);
         let cos_inner = half(l.inner_spot_angle.min(l.spot_angle)).max(cos_outer + 1e-3);
@@ -370,7 +405,7 @@ pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn Graphics
     let (directional, local, shadow) = collect_lights(world);
     // world-space bounding spheres (None = always drawn), layer bit, LOD levels
     let renderers: Vec<(DrawItem, Option<(Vec3, f32)>, u32, Option<LodGroup>)> = world
-        .query::<(&MeshRenderer, &GlobalTransform, Option<&LodGroup>)>()
+        .query::<(&MeshRenderer, &GlobalTransform, Option<&LodGroup>)>().without::<&InactiveInHierarchy>()
         .iter()
         .filter(|(_, (r, _, _))| r.visible)
         .map(|(_, (r, g, lod))| {
@@ -383,7 +418,7 @@ pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn Graphics
         })
         .collect();
     let mut views: Vec<RenderView> = world
-        .query::<(&Camera, &GlobalTransform)>()
+        .query::<(&Camera, &GlobalTransform)>().without::<&InactiveInHierarchy>()
         .iter()
         .filter(|(e, _)| only.is_none_or(|o| o == *e))
         .map(|(_, (c, g))| {
@@ -446,6 +481,25 @@ mod tests {
         assert!((g.w_axis.truncate() - Vec3::new(1.0, 2.0, 0.0)).length() < 1e-5);
     }
     #[test]
+    fn set_active_switches_whole_subtrees() {
+        let mut w = World::new();
+        let p = w.spawn((Transform::default(), Tag("Enemy".into())));
+        let c = w.spawn((Transform::default(), Parent(p), Tag("Enemy".into())));
+        let other = w.spawn((Transform::default(), Tag("Enemy".into())));
+        propagate_transforms(&mut w);
+        assert!(active_in_hierarchy(&w, c) && w.get::<&InactiveInHierarchy>(c).is_err());
+        assert_eq!(find_with_tag(&w, "Enemy").len(), 3);
+        set_active(&mut w, p, false);
+        assert!(!active_self(&w, p) && active_self(&w, c) && !active_in_hierarchy(&w, c));
+        assert!(w.get::<&InactiveInHierarchy>(c).is_ok() && w.get::<&InactiveInHierarchy>(p).is_ok());
+        assert_eq!(find_with_tag(&w, "Enemy"), vec![other]);
+        // re-parented out of the inactive object: active again at the next propagation
+        let _ = w.remove_one::<Parent>(c);
+        propagate_transforms(&mut w);
+        assert!(w.get::<&InactiveInHierarchy>(c).is_err());
+        set_active(&mut w, p, true);
+        assert!(w.get::<&InactiveInHierarchy>(p).is_err());
+    }    #[test]
     fn lod_groups_switch_meshes_with_distance() {
         use goat_gfx::GraphicsBackend;
         let mut gfx = goat_gfx::NullBackend::new();

@@ -300,6 +300,7 @@ impl Plugin for SpritePlugin {
         let quads: Vec<Quad> = ctx
             .world
             .query::<(&SpriteRenderer, &GlobalTransform)>()
+            .without::<&goat_runtime::InactiveInHierarchy>()
             .iter()
             .filter(|(_, (r, _))| r.visible && r.color.a > 0.0)
             .map(|(_, (r, g))| quad_of(r, &g.0))
