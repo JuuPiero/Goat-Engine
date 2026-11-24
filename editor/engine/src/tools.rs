@@ -85,59 +85,70 @@ fn grid_mesh(half: i32) -> MeshData {
 impl EditorCore {
     // ------------------------------------------------------------------ components
     pub fn component_names(&self) -> Vec<String> {
-        self.edit.resources.get::<SceneRegistry>().map(|r| r.components().iter().map(|c| c.name.to_string()).collect()).unwrap_or_default()
+        let eng = self.play.as_ref().unwrap_or(&self.edit);
+        eng.resources.get::<SceneRegistry>().map(|r| r.components().iter().map(|c| c.name.to_string()).collect()).unwrap_or_default()
     }
 
     /// `[{ name, value }]` of every registered component the entity has.
     pub fn components(&mut self, e: Entity) -> Value {
-        let registry = self.edit.resources.take::<SceneRegistry>().unwrap_or_default();
+        // the play world while playing (Unity: Play-mode edits, gone on Stop)
+        let eng = self.play.as_mut().unwrap_or(&mut self.edit);
+        let registry = eng.resources.take::<SceneRegistry>().unwrap_or_default();
         let mut out = Vec::new();
-        if let Some(assets) = self.edit.resources.get::<AssetServer>() {
-            let ctx = SaveContext { world: &self.edit.world, assets };
+        if let Some(assets) = eng.resources.get::<AssetServer>() {
+            let ctx = SaveContext { world: &eng.world, assets };
             for c in registry.components() {
                 if let Some(v) = (c.save)(&ctx, e) {
                     out.push(serde_json::json!({ "name": c.name, "value": v }));
                 }
             }
         }
-        self.edit.resources.put_back(registry);
+        eng.resources.put_back(registry);
         Value::Array(out)
     }
 
     /// Adds or replaces a component from its scene JSON (`{}` = defaults).
     pub fn set_component(&mut self, gfx: &mut dyn GraphicsBackend, e: Entity, name: &str, value: &Value) -> Result<(), String> {
-        let registry = self.edit.resources.take::<SceneRegistry>().unwrap_or_default();
-        let result = match (registry.find_component(name).copied(), self.edit.resources.get_mut::<AssetServer>()) {
+        // the play world while playing (Unity: Play-mode edits, gone on Stop)
+        let eng = self.play.as_mut().unwrap_or(&mut self.edit);
+        let registry = eng.resources.take::<SceneRegistry>().unwrap_or_default();
+        let result = match (registry.find_component(name).copied(), eng.resources.get_mut::<AssetServer>()) {
             (Some(codec), Some(assets)) => {
-                let mut lc = LoadContext { world: &mut self.edit.world, gfx, assets, source: "inspector" };
+                let mut lc = LoadContext { world: &mut eng.world, gfx, assets, source: "inspector" };
                 (codec.load)(&mut lc, e, value)
             }
             (None, _) => Err(format!("unknown component {name}")),
             (_, None) => Err("no asset server".into()),
         };
-        self.edit.resources.put_back(registry);
+        eng.resources.put_back(registry);
         result
     }
 
     pub fn remove_component(&mut self, e: Entity, name: &str) {
-        let codec = self.edit.resources.get::<SceneRegistry>().and_then(|r| r.find_component(name).copied());
+        // the play world while playing (Unity: Play-mode edits, gone on Stop)
+        let eng = self.play.as_mut().unwrap_or(&mut self.edit);
+        let codec = eng.resources.get::<SceneRegistry>().and_then(|r| r.find_component(name).copied());
         if let Some(c) = codec {
-            (c.remove)(&mut self.edit.world, e);
+            (c.remove)(&mut eng.world, e);
         }
     }
 
     // ------------------------------------------------------------------ entities
     pub fn create_entity(&mut self, name: &str, parent: Option<Entity>) -> Entity {
-        let e = self.edit.world.spawn((Name(name.into()), Transform::default(), GlobalTransform::default()));
-        if let Some(p) = parent.filter(|p| self.edit.world.contains(*p)) {
-            let _ = self.edit.world.insert_one(e, Parent(p));
+        // the play world while playing (Unity: Play-mode edits, gone on Stop)
+        let eng = self.play.as_mut().unwrap_or(&mut self.edit);
+        let e = eng.world.spawn((Name(name.into()), Transform::default(), GlobalTransform::default()));
+        if let Some(p) = parent.filter(|p| eng.world.contains(*p)) {
+            let _ = eng.world.insert_one(e, Parent(p));
         }
         e
     }
 
     /// Deletes an entity and its children.
     pub fn delete_entity(&mut self, e: Entity) {
-        let pairs: Vec<(Entity, Entity)> = self.edit.world.query::<&Parent>().iter().map(|(c, p)| (p.0, c)).collect();
+        // the play world while playing (Unity: Play-mode edits, gone on Stop)
+        let eng = self.play.as_mut().unwrap_or(&mut self.edit);
+        let pairs: Vec<(Entity, Entity)> = eng.world.query::<&Parent>().iter().map(|(c, p)| (p.0, c)).collect();
         let mut doomed = vec![e];
         let mut i = 0;
         while i < doomed.len() {
@@ -146,31 +157,33 @@ impl EditorCore {
             i += 1;
         }
         for d in doomed {
-            let _ = self.edit.world.despawn(d);
+            let _ = eng.world.despawn(d);
         }
-        self.selection.retain(|s| self.edit.world.contains(*s));
-        if self.selected.is_some_and(|s| !self.edit.world.contains(s)) {
+        self.selection.retain(|s| eng.world.contains(*s));
+        if self.selected.is_some_and(|s| !eng.world.contains(s)) {
             self.selected = self.selection.last().copied();
         }
     }
 
     /// Re-parents (None = root), keeping the world pose.
     pub fn set_parent(&mut self, e: Entity, parent: Option<Entity>) {
+        // the play world while playing (Unity: Play-mode edits, gone on Stop)
+        let eng = self.play.as_mut().unwrap_or(&mut self.edit);
         if parent == Some(e) {
             return;
         }
-        let world_m = self.edit.world.get::<&GlobalTransform>(e).map(|g| g.0).unwrap_or(Mat4::IDENTITY);
-        let parent_m = parent.and_then(|p| self.edit.world.get::<&GlobalTransform>(p).ok().map(|g| g.0)).unwrap_or(Mat4::IDENTITY);
+        let world_m = eng.world.get::<&GlobalTransform>(e).map(|g| g.0).unwrap_or(Mat4::IDENTITY);
+        let parent_m = parent.and_then(|p| eng.world.get::<&GlobalTransform>(p).ok().map(|g| g.0)).unwrap_or(Mat4::IDENTITY);
         let (s, r, t) = (parent_m.inverse() * world_m).to_scale_rotation_translation();
-        if let Ok(mut tr) = self.edit.world.get::<&mut Transform>(e) {
+        if let Ok(mut tr) = eng.world.get::<&mut Transform>(e) {
             *tr = Transform { position: t, rotation: r, scale: s };
         }
         match parent {
             Some(p) => {
-                let _ = self.edit.world.insert_one(e, Parent(p));
+                let _ = eng.world.insert_one(e, Parent(p));
             }
             None => {
-                let _ = self.edit.world.remove_one::<Parent>(e);
+                let _ = eng.world.remove_one::<Parent>(e);
             }
         }
     }
@@ -217,7 +230,21 @@ impl EditorCore {
 
     // ------------------------------------------------------------------ camera math
     pub fn view_proj(&self) -> Mat4 {
-        Mat4::perspective_rh_gl(55f32.to_radians(), self.aspect, 0.05, 500.0) * self.camera_matrix().inverse()
+        self.projection_matrix() * self.camera_matrix().inverse()
+    }
+    /// The editor camera's projection (perspective 55°, or orthographic in 2D / Iso views).
+    pub fn projection_matrix(&self) -> Mat4 {
+        if self.view.ortho {
+            let h = self.ortho_height() * 0.5;
+            let w = h * self.aspect;
+            Mat4::orthographic_rh_gl(-w, w, -h, h, 0.05, 2000.0)
+        } else {
+            Mat4::perspective_rh_gl(55f32.to_radians(), self.aspect, 0.05, 500.0)
+        }
+    }
+    /// Height of the orthographic view: what the perspective view shows at the target distance.
+    pub fn ortho_height(&self) -> f32 {
+        2.0 * self.orbit.distance * (55f32.to_radians() * 0.5).tan()
     }
     /// World point → view coordinates (0..1, y down); None behind the camera.
     pub fn project(&self, p: Vec3) -> Option<Vec2> {
@@ -227,10 +254,18 @@ impl EditorCore {
         }
         Some(Vec2::new(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5))
     }
+    /// The ray through a view point (0..1 from the top-left): from the eye (perspective) or
+    /// from the view plane (orthographic).
     pub fn ray(&self, x: f32, y: f32) -> (Vec3, Vec3) {
-        let fov = 55f32.to_radians();
         let ndc = (x * 2.0 - 1.0, 1.0 - y * 2.0);
-        let dir = (self.orbit.rotation() * Vec3::new(ndc.0 * (fov * 0.5).tan() * self.aspect, ndc.1 * (fov * 0.5).tan(), -1.0)).normalize();
+        let r = self.orbit.rotation();
+        if self.view.ortho {
+            let h = self.ortho_height() * 0.5;
+            let origin = self.orbit.position() + r * Vec3::new(ndc.0 * h * self.aspect, ndc.1 * h, 0.0);
+            return (origin, r * Vec3::NEG_Z);
+        }
+        let fov = 55f32.to_radians();
+        let dir = (r * Vec3::new(ndc.0 * (fov * 0.5).tan() * self.aspect, ndc.1 * (fov * 0.5).tan(), -1.0)).normalize();
         (self.orbit.position(), dir)
     }
 
@@ -355,6 +390,16 @@ impl EditorCore {
             if let (Ok(mesh), Ok(mat)) = (gfx.create_mesh(&grid_mesh(30)), gfx.create_material(&unlit(Color::rgba(0.8, 0.85, 0.95, 1.0), true, BlendMode::Alpha))) {
                 let g = self.edit.world.spawn((Name("Grid".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, mat).with_layer(EDITOR_LAYER).with_sorting_order(-1000)));
                 self.tools.grid = Some(g);
+            }
+        }
+        if let Some(g) = self.tools.grid {
+            let show = self.view.grid;
+            if let Ok(mut r) = self.edit.world.get::<&mut MeshRenderer>(g) {
+                r.visible = show;
+            }
+            // the 2D view looks along −Z: the grid stands up in the XY plane
+            if let Ok(mut t) = self.edit.world.get::<&mut Transform>(g) {
+                t.rotation = if self.view.mode2d { Quat::from_rotation_x(std::f32::consts::FRAC_PI_2) } else { Quat::IDENTITY };
             }
         }
         if self.tools.handles[0].is_none() {

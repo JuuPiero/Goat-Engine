@@ -1,17 +1,19 @@
-// The editor window: a toolbar over dockable panels (dockview): drag tabs to rearrange, split,
-// stack, float; the layout is remembered. Default = Unity's: Hierarchy | Scene/Game | Inspector
-// over Project + Console.
+// The editor window, laid out like the PiaEngine editor (Unity's): the main menu bar, the main
+// toolbar (transform tools, Pivot / Local, Play / Pause / Step, Animation / Profiler / Build),
+// dockable panels (dockview: drag tabs to rearrange, split, stack; the layout is remembered) and
+// a status bar. Default layout: Hierarchy | Scene + Game | Inspector over Project + Console.
 import { useEffect, useRef } from 'react';
 import { DockviewReact, themeDark, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelProps } from 'dockview-react';
 import 'dockview-react/dist/styles/dockview.css';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { listen } from '@tauri-apps/api/event';
+import { Activity, Box, Clapperboard, Crosshair, Globe, Hammer, Hand, Move, Pause, Play, Rotate3d, Scale3d, StepForward } from 'lucide-react';
 import { api } from './api';
 import { handleDrop, installDropHandling } from './dnd';
 import { getState, log, refresh, run, setState, useStore } from './store';
 import { AssetPanel } from './panels/AssetPanel';
 import { Console, Hierarchy, Inspector } from './panels/Panels';
-import { Viewport } from './panels/Viewport';
+import { GameView, SceneView } from './panels/Viewport';
 import { AnimatorWindow } from './panels/AnimatorWindow';
 import { getEngine, openScene, saveScene, startPlay, stepFrame, stopPlay, togglePause } from './engine';
 import { ProfilerPanel } from './panels/ProfilerPanel';
@@ -22,53 +24,169 @@ import { copy, cut, deleteSelection, duplicate, gameObjectMenu, hasClipboard, in
 import { frameSelected } from './selection';
 import { componentInfo, displayName } from './panels/ComponentEditor';
 
-const LAYOUT_KEY = 'goat.editor.layout.v1';
+const LAYOUT_KEY = 'goat.editor.layout.v2';
 
+const panel = (el: React.ReactNode, cls = '') => <div className={`g-panel ${cls}`}>{el}</div>;
 const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> = {
-  viewport: () => <Viewport />,
-  hierarchy: () => <div className="panel-scroll hierarchy-panel"><Hierarchy /></div>,
-  inspector: () => <div className="panel-scroll"><Inspector /></div>,
-  project: () => <AssetPanel />,
-  console: () => <div className="panel-scroll"><Console /></div>,
+  scene: (p) => <SceneView api={p.api} />,
+  game: (p) => <GameView api={p.api} />,
+  hierarchy: () => panel(<Hierarchy />),
+  inspector: () => panel(<Inspector />),
+  project: () => panel(<AssetPanel />),
+  console: () => panel(<Console />),
   animator: () => <AnimatorWindow />,
   profiler: () => <ProfilerPanel />,
-  build: () => <div className="panel-scroll"><BuildSettingsWindow /></div>,
-  settings: () => <ProjectSettingsWindow />,
+  build: () => <div className="panel-scroll g-panel"><BuildSettingsWindow /></div>,
+  settings: () => panel(<ProjectSettingsWindow />),
 };
 
 function defaultLayout(dv: DockviewApi) {
   dv.clear();
-  dv.addPanel({ id: 'viewport', component: 'viewport', title: 'Scene', renderer: 'always' });
-  dv.addPanel({ id: 'hierarchy', component: 'hierarchy', title: 'Hierarchy', position: { referencePanel: 'viewport', direction: 'left' }, initialWidth: 260 });
-  dv.addPanel({ id: 'inspector', component: 'inspector', title: 'Inspector', position: { referencePanel: 'viewport', direction: 'right' }, initialWidth: 330 });
-  dv.addPanel({ id: 'project', component: 'project', title: 'Project', position: { direction: 'below' }, initialHeight: 300 });
+  dv.addPanel({ id: 'scene', component: 'scene', title: 'Scene' });
+  dv.addPanel({ id: 'game', component: 'game', title: 'Game', position: { referencePanel: 'scene', direction: 'within' } });
+  dv.addPanel({ id: 'hierarchy', component: 'hierarchy', title: 'Hierarchy', position: { referencePanel: 'scene', direction: 'left' }, initialWidth: 250 });
+  dv.addPanel({ id: 'inspector', component: 'inspector', title: 'Inspector', position: { referencePanel: 'scene', direction: 'right' }, initialWidth: 340 });
+  dv.addPanel({ id: 'project', component: 'project', title: 'Project', position: { referencePanel: 'scene', direction: 'below' }, initialHeight: 250 });
   dv.addPanel({ id: 'console', component: 'console', title: 'Console', position: { referencePanel: 'project', direction: 'within' } });
   dv.getPanel('project')?.api.setActive();
-  dv.getPanel('viewport')?.api.setActive();
+  dv.getPanel('scene')?.api.setActive();
+}
+
+/// Window ▸ entries: id, title, shortcut, where it opens.
+const PANELS: { id: string; title: string; key?: string; near?: string }[] = [
+  { id: 'scene', title: 'Scene', key: 'Ctrl+1' },
+  { id: 'game', title: 'Game', key: 'Ctrl+2' },
+  { id: 'inspector', title: 'Inspector', key: 'Ctrl+3', near: 'inspector' },
+  { id: 'hierarchy', title: 'Hierarchy', key: 'Ctrl+4', near: 'hierarchy' },
+  { id: 'project', title: 'Project', key: 'Ctrl+5', near: 'project' },
+  { id: 'console', title: 'Console', key: 'Ctrl+Shift+C', near: 'project' },
+  { id: 'animator', title: 'Animator' },
+  { id: 'profiler', title: 'Profiler', key: 'Ctrl+7', near: 'project' },
+];
+
+/// Opens (or focuses) a panel of the dock (new ones next to the Scene view, or `near`).
+function showPanel(d: DockviewApi | null, id: string, title: string, near?: string) {
+  if (!d) return;
+  const ref = [near, 'scene', 'game', 'inspector'].find((r) => r && r !== id && d.getPanel(r));
+  const p = d.getPanel(id) ?? d.addPanel({ id, component: id, title, position: ref ? { referencePanel: ref, direction: 'within' } : undefined });
+  p.api.setActive();
+}
+
+const TOOLS = [
+  { id: 'hand', icon: Hand, title: 'View Tool (Q)' },
+  { id: 'move', icon: Move, title: 'Move Tool (W)' },
+  { id: 'rotate', icon: Rotate3d, title: 'Rotate Tool (E)' },
+  { id: 'scale', icon: Scale3d, title: 'Scale Tool (R)' },
+] as const;
+
+/// The main toolbar (Unity's): transform tools, Pivot / Local, Play / Pause / Step, windows, Build.
+function Toolbar({ dv }: { dv: React.RefObject<DockviewApi | null> }) {
+  const tool = useStore((s) => s.tool);
+  const center = useStore((s) => s.pivotCenter);
+  const local = useStore((s) => s.toolLocal);
+  const playing = useStore((s) => s.playing);
+  const paused = useStore((s) => s.paused);
+  return (
+    <div className="g-toolbar">
+      <div className="g-toolbar-left">
+        <div className="g-btn-group">
+          {TOOLS.map((t) => (
+            <button key={t.id} className={`g-tool${tool === t.id ? ' on' : ''}`} title={t.title} onClick={() => setState({ tool: t.id })}>
+              <t.icon size={15} strokeWidth={1.75} />
+            </button>
+          ))}
+        </div>
+        <div className="g-btn-group">
+          <button className="g-tool wide" title="Toggle Tool Handle Position (Z)" onClick={() => setState({ pivotCenter: !center })}>
+            <Crosshair size={13} /> {center ? 'Center' : 'Pivot'}
+          </button>
+          <button className="g-tool wide" title="Toggle Tool Handle Rotation (X)" onClick={() => setState({ toolLocal: !local })}>
+            {local ? <Box size={13} /> : <Globe size={13} />} {local ? 'Local' : 'Global'}
+          </button>
+        </div>
+      </div>
+      <div className="g-toolbar-center">
+        <div className="g-btn-group">
+          <button className={`g-tool play${playing ? ' on' : ''}`} title="Play (Ctrl+P)" onClick={() => (playing ? stopPlay() : void startPlay())}>
+            <Play size={15} fill="currentColor" />
+          </button>
+          <button className={`g-tool${paused ? ' on' : ''}`} title="Pause (Ctrl+Shift+P)" onClick={togglePause} disabled={!playing}>
+            <Pause size={15} fill="currentColor" />
+          </button>
+          <button className="g-tool" title="Step (Ctrl+Alt+P)" onClick={stepFrame} disabled={!playing}>
+            <StepForward size={15} />
+          </button>
+        </div>
+      </div>
+      <div className="g-toolbar-right">
+        <button className="g-btn" onClick={() => showPanel(dv.current, 'animator', 'Animator')} title="Window > Animator">
+          <Clapperboard size={13} /> Animator
+        </button>
+        <button className="g-btn" onClick={() => showPanel(dv.current, 'profiler', 'Profiler', 'project')} title="Window > Profiler">
+          <Activity size={13} /> Profiler
+        </button>
+        <button className="g-btn" onClick={() => showPanel(dv.current, 'build', 'Build Settings')} title="File > Build Settings (Ctrl+Shift+B)">
+          <Hammer size={13} /> Build
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/// The status bar: the last Console message (click: Console) and the editor mode.
+function StatusBar({ dv }: { dv: React.RefObject<DockviewApi | null> }) {
+  const last = useStore((s) => s.logs[s.logs.length - 1]);
+  const playing = useStore((s) => s.playing);
+  const paused = useStore((s) => s.paused);
+  return (
+    <div className="g-statusbar">
+      <span className={`g-status-msg ${last?.level === 'warn' ? 'warning' : last?.level ?? ''}`} onClick={() => showPanel(dv.current, 'console', 'Console', 'project')} title={last?.text}>
+        {last?.text ?? ''}
+      </span>
+      <span className="g-flex" />
+      <span className="g-status-dim">{playing ? (paused ? 'Paused' : 'Playing') : 'Edit Mode'}</span>
+    </div>
+  );
 }
 
 export function App() {
   const project = useStore((s) => s.project);
   const playing = useStore((s) => s.playing);
-  const paused = useStore((s) => s.paused);
   const dv = useRef<DockviewApi | null>(null);
   const controller = useStore((s) => s.controller);
   const revision = useStore((s) => s.revision);
+  const ready = useStore((s) => s.engineReady);
+  const tool = useStore((s) => s.tool);
+  const center = useStore((s) => s.pivotCenter);
+  const local = useStore((s) => s.toolLocal);
+  const grid = useStore((s) => s.showGrid);
+  const gizmos = useStore((s) => s.showGizmos);
+  const dual = useStore((s) => s.dual3ds);
   useEffect(() => {
     if (!project) return;
     void api.search('.scene.json').then((list) => (sceneFiles = list.map((e) => e.key).filter((k) => k.endsWith('.scene.json')).sort()));
   }, [project, revision]);
-  // Play / opening a scene brings the Scene / Game view to the front (Unity focuses the Game view)
+  // tool / view settings → the engine
+  useEffect(() => {
+    const e = getEngine();
+    if (!e) return;
+    if (tool !== 'hand') e.set_gizmo_mode(tool);
+    e.set_tool_handles(local, center, 0.25, 15, 0.1);
+    e.set_grid(grid);
+    e.set_gizmos(gizmos);
+    e.set_dual_3ds(dual);
+  }, [ready, tool, center, local, grid, gizmos, dual]);
+  // Play shows the Game view, Stop the Scene view (Unity); opening a scene shows the Scene view
   const openScenePath = useStore((s) => s.scene);
   useEffect(() => {
-    if (playing || openScenePath) dv.current?.getPanel('viewport')?.api.setActive();
-  }, [playing, openScenePath]);
+    dv.current?.getPanel(playing ? 'game' : 'scene')?.api.setActive();
+  }, [playing]);
+  useEffect(() => {
+    if (openScenePath) dv.current?.getPanel('scene')?.api.setActive();
+  }, [openScenePath]);
   // opening a controller shows the Animator window (next to the Scene view, like Unity)
   useEffect(() => {
-    const d = dv.current;
-    if (!controller || !d) return;
-    const p = d.getPanel('animator') ?? d.addPanel({ id: 'animator', component: 'animator', title: 'Animator', position: { referencePanel: 'viewport', direction: 'within' } });
-    p.api.setActive();
+    if (controller) showPanel(dv.current, 'animator', 'Animator');
   }, [controller]);
 
   useEffect(() => {
@@ -80,9 +198,23 @@ export function App() {
     void installDropHandling();
     const offKeys = installShortcuts();
     const windowKeys = (ev: KeyboardEvent) => {
-      if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.code === 'KeyB') {
+      const ctrl = ev.ctrlKey || ev.metaKey;
+      if (ctrl && ev.shiftKey && ev.code === 'KeyB') {
         ev.preventDefault();
         showPanel(dv.current, 'build', 'Build Settings');
+      }
+      // Window shortcuts (Unity): Ctrl+1 Scene, Ctrl+2 Game, Ctrl+3 Inspector, Ctrl+4 Hierarchy, Ctrl+5 Project, Ctrl+7 Profiler
+      const digit = /^Digit([1-7])$/.exec(ev.code)?.[1];
+      if (ctrl && !ev.shiftKey && !ev.altKey && digit) {
+        const p = PANELS.find((x) => x.key === `Ctrl+${digit}`);
+        if (p) {
+          ev.preventDefault();
+          showPanel(dv.current, p.id, p.title, p.near);
+        }
+      }
+      if (ctrl && ev.shiftKey && ev.code === 'KeyC') {
+        ev.preventDefault();
+        showPanel(dv.current, 'console', 'Console', 'project');
       }
     };
     window.addEventListener('keydown', windowKeys);
@@ -105,7 +237,7 @@ export function App() {
       const saved = localStorage.getItem(LAYOUT_KEY);
       if (saved) {
         e.api.fromJSON(JSON.parse(saved));
-        restored = !!e.api.getPanel('viewport');
+        restored = !!e.api.getPanel('scene') && !!e.api.getPanel('game');
       }
     } catch {
       restored = false;
@@ -135,34 +267,21 @@ export function App() {
   };
 
   return (
-    <div className="app">
-      <div className="toolbar">
-        <span className="brand">
-          <span className="logo">G</span>
-        </span>
-        <MenuBar menus={menus(dv, resetLayout, newWindow)} />
-        <span className="project-name">{project?.name}</span>
-        <div className="spacer" />
-        <div className="play-group">
-          <button className={`play${playing ? ' on' : ''}`} onClick={() => (playing ? stopPlay() : void startPlay())} title="Play / Stop (Ctrl+P)">
-            {playing ? '■' : '▶'}
-          </button>
-          <button className={`play${paused ? ' on' : ''}`} disabled={!playing} onClick={togglePause} title="Pause (Ctrl+Shift+P)">
-            ❚❚
-          </button>
-          <button className="play" disabled={!playing} onClick={stepFrame} title="Step (Ctrl+Alt+P)">
-            ▶❚
-          </button>
-        </div>
-        <div className="spacer" />
-        <button onClick={resetLayout} title="Back to the default panel layout">
-          Reset Layout
-        </button>
-        <button onClick={newWindow} title="A second editor window (drag assets between them)">
-          New Window
-        </button>
+    <div className={`g-app${playing ? ' playing' : ''}`}>
+      <MenuBar
+        menus={menus(dv, resetLayout, newWindow)}
+        right={
+          <span className="g-menubar-project">
+            {project?.name}
+            <span className="g-badge">3D</span>
+          </span>
+        }
+      />
+      <Toolbar dv={dv} />
+      <div className="g-dock">
+        <DockviewReact className="dockview-theme-dark" theme={themeDark} components={components} onReady={onReady} />
       </div>
-      <DockviewReact className="dock" theme={themeDark} components={components} onReady={onReady} />
+      <StatusBar dv={dv} />
       <ContextMenuHost />
     </div>
   );
@@ -171,33 +290,23 @@ export function App() {
 /// Scene files of the project (File ▸ Open Scene), refreshed when files change.
 let sceneFiles: string[] = [];
 
-const PANELS: { id: string; title: string; key?: string }[] = [
-  { id: 'viewport', title: 'Scene', key: 'Ctrl+1' },
-  { id: 'hierarchy', title: 'Hierarchy', key: 'Ctrl+4' },
-  { id: 'inspector', title: 'Inspector', key: 'Ctrl+3' },
-  { id: 'project', title: 'Project', key: 'Ctrl+5' },
-  { id: 'console', title: 'Console', key: 'Ctrl+Shift+C' },
-  { id: 'animator', title: 'Animator' },
-  { id: 'profiler', title: 'Profiler', key: 'Ctrl+7' },
-];
-
-/// Opens (or focuses) a panel of the dock.
-function showPanel(d: DockviewApi | null, id: string, title: string) {
-  if (!d) return;
-  const p = d.getPanel(id) ?? d.addPanel({ id, component: id, title, position: { referencePanel: 'viewport', direction: 'within' } });
-  p.api.setActive();
-}
-
 /// Unity's main menu: File, Edit, Assets, GameObject, Component, Window, Help.
 function menus(dv: React.RefObject<DockviewApi | null>, resetLayout: () => void, newWindow: () => void): { title: string; items: () => MenuItem[] }[] {
   const s = getState;
-  const noScene = () => !s().scene || s().playing;
+  const noScene = () => !s().scene;
+  const create = (k: 'scene' | 'prefab' | 'material' | 'controller') =>
+    void run('create', async () => {
+      const key = await api.createAsset(s().dir, k);
+      setState({ selection: [key] });
+      refresh();
+    });
   return [
     {
       title: 'File',
       items: () => [
         {
           label: 'New Scene',
+          shortcut: 'Ctrl+N',
           action: () =>
             void run('new scene', async () => {
               const key = await api.createAsset(s().dir, 'scene');
@@ -208,7 +317,8 @@ function menus(dv: React.RefObject<DockviewApi | null>, resetLayout: () => void,
           label: 'Open Scene',
           children: sceneFiles.length ? sceneFiles.map((k) => ({ label: k, checked: k === s().scene, action: () => void openScene(k) })) : [{ label: '(no scenes)', disabled: true }],
         },
-        { label: 'Save', shortcut: 'Ctrl+S', disabled: noScene(), action: () => void saveScene() },
+        '-',
+        { label: 'Save', shortcut: 'Ctrl+S', disabled: noScene() || s().playing, action: () => void saveScene() },
         '-',
         { label: 'Build Settings…', shortcut: 'Ctrl+Shift+B', action: () => showPanel(dv.current, 'build', 'Build Settings') },
         '-',
@@ -224,6 +334,7 @@ function menus(dv: React.RefObject<DockviewApi | null>, resetLayout: () => void,
         { label: 'Cut', shortcut: 'Ctrl+X', disabled: !s().entities.length, action: cut },
         { label: 'Copy', shortcut: 'Ctrl+C', disabled: !s().entities.length, action: copy },
         { label: 'Paste', shortcut: 'Ctrl+V', disabled: !hasClipboard() || noScene(), action: () => paste(null) },
+        '-',
         { label: 'Duplicate', shortcut: 'Ctrl+D', disabled: !s().entities.length, action: duplicate },
         { label: 'Delete', shortcut: 'Del', disabled: !s().entities.length, action: () => deleteSelection() },
         '-',
@@ -242,17 +353,17 @@ function menus(dv: React.RefObject<DockviewApi | null>, resetLayout: () => void,
       items: () => [
         {
           label: 'Create',
-          children: (['scene', 'prefab', 'material', 'controller'] as const).map((k) => ({
-            label: { scene: 'Scene', prefab: 'Prefab', material: 'Material', controller: 'Animator Controller' }[k],
-            action: () =>
-              void run('create', async () => {
-                const key = await api.createAsset(s().dir, k);
-                setState({ selection: [key] });
-                refresh();
-              }),
-          })),
+          children: [
+            { label: 'Folder', action: () => void run('create folder', async () => (setState({ selection: [await api.createFolder(s().dir, 'New Folder')] }), refresh())) },
+            '-',
+            { label: 'Scene', action: () => create('scene') },
+            { label: 'Prefab', action: () => create('prefab') },
+            { label: 'Material', action: () => create('material') },
+            { label: 'Animator Controller', action: () => create('controller') },
+          ],
         },
         { label: 'Show in Explorer', disabled: !s().selection.length, action: () => void api.reveal(s().selection[s().selection.length - 1]) },
+        '-',
         { label: 'Refresh', shortcut: 'Ctrl+R', action: refresh },
       ],
     },
@@ -279,8 +390,23 @@ function menus(dv: React.RefObject<DockviewApi | null>, resetLayout: () => void,
     },
     {
       title: 'Window',
-      items: () => [...PANELS.map((p) => ({ label: p.title, shortcut: p.key, action: () => showPanel(dv.current, p.id, p.title) })), '-', { label: 'Reset Layout', action: resetLayout }],
+      items: () => [
+        { label: 'General', children: PANELS.slice(0, 6).map((p) => ({ label: p.title, shortcut: p.key, action: () => showPanel(dv.current, p.id, p.title, p.near) })) },
+        { label: 'Animation', children: [{ label: 'Animator', action: () => showPanel(dv.current, 'animator', 'Animator') }] },
+        { label: 'Analysis', children: [{ label: 'Profiler', shortcut: 'Ctrl+7', action: () => showPanel(dv.current, 'profiler', 'Profiler', 'project') }] },
+        '-',
+        { label: 'Build Settings', shortcut: 'Ctrl+Shift+B', action: () => showPanel(dv.current, 'build', 'Build Settings') },
+        { label: 'Project Settings', action: () => showPanel(dv.current, 'settings', 'Project Settings') },
+        '-',
+        { label: 'Reset Layout', action: resetLayout },
+      ],
     },
-    { title: 'Help', items: () => [{ label: 'GoatEngine — Unity-like engine for the 3DS and desktop', disabled: true }] },
+    {
+      title: 'Help',
+      items: () => [
+        { label: 'About GoatEngine', action: () => log('GoatEngine — a Unity-like engine in Rust for the Nintendo 3DS and desktop (editor: Tauri + React, engine in WebAssembly)') },
+        { label: 'Keyboard Shortcuts', action: () => log('Q W E R tools · Z Pivot/Center · X Local/Global · F frame · Ctrl+P play · Ctrl+Shift+P pause · Ctrl+D duplicate · F2 rename · Ctrl+1..7 windows') },
+      ],
+    },
   ];
 }

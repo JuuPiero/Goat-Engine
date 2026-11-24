@@ -73,7 +73,8 @@ export async function startPlay() {
   if (!e || e.is_playing()) return;
   await syncFiles(e);
   e.play(getState().dual3ds);
-  setState({ playing: true, viewTab: 'game' });
+  // the Hierarchy / Inspector now show the running game (other ids)
+  setState({ playing: true, viewTab: 'game', entity: null, entities: [] });
   log(getState().scene ? `play ${getState().scene}` : 'play (the game\'s own start: no scene open)');
 }
 
@@ -81,7 +82,7 @@ export function stopPlay() {
   const e = engine;
   if (!e) return;
   e.stop();
-  setState({ playing: false, paused: false, viewTab: 'scene' });
+  setState({ playing: false, paused: false, viewTab: 'scene', entity: null, entities: [], hierarchyRev: getState().hierarchyRev + 1 });
   log('stop');
 }
 

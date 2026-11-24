@@ -43,9 +43,36 @@ export interface EditorState {
   viewTab: 'scene' | 'game';
   /// The controller open in the Animator window.
   controller: string | null;
+  /// Unity's transform tools (Q W E R) and handle settings (Z Pivot / Center, X Local / Global).
+  tool: 'hand' | 'move' | 'rotate' | 'scale';
+  pivotCenter: boolean;
+  toolLocal: boolean;
+  /// Scene view bar: 2D, Persp / Iso, Grid, Gizmos.
+  view2d: boolean;
+  viewOrtho: boolean;
+  showGrid: boolean;
+  showGizmos: boolean;
+  /// Game view: size (GAME_SIZES id), zoom, stats overlay.
+  gameSize: string;
+  gameZoom: number;
+  gameStats: boolean;
+  /// draw calls / triangles line of the last frames
+  stats: string;
+  engineError: string | null;
+  engineReady: boolean;
 }
 
-let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, entities: [], renaming: null, undoLabel: null, redoLabel: null, contextMenu: null, hierarchyRev: 0, playing: false, paused: false, dual3ds: true, viewTab: 'scene', controller: null };
+let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, entities: [], renaming: null, undoLabel: null, redoLabel: null, contextMenu: null, hierarchyRev: 0, playing: false, paused: false, dual3ds: true, viewTab: 'scene', controller: null, tool: 'move', pivotCenter: false, toolLocal: false, view2d: false, viewOrtho: false, showGrid: true, showGizmos: true, gameSize: '3ds', gameZoom: 1, gameStats: false, stats: '', engineError: null, engineReady: false };
+/// Editor preferences remembered between sessions (per machine, like Unity's EditorPrefs).
+const PREFS_KEY = 'goat.editor.prefs.v1';
+const PREF_KEYS = ['tool', 'pivotCenter', 'toolLocal', 'showGrid', 'showGizmos', 'gameSize', 'gameZoom', 'gameStats', 'dual3ds'] as const;
+try {
+  const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as Partial<EditorState>;
+  for (const k of PREF_KEYS) if (k in saved) (state as unknown as Record<string, unknown>)[k] = saved[k];
+} catch {
+  /* no storage: defaults */
+}
+
 const listeners = new Set<() => void>();
 
 export function getState(): EditorState {
@@ -55,6 +82,13 @@ export function getState(): EditorState {
 export function setState(patch: Partial<EditorState> | ((s: EditorState) => Partial<EditorState>)) {
   const p = typeof patch === 'function' ? patch(state) : patch;
   state = { ...state, ...p };
+  if (PREF_KEYS.some((k) => k in p)) {
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(Object.fromEntries(PREF_KEYS.map((k) => [k, state[k]]))));
+    } catch {
+      /* not remembered */
+    }
+  }
   listeners.forEach((l) => l());
 }
 

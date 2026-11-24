@@ -2,6 +2,8 @@
 // (foldout, ⋮ menu: Reset / Remove / Copy / Paste values) with fields drawn from the engine's
 // component metadata (enums, variants, asset references with drop + picker, colors, ranges,
 // layers, masks), and Add Component (a searchable category popup). Edits are Undo steps.
+import { ChevronRight, EllipsisVertical } from 'lucide-react';
+import { ComponentIcon, ObjectIcon } from '../ui/icons';
 import { useSettings } from '../projectSettings';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, nameOf } from '../api';
@@ -403,12 +405,13 @@ export function ComponentList({ id }: { id: string }) {
                     })
                   }
                 >
-                  {collapsed.has(c.name) ? '▸' : '▾'}
+                  <ChevronRight size={11} className={`g-foldout-arrow${collapsed.has(c.name) ? '' : ' open'}`} />
                 </span>
-                <span title={c.name}>{displayName(c.name)}</span>
+                <span className="g-comp-icon"><ComponentIcon name={c.name} /></span>
+                <span className="g-comp-title" title={c.name}>{displayName(c.name)}</span>
                 <span className="spacer" />
-                <button className="icon menu-dots" title="Component menu" onClick={menu}>
-                  ⋮
+                <button className="g-icon-btn" title="Component menu" onClick={menu}>
+                  <EllipsisVertical size={13} />
                 </button>
               </div>
               {!collapsed.has(c.name) &&
@@ -535,6 +538,7 @@ export function EntityInspector({ id }: { id: string }) {
   const [kind, setKind] = useState('entity');
   const [activeSelf, setActiveSelf] = useState(true);
   const [tag, setTag] = useState('Untagged');
+  const [icon, setIcon] = useState('empty');
   const projectTags = useSettings().tags;
   useEffect(() => {
     const e = getEngine();
@@ -542,7 +546,8 @@ export function EntityInspector({ id }: { id: string }) {
     const json = e.transform(id);
     setT(json ? JSON.parse(json) : null);
     const rows: { id: string; name: string; kind: string }[] = JSON.parse(e.hierarchy());
-    const r = rows.find((r) => r.id === id) as ({ id: string; name: string; kind: string; active_self?: boolean; tag?: string } | undefined);
+    const r = rows.find((r) => r.id === id) as ({ id: string; name: string; kind: string; active_self?: boolean; tag?: string; icon?: string } | undefined);
+    setIcon(r?.icon ?? 'empty');
     setActiveSelf(r?.active_self ?? true);
     setTag(r?.tag ?? 'Untagged');
     setName(r?.name ?? '');
@@ -555,42 +560,51 @@ export function EntityInspector({ id }: { id: string }) {
     edit(field === 'position' ? 'Move' : field === 'euler' ? 'Rotate' : 'Scale', `${id}/transform/${field}`, () => getEngine()?.set_transform(id, JSON.stringify(next)));
   };
   return (
-    <div className="inspector">
-      <div className="entity-header">
-        <span className={`entity-icon ${kind}`}>▣</span>
-        <input
-          type="checkbox"
-          title="Active (SetActive)"
-          checked={activeSelf}
-          onChange={(e) => {
-            const on = e.target.checked;
-            setActiveSelf(on);
-            mutate(on ? 'Activate' : 'Deactivate', () => getEngine()?.set_active(id, on));
-          }}
-        />
-        <input
-          className="entity-name grow"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-          onBlur={() => mutate('Rename', () => getEngine()?.rename(id, name))}
-        />
-      </div>
-      <div className="tag-row">
-        <span className="dim">Tag</span>
-        <input
-          className="grow"
-          list="goat-tags"
-          value={tag}
-          onChange={(e) => setTag(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-          onBlur={(e) => mutate('Change Tag', () => getEngine()?.set_tag(id, e.target.value.trim() || 'Untagged'))}
-        />
-        <datalist id="goat-tags">
-          {[...TAGS, ...projectTags.filter((x) => !TAGS.includes(x))].map((t) => (
-            <option key={t} value={t} />
-          ))}
-        </datalist>
+    <div className="g-inspector inspector">
+      <div className="g-gohead">
+        <div className={`g-gohead-icon${kind === 'prefab' || kind === 'model' ? ' prefab' : ''}`}>
+          <ObjectIcon icon={icon} kind={kind} size={20} />
+        </div>
+        <div className="g-gohead-main">
+          <div className="g-row">
+            <input
+              type="checkbox"
+              className="g-check"
+              title="Active (SetActive)"
+              checked={activeSelf}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setActiveSelf(on);
+                mutate(on ? 'Activate' : 'Deactivate', () => getEngine()?.set_active(id, on));
+              }}
+            />
+            <input
+              className="g-input g-gohead-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+              onBlur={() => mutate('Rename', () => getEngine()?.rename(id, name))}
+            />
+          </div>
+          <div className="g-row g-gohead-tags">
+            <span className="g-mini-label">Tag</span>
+            <select
+              className="g-input g-select"
+              value={tag}
+              onChange={(e) => {
+                const v = e.target.value;
+                setTag(v);
+                mutate('Change Tag', () => getEngine()?.set_tag(id, v || 'Untagged'));
+              }}
+            >
+              {[...new Set([...TAGS, ...projectTags, tag])].map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
       </div>
       {count > 1 && <div className="dim multi-note">{count} objects selected — editing the active one</div>}
       {kind === 'generated' && <div className="dim multi-note">Part of a prefab / model instance: changes are saved as overrides</div>}
@@ -605,7 +619,8 @@ export function EntityInspector({ id }: { id: string }) {
             ])
           }
         >
-          Transform
+          <span className="g-comp-icon"><ComponentIcon name="Transform" /></span>
+          <span className="g-comp-title">Transform</span>
         </div>
         {(['position', 'euler', 'scale'] as const).map((f) => (
           <div key={f} className="vec">

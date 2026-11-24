@@ -598,6 +598,16 @@ C++ bọc bảng này bằng một template class (xem `crates/goat-script-nativ
 
 Editor dùng Tauri 2 + React; engine chạy bên trong editor dưới dạng WebAssembly và render bằng WebGPU.
 
+Giao diện và hành vi theo editor PiaEngine (skin "Unity Dark", icon lucide, font Inter):
+- **Khung**: menu chính (bên phải: tên project), thanh công cụ chính (Hand / Move / Rotate / Scale, Pivot / Center, Global / Local, Play / Pause / Step ở giữa, nút Animator / Profiler / Build), dock panel kéo thả được (mặc định: Hierarchy | Scene + Game | Inspector, dưới là Project + Console), thanh trạng thái (thông báo Console gần nhất, Edit Mode / Playing / Paused). Ctrl+1 Scene, Ctrl+2 Game, Ctrl+3 Inspector, Ctrl+4 Hierarchy, Ctrl+5 Project, Ctrl+7 Profiler, Ctrl+Shift+C Console.
+- **Scene view** và **Game view** là hai tab riêng (dùng chung một canvas WebGPU: tab nào đang hiện thì giữ canvas). Scene view có thanh **2D** (camera trực giao nhìn theo −Z, chỉ kéo / zoom), **Grid**, **Gizmos**, hộp công cụ dọc ở góc, con quay trục góc phải (click một trục để nhìn theo trục đó, nhãn Persp / Iso để đổi phối cảnh / trực giao). Khi Play, Scene view vẫn xem được game đang chạy qua camera editor.
+- **Game view**: vẽ bằng camera của scene ngay cả khi chưa Play (như Unity); menu kích thước (3DS 2 màn hình, Free Aspect, tỉ lệ, độ phân giải), Scale, Stats. Play tự chuyển sang Game view, Stop quay về Scene view.
+- **Play mode**: Hierarchy và Inspector hiện thế giới đang chạy (cập nhật liên tục); sửa giá trị lúc Play có hiệu lực ngay và mất khi Stop, không ghi Undo — như Unity.
+- **Hierarchy**: nút ＋▾ (menu GameObject), ô tìm kiếm (`t:Camera`, `t:Light`, `t:Mesh`... lọc theo loại), dòng scene, icon theo component chính (camera, đèn, particle, audio, mesh), menu chuột phải như PiaEngine (Cut / Copy / Paste / Paste As Child, Rename / Duplicate / Delete, Select Children / Frame Selected, Create Empty, 3D Object ▸ 2D Object ▸ Effects ▸ Light ▸ Audio ▸ UI ▸ Camera).
+- **Project**: nút ＋▾ Create, ô tìm kiếm, cây thư mục, breadcrumb, lưới icon theo loại asset, thanh trượt cỡ icon; menu chuột phải: Create ▸, Open, Show in Explorer, Rename / Duplicate / Delete, Cut / Copy / Paste, Copy Path, Select All, Refresh.
+- **Inspector**: đầu trang có icon object, checkbox Active, tên, Tag; mỗi component có icon, nút gập và menu ⋮.
+- **Console**: Clear, Collapse, tìm kiếm, bật / tắt info / warning / error kèm số đếm, khung xem đầy đủ dòng đang chọn.
+- Các lựa chọn (tool, Pivot / Local, Grid, Gizmos, kích thước Game view, Stats) được nhớ giữa các lần mở.
 - **Menu chính** như Unity: File (New / Open / Save Scene), Edit (Undo / Redo kèm tên thao tác, Cut / Copy / Paste / Duplicate / Delete, Select All, Frame Selected, Play), Assets (Create, Show in Explorer), GameObject (Create Empty, 3D Object, 2D Object, Effects, Light, Audio, UI, Camera), Component (mọi component theo nhóm), Window (mở lại panel, Reset Layout).
 - **Undo / Redo** (Ctrl+Z / Ctrl+Y) cho mọi thay đổi trong scene: tạo, xóa, đổi tên, đổi cha, gizmo, sửa component, thêm / bỏ component, dán. Kéo một số hoặc gõ liên tục vào cùng một trường được gộp thành một bước Undo.
 - **Phím tắt**: Ctrl+S lưu, Ctrl+P Play, Ctrl+D nhân bản (tên `Cube (1)`), Ctrl+C / X / V, Ctrl+A, Delete, F2 đổi tên, F căn khung nhìn, Ctrl+Shift+N tạo GameObject rỗng, Alt+Shift+N tạo con.

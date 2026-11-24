@@ -31,6 +31,8 @@ pub struct EditorEngine {
     core: EditorCore,
     width: u32,
     height: u32,
+    /// The Game view shows the 3DS's two screens (else the window).
+    dual: bool,
 }
 
 #[wasm_bindgen]
@@ -44,7 +46,7 @@ impl EditorEngine {
         let gfx = WgpuBackend::new_async(wgpu::SurfaceTarget::Canvas(canvas), w, h, DisplayLayout::Window).await.map_err(|e| JsValue::from_str(&e.to_string()))?;
         let mut core = EditorCore::new(AssetIo::new("assets"));
         core.aspect = w as f32 / h as f32;
-        let mut me = EditorEngine { gfx, core, width: w, height: h };
+        let mut me = EditorEngine { gfx, core, width: w, height: h, dual: false };
         me.core.first_frame(&mut me.gfx);
         Ok(me)
     }
@@ -161,16 +163,16 @@ impl EditorEngine {
     /// Unity's SetActive (the object and its children).
     pub fn set_active(&mut self, id: &str, on: bool) {
         if let Some(e) = entity_of(id) {
-            goat_runtime::set_active(&mut self.core.edit.world, e, on);
+            goat_runtime::set_active(&mut self.core.active_mut().world, e, on);
         }
     }
     /// Sets the tag ("Untagged" / empty removes it).
     pub fn set_tag(&mut self, id: &str, tag: &str) {
         if let Some(e) = entity_of(id) {
             if tag.is_empty() || tag == "Untagged" {
-                let _ = self.core.edit.world.remove_one::<goat_runtime::Tag>(e);
+                let _ = self.core.active_mut().world.remove_one::<goat_runtime::Tag>(e);
             } else {
-                let _ = self.core.edit.world.insert_one(e, goat_runtime::Tag(tag.to_string()));
+                let _ = self.core.active_mut().world.insert_one(e, goat_runtime::Tag(tag.to_string()));
             }
         }
     }
@@ -252,6 +254,33 @@ impl EditorEngine {
         t.snap = [snap_move, snap_rotate, snap_scale];
     }
 
+    // ------------------------------------------------------------ Scene view options
+    /// Unity's 2D button (orthographic view down −Z, pan / zoom only).
+    pub fn set_2d(&mut self, on: bool) {
+        self.core.set_2d(on);
+    }
+    /// Persp / Iso.
+    pub fn set_ortho(&mut self, on: bool) {
+        self.core.set_ortho(on);
+    }
+    /// View gizmo click: "x" / "-x" / "y" / "-y" / "z" / "-z".
+    pub fn view_axis(&mut self, axis: &str) {
+        self.core.view_axis(axis);
+    }
+    /// { rotation: [x, y, z, w], distance, view: { mode2d, ortho, grid, gizmos, scene_view } }
+    pub fn view_state(&self) -> String {
+        self.core.view_state().to_string()
+    }
+    pub fn set_grid(&mut self, on: bool) {
+        self.core.view.grid = on;
+    }
+    pub fn set_gizmos(&mut self, on: bool) {
+        self.core.view.gizmos = on;
+    }
+    /// The canvas shows the Scene view (true) or the Game view (false).
+    pub fn set_scene_view(&mut self, on: bool) {
+        self.core.view.scene_view = on;
+    }
     pub fn orbit(&mut self, dx: f32, dy: f32) {
         self.core.orbit_by(dx, dy);
     }
@@ -267,12 +296,15 @@ impl EditorEngine {
 
     /// Play mode; `dual_3ds` shows the game as the 3DS's two screens.
     pub fn play(&mut self, dual_3ds: bool) {
-        self.gfx.set_layout(if dual_3ds { DisplayLayout::Dual3ds } else { DisplayLayout::Window });
+        self.dual = dual_3ds;
         self.core.play();
     }
     pub fn stop(&mut self) {
         self.core.stop();
-        self.gfx.set_layout(DisplayLayout::Window);
+    }
+    /// The Game view's 3DS two-screen layout (also in edit mode); the Scene view is always one view.
+    pub fn set_dual_3ds(&mut self, on: bool) {
+        self.dual = on;
     }
     /// Pauses / resumes Play mode (the Game view keeps drawing).
     pub fn set_paused(&mut self, paused: bool) {
@@ -298,10 +330,12 @@ impl EditorEngine {
 
     /// One frame (`dt` seconds).
     pub fn frame(&mut self, dt: f32) {
-        self.core.frame(&mut self.gfx, dt.min(0.1));
-        if !self.core.is_playing() && self.gfx.layout() != DisplayLayout::Window {
-            self.gfx.set_layout(DisplayLayout::Window);
+        // the 3DS screens only in the Game view
+        let layout = if self.dual && !self.core.view.scene_view { DisplayLayout::Dual3ds } else { DisplayLayout::Window };
+        if self.gfx.layout() != layout {
+            self.gfx.set_layout(layout);
         }
+        self.core.frame(&mut self.gfx, dt.min(0.1));
     }
 
     /// Draw calls / triangles of the last frame.

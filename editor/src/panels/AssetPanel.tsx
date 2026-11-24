@@ -7,14 +7,10 @@ import { api, fileUrl, nameOf, parentOf, type Entry, type Folder } from '../api'
 import { beginAssetDrag } from '../dnd';
 import { openScene } from '../engine';
 import { getState, log, refresh, run, setState, useStore } from '../store';
-import { AssetIcon } from './icons';
+import { ChevronDown, ChevronRight, Plus, Search, X } from 'lucide-react';
+import { AssetGlyph, AssetSmallIcon } from '../ui/icons';
+import { openContextMenu, openMenuBelow, type MenuItem } from '../ui/Menu';
 import { openController } from './AnimatorWindow';
-
-interface Menu {
-  x: number;
-  y: number;
-  key: string | null;
-}
 
 function FolderTree({ folder, depth, expanded, toggle }: { folder: Folder; depth: number; expanded: Set<string>; toggle: (k: string) => void }) {
   const dir = useStore((s) => s.dir);
@@ -24,22 +20,22 @@ function FolderTree({ folder, depth, expanded, toggle }: { folder: Folder; depth
   return (
     <div>
       <div
-        className={`tree-row${dir === folder.key ? ' active' : ''}${drop === target ? ' drop' : ''}`}
-        style={{ paddingLeft: 6 + depth * 14 }}
+        className={`g-ftree-row${dir === folder.key ? ' selected' : ''}${drop === target ? ' dragover' : ''}`}
+        style={{ paddingLeft: 4 + depth * 12 }}
         data-drop={target}
         onClick={() => setState({ dir: folder.key, selection: [] })}
       >
         <span
-          className="twisty"
+          className={`g-harrow${open ? ' open' : ''}${folder.children.length ? '' : ' empty'}`}
           onClick={(e) => {
             e.stopPropagation();
             toggle(folder.key);
           }}
         >
-          {folder.children.length ? (open ? '▾' : '▸') : ''}
+          <ChevronRight size={11} />
         </span>
-        <AssetIcon kind="folder" size={14} />
-        <span className="tree-name">{folder.name}</span>
+        <AssetSmallIcon kind="folder" />
+        <span className="g-ellipsis">{folder.key ? folder.name : 'Assets'}</span>
       </div>
       {open && folder.children.map((c) => <FolderTree key={c.key} folder={c} depth={depth + 1} expanded={expanded} toggle={toggle} />)}
     </div>
@@ -63,9 +59,8 @@ export function AssetPanel() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']));
   const [query, setQuery] = useState('');
-  const [size, setSize] = useState(72);
+  const [size, setSize] = useState(64);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [menu, setMenu] = useState<Menu | null>(null);
   const [box, setBox] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const anchor = useRef<string | null>(null);
@@ -253,137 +248,153 @@ export function AssetPanel() {
 
   useEffect(() => {
     const up = () => setBox(null);
-    const close = () => setMenu(null);
     window.addEventListener('pointerup', up);
-    window.addEventListener('click', close);
-    return () => {
-      window.removeEventListener('pointerup', up);
-      window.removeEventListener('click', close);
-    };
+    return () => window.removeEventListener('pointerup', up);
   }, []);
 
   // ------------------------------------------------------------------ render
   const crumbs = ['', ...dir.split('/').filter(Boolean).map((_, i, a) => a.slice(0, i + 1).join('/'))];
   const clip = useStore((s) => s.clipboard);
-  const menuItems = (key: string | null): [string, () => void, boolean?][] => [
-    ['Create ▸ Folder', createFolder],
-    ['Create ▸ Material', () => createAsset('material')],
-    ['Create ▸ Scene', () => createAsset('scene')],
-    ['Create ▸ Prefab', () => createAsset('prefab')],
-    ['Create ▸ Animator Controller', () => createAsset('controller')],
-    ['—', () => {}],
-    ['Rename (F2)', () => key && setRenaming(key), !key],
-    ['Duplicate (Ctrl+D)', () => duplicate(selection), !selection.length],
-    ['Copy (Ctrl+C)', () => setState({ clipboard: { keys: selection, cut: false } }), !selection.length],
-    ['Cut (Ctrl+X)', () => setState({ clipboard: { keys: selection, cut: true } }), !selection.length],
-    ['Paste (Ctrl+V)', paste, !clip],
-    ['Delete', () => remove(selection), !selection.length],
-    ['—', () => {}],
-    ['Show in Explorer', () => run('reveal', () => api.reveal(key ?? dir)), false],
-    ['Copy Path', () => navigator.clipboard.writeText(key ?? dir), false],
+  const createItems: MenuItem[] = [
+    { label: 'Folder', action: () => void createFolder() },
+    '-',
+    { label: 'Scene', action: () => void createAsset('scene') },
+    { label: 'Prefab', action: () => void createAsset('prefab') },
+    { label: 'Material', action: () => void createAsset('material') },
+    { label: 'Animator Controller', action: () => void createAsset('controller') },
   ];
+  /// Unity's Project window context menu (on an asset, or on empty space).
+  const menuFor = (key: string | null): MenuItem[] => {
+    const entry = key ? entries.find((e) => e.key === key) : null;
+    const sel = selection.length > 0;
+    return [
+      { label: 'Create', children: createItems },
+      '-',
+      ...(key
+        ? ([
+            { label: 'Open', disabled: !entry, action: () => entry && open(entry) },
+            { label: 'Show in Explorer', action: () => void run('reveal', () => api.reveal(key)) },
+            '-',
+            { label: 'Rename', shortcut: 'F2', action: () => setRenaming(key) },
+            { label: 'Duplicate', shortcut: 'Ctrl+D', disabled: !sel, action: () => void duplicate(selection) },
+            { label: 'Delete', shortcut: 'Del', disabled: !sel, action: () => void remove(selection) },
+            '-',
+            { label: 'Cut', shortcut: 'Ctrl+X', disabled: !sel, action: () => setState({ clipboard: { keys: selection, cut: true } }) },
+            { label: 'Copy', shortcut: 'Ctrl+C', disabled: !sel, action: () => setState({ clipboard: { keys: selection, cut: false } }) },
+            { label: 'Paste', shortcut: 'Ctrl+V', disabled: !clip, action: () => void paste() },
+            '-',
+            { label: 'Copy Path', action: () => void navigator.clipboard.writeText(key) },
+          ] as MenuItem[])
+        : ([
+            { label: 'Paste', shortcut: 'Ctrl+V', disabled: !clip, action: () => void paste() },
+            { label: 'Select All', shortcut: 'Ctrl+A', action: () => setState({ selection: keys }) },
+            '-',
+            { label: 'Show in Explorer', action: () => void run('reveal', () => api.reveal(dir)) },
+          ] as MenuItem[])),
+      { label: 'Refresh', shortcut: 'Ctrl+R', action: refresh },
+    ];
+  };
 
   return (
-    <div className="asset-panel">
-      <div className="asset-toolbar">
-        <button onClick={(e) => (e.stopPropagation(), setMenu({ x: e.clientX, y: e.clientY + 8, key: null }))}>＋ Create</button>
-        <div className="crumbs">
-          {crumbs.map((c) => (
-            <span key={c} className={`crumb${dropTarget === `folder:${c}` ? ' drop' : ''}`} data-drop={`folder:${c}`} onClick={() => (setQuery(''), setState({ dir: c, selection: [] }))}>
-              {c ? nameOf(c) : 'Assets'}
-            </span>
-          ))}
-        </div>
-        <input className="search" placeholder="Search" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <input type="range" min={40} max={128} value={size} onChange={(e) => setSize(+e.target.value)} title="Icon size" />
-      </div>
-      <div className="asset-body">
-        <div className="asset-tree">{tree && <FolderTree folder={tree} depth={0} expanded={expanded} toggle={toggle} />}</div>
-        <div
-          ref={gridRef}
-          className={`asset-grid${dropTarget === `folder:${dir}` ? ' drop' : ''}`}
-          tabIndex={0}
-          data-drop={query ? undefined : `folder:${dir}`}
-          onKeyDown={onKeyDown}
-          onPointerDown={onGridPointerDown}
-          onPointerMove={onGridPointerMove}
-          onContextMenu={(e) => (e.preventDefault(), setMenu({ x: e.clientX, y: e.clientY, key: null }))}
-        >
-          {entries.map((en) => {
-            const sel = selected.has(en.key);
-            const isDropFolder = en.is_dir && dropTarget === `folder:${en.key}`;
-            const cut = clip?.cut && clip.keys.includes(en.key);
-            return (
-              <div
-                key={en.key}
-                data-key={en.key}
-                data-drop={en.is_dir ? `folder:${en.key}` : undefined}
-                className={`asset-item${sel ? ' selected' : ''}${isDropFolder ? ' drop' : ''}${cut ? ' cut' : ''}`}
-                style={{ width: size + 24 }}
-                onPointerDown={(e) => onItemPointerDown(e, en)}
-                onPointerUp={(e) => onItemPointerUp(e, en)}
-                onDoubleClick={() => open(en)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (!sel) select(en.key, { ctrlKey: false, shiftKey: false });
-                  setMenu({ x: e.clientX, y: e.clientY, key: en.key });
-                }}
-                title={en.key}
-              >
-                <div className="thumb" style={{ width: size, height: size }}>
-                  {en.kind === 'image' && project ? <img src={fileUrl(project.assets, en.key, en.modified)} draggable={false} /> : <AssetIcon kind={en.kind} size={size * 0.7} />}
-                </div>
-                {renaming === en.key ? (
-                  <input
-                    className="rename"
-                    autoFocus
-                    defaultValue={en.name}
-                    onFocus={(e) => e.target.setSelectionRange(0, stemLength(en.name, en.is_dir))}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                      e.stopPropagation();
-                      if (e.key === 'Enter') void commitRename(en.key, (e.target as HTMLInputElement).value.trim());
-                      if (e.key === 'Escape') setRenaming(null);
-                    }}
-                    onBlur={(e) => void commitRename(en.key, e.target.value.trim())}
-                  />
-                ) : (
-                  <div className="label">{en.name}</div>
-                )}
-              </div>
-            );
-          })}
-          {box && Math.abs(box.x1 - box.x0) + Math.abs(box.y1 - box.y0) > 4 && (
-            <div className="marquee" style={{ left: Math.min(box.x0, box.x1), top: Math.min(box.y0, box.y1), width: Math.abs(box.x1 - box.x0), height: Math.abs(box.y1 - box.y0) }} />
+    <div className="g-panel asset-panel">
+      <div className="g-panelbar">
+        <button className="g-btn small" title="Create" onClick={(e) => openMenuBelow(e.currentTarget, createItems)}>
+          <Plus size={13} />
+          <ChevronDown size={11} />
+        </button>
+        <span className="g-flex" />
+        <div className="g-search-wrap">
+          <Search size={12} />
+          <input className="g-input g-search" placeholder="Search" value={query} onChange={(e) => setQuery(e.target.value)} />
+          {query && (
+            <button className="g-icon-btn" onClick={() => setQuery('')} title="Clear">
+              <X size={11} />
+            </button>
           )}
-          {entries.length === 0 && <div className="empty">{query ? 'No match' : 'Empty folder — drop files here'}</div>}
         </div>
       </div>
-      <div className="asset-status">
-        {selection.length ? `${selection.length} selected — ${selection[selection.length - 1]}` : `${entries.length} items`}
-      </div>
-      {menu && (
-        <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
-          {menuItems(menu.key).map(([label, f, disabled], i) =>
-            label === '—' ? (
-              <div key={i} className="sep" />
+      <div className="g-project-body">
+        <div className="g-ftree">{tree && <FolderTree folder={tree} depth={0} expanded={expanded} toggle={toggle} />}</div>
+        <div className="g-project-main">
+          <div className="g-crumbs">
+            {query ? (
+              <span className="g-status-dim">Search: {query}</span>
             ) : (
-              <div
-                key={i}
-                className={`item${disabled ? ' disabled' : ''}`}
-                onClick={() => {
-                  if (disabled) return;
-                  setMenu(null);
-                  void f();
-                }}
-              >
-                {label}
-              </div>
-            ),
-          )}
+              crumbs.map((c, i) => (
+                <span key={c}>
+                  {i > 0 && <span className="g-crumb-sep"> › </span>}
+                  <span className={`g-crumb${dropTarget === `folder:${c}` ? ' drop' : ''}`} data-drop={`folder:${c}`} onClick={() => (setQuery(''), setState({ dir: c, selection: [] }))}>
+                    {c ? nameOf(c) : 'Assets'}
+                  </span>
+                </span>
+              ))
+            )}
+          </div>
+          <div
+            ref={gridRef}
+            className={`g-grid asset-grid${dropTarget === `folder:${dir}` ? ' drop' : ''}`}
+            style={{ ['--icon' as string]: `${size}px` }}
+            tabIndex={0}
+            data-drop={query ? undefined : `folder:${dir}`}
+            onKeyDown={onKeyDown}
+            onPointerDown={onGridPointerDown}
+            onPointerMove={onGridPointerMove}
+            onContextMenu={(e) => openContextMenu(e, menuFor(null))}
+          >
+            {entries.map((en) => {
+              const sel = selected.has(en.key);
+              const isDropFolder = en.is_dir && dropTarget === `folder:${en.key}`;
+              const cut = clip?.cut && clip.keys.includes(en.key);
+              const activeKey = selection[selection.length - 1];
+              return (
+                <div
+                  key={en.key}
+                  data-key={en.key}
+                  data-drop={en.is_dir ? `folder:${en.key}` : undefined}
+                  className={`g-asset${sel ? ' selected' : ''}${sel && selection.length > 1 && activeKey === en.key ? ' active' : ''}${isDropFolder ? ' dragover' : ''}${cut ? ' cut' : ''}`}
+                  onPointerDown={(e) => onItemPointerDown(e, en)}
+                  onPointerUp={(e) => onItemPointerUp(e, en)}
+                  onDoubleClick={() => open(en)}
+                  onContextMenu={(e) => {
+                    if (!sel) select(en.key, { ctrlKey: false, shiftKey: false });
+                    openContextMenu(e, menuFor(en.key));
+                  }}
+                  title={en.key}
+                >
+                  <div className="g-asset-icon g-asset-glyph">
+                    {en.kind === 'image' && project && size > 24 ? <img className="g-thumb" src={fileUrl(project.assets, en.key, en.modified)} draggable={false} /> : <AssetGlyph kind={en.kind} size={size} />}
+                  </div>
+                  {renaming === en.key ? (
+                    <input
+                      className="g-input g-asset-rename"
+                      autoFocus
+                      defaultValue={en.name}
+                      onFocus={(e) => e.target.setSelectionRange(0, stemLength(en.name, en.is_dir))}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        e.stopPropagation();
+                        if (e.key === 'Enter') void commitRename(en.key, (e.target as HTMLInputElement).value.trim());
+                        if (e.key === 'Escape') setRenaming(null);
+                      }}
+                      onBlur={(e) => void commitRename(en.key, e.target.value.trim())}
+                    />
+                  ) : (
+                    <div className="g-asset-name">{en.name}</div>
+                  )}
+                </div>
+              );
+            })}
+            {box && Math.abs(box.x1 - box.x0) + Math.abs(box.y1 - box.y0) > 4 && (
+              <div className="marquee" style={{ left: Math.min(box.x0, box.x1), top: Math.min(box.y0, box.y1), width: Math.abs(box.x1 - box.x0), height: Math.abs(box.y1 - box.y0) }} />
+            )}
+            {entries.length === 0 && <div className="g-empty">{query ? 'No match' : 'This folder is empty — drop files here'}</div>}
+          </div>
+          <div className="g-project-status">
+            <span className="g-flex g-ellipsis">{selection.length ? (selection.length > 1 ? `${selection.length} selected` : `Assets/${selection[selection.length - 1]}`) : ''}</span>
+            <input type="range" min={16} max={128} value={size} onChange={(e) => setSize(+e.target.value)} title="Icon size" />
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

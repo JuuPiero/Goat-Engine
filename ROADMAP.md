@@ -101,6 +101,7 @@ Mọi ngôn ngữ đi qua cùng một lõi (`goat-script`: component `Script`, t
   - ✅ Build Settings (danh sách scene, nền tảng, Build từ editor) + Project Settings (`assets/project.json`: Time, gravity, tag, layer) + `SceneManager.loadScene` (JS / C#)
   - ✅ Game view: menu kích thước (3DS, Free Aspect, tỉ lệ, độ phân giải cố định)
   - ✅ Scene view: tool Hand (Q), Pivot / Center, Local / Global, snap khi giữ Ctrl, kéo gizmo cho cả vùng chọn
+  - ✅ Giao diện editor như PiaEngine: menu / toolbar / dock / status bar, Scene và Game view riêng (2D, Grid, Gizmos, con quay trục, Persp / Iso, Scene view khi Play, Game view khi chưa Play), Hierarchy / Inspector của game đang chạy, menu Hierarchy / Project như Pia
   - ⬜ Đợt 3 — cửa sổ: Animation window, Package Manager, prefab mode + Apply / Revert override, tool Rect, sửa nhiều vật cùng lúc trong Inspector, behaviour (script Rust) trong Inspector
 - ⬜ Prefab mode, cửa sổ Input Actions, chạy thử trên 3DS từ editor (`3dslink` + log qua mạng), profiler
 

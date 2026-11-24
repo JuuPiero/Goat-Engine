@@ -106,19 +106,37 @@ export class EditorEngine {
      */
     selection(): string;
     /**
+     * Unity's 2D button (orthographic view down −Z, pan / zoom only).
+     */
+    set_2d(on: boolean): void;
+    /**
      * Unity's SetActive (the object and its children).
      */
     set_active(id: string, on: boolean): void;
     set_component(id: string, name: string, json: string): void;
     /**
+     * The Game view's 3DS two-screen layout (also in edit mode); the Scene view is always one view.
+     */
+    set_dual_3ds(on: boolean): void;
+    /**
      * "move" / "rotate" / "scale".
      */
     set_gizmo_mode(mode: string): void;
+    set_gizmos(on: boolean): void;
+    set_grid(on: boolean): void;
+    /**
+     * Persp / Iso.
+     */
+    set_ortho(on: boolean): void;
     set_parent(id: string, parent?: string | null): void;
     /**
      * Pauses / resumes Play mode (the Game view keeps drawing).
      */
     set_paused(paused: boolean): void;
+    /**
+     * The canvas shows the Scene view (true) or the Game view (false).
+     */
+    set_scene_view(on: boolean): void;
     /**
      * Sets the tag ("Untagged" / empty removes it).
      */
@@ -147,6 +165,14 @@ export class EditorEngine {
     transform(id: string): string | undefined;
     undo(): string | undefined;
     undo_label(): string | undefined;
+    /**
+     * View gizmo click: "x" / "-x" / "y" / "-y" / "z" / "-z".
+     */
+    view_axis(axis: string): void;
+    /**
+     * { rotation: [x, y, z, w], distance, view: { mode2d, ortho, grid, gizmos, scene_view } }
+     */
+    view_state(): string;
     zoom(delta: number): void;
 }
 
@@ -195,11 +221,17 @@ export interface InitOutput {
     readonly editorengine_select_many: (a: number, b: number, c: number) => void;
     readonly editorengine_selected: (a: number) => [number, number];
     readonly editorengine_selection: (a: number) => [number, number];
+    readonly editorengine_set_2d: (a: number, b: number) => void;
     readonly editorengine_set_active: (a: number, b: number, c: number, d: number) => void;
     readonly editorengine_set_component: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+    readonly editorengine_set_dual_3ds: (a: number, b: number) => void;
     readonly editorengine_set_gizmo_mode: (a: number, b: number, c: number) => void;
+    readonly editorengine_set_gizmos: (a: number, b: number) => void;
+    readonly editorengine_set_grid: (a: number, b: number) => void;
+    readonly editorengine_set_ortho: (a: number, b: number) => void;
     readonly editorengine_set_parent: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_set_paused: (a: number, b: number) => void;
+    readonly editorengine_set_scene_view: (a: number, b: number) => void;
     readonly editorengine_set_tag: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_set_tool_handles: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly editorengine_set_transform: (a: number, b: number, c: number, d: number, e: number) => [number, number];
@@ -210,6 +242,8 @@ export interface InitOutput {
     readonly editorengine_transform: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_undo: (a: number) => [number, number];
     readonly editorengine_undo_label: (a: number) => [number, number];
+    readonly editorengine_view_axis: (a: number, b: number, c: number) => void;
+    readonly editorengine_view_state: (a: number) => [number, number];
     readonly editorengine_zoom: (a: number, b: number) => void;
     readonly goat_action_triggered: (a: number, b: number) => number;
     readonly goat_action_value: (a: number, b: number, c: number) => void;

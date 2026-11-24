@@ -236,6 +236,12 @@ impl EditorCore {
             self.gizmos.mesh = Some(mesh);
         }
         let (Some(e), Some(mesh)) = (self.gizmos.entity, self.gizmos.mesh) else { return };
+        if let Ok(mut r) = self.edit.world.get::<&mut MeshRenderer>(e) {
+            r.visible = self.view.gizmos;
+        }
+        if !self.view.gizmos {
+            return;
+        }
         let empty = lines.mesh.vertices.is_empty();
         if !empty {
             let _ = gfx.update_mesh(mesh, &lines.mesh);

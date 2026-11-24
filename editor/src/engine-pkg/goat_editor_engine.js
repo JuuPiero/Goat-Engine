@@ -579,6 +579,13 @@ export class EditorEngine {
         }
     }
     /**
+     * Unity's 2D button (orthographic view down −Z, pan / zoom only).
+     * @param {boolean} on
+     */
+    set_2d(on) {
+        wasm.editorengine_set_2d(this.__wbg_ptr, on);
+    }
+    /**
      * Unity's SetActive (the object and its children).
      * @param {string} id
      * @param {boolean} on
@@ -615,6 +622,13 @@ export class EditorEngine {
         }
     }
     /**
+     * The Game view's 3DS two-screen layout (also in edit mode); the Scene view is always one view.
+     * @param {boolean} on
+     */
+    set_dual_3ds(on) {
+        wasm.editorengine_set_dual_3ds(this.__wbg_ptr, on);
+    }
+    /**
      * "move" / "rotate" / "scale".
      * @param {string} mode
      */
@@ -622,6 +636,25 @@ export class EditorEngine {
         const ptr0 = passStringToWasm0(mode, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.editorengine_set_gizmo_mode(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {boolean} on
+     */
+    set_gizmos(on) {
+        wasm.editorengine_set_gizmos(this.__wbg_ptr, on);
+    }
+    /**
+     * @param {boolean} on
+     */
+    set_grid(on) {
+        wasm.editorengine_set_grid(this.__wbg_ptr, on);
+    }
+    /**
+     * Persp / Iso.
+     * @param {boolean} on
+     */
+    set_ortho(on) {
+        wasm.editorengine_set_ortho(this.__wbg_ptr, on);
     }
     /**
      * @param {string} id
@@ -647,6 +680,13 @@ export class EditorEngine {
      */
     set_paused(paused) {
         wasm.editorengine_set_paused(this.__wbg_ptr, paused);
+    }
+    /**
+     * The canvas shows the Scene view (true) or the Game view (false).
+     * @param {boolean} on
+     */
+    set_scene_view(on) {
+        wasm.editorengine_set_scene_view(this.__wbg_ptr, on);
     }
     /**
      * Sets the tag ("Untagged" / empty removes it).
@@ -779,6 +819,31 @@ export class EditorEngine {
             wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         }
         return v1;
+    }
+    /**
+     * View gizmo click: "x" / "-x" / "y" / "-y" / "z" / "-z".
+     * @param {string} axis
+     */
+    view_axis(axis) {
+        const ptr0 = passStringToWasm0(axis, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.editorengine_view_axis(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * { rotation: [x, y, z, w], distance, view: { mode2d, ortho, grid, gizmos, scene_view } }
+     * @returns {string}
+     */
+    view_state() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.editorengine_view_state(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * @param {number} delta

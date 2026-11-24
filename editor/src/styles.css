@@ -1,21 +1,23 @@
 :root {
-  --bg: #1e2027;
-  --panel: #262932;
-  --panel2: #2d313b;
-  --line: #3a3f4b;
-  --text: #d7dbe3;
-  --dim: #8a91a0;
-  --accent: #3d8bff;
-  --select: #2c5aa0;
+  /* the PiaEngine / Unity Dark palette (skin.css); older panels use these names */
+  --bg: #191919;
+  --panel: #383838;
+  --panel2: #3c3c3c;
+  --line: #232323;
+  --text: #c4c4c4;
+  --dim: #8b8b8b;
+  --accent: #3a79bb;
+  --select: #2c5d87;
   --drop: #f2b53c;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html, body, #root { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 12px/1.4 'Segoe UI', system-ui, sans-serif; overflow: hidden; user-select: none; }
-button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px; cursor: pointer; font: inherit; }
-button:hover:not(:disabled) { border-color: var(--accent); }
+html, body, #root { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 12px/1.35 'Inter', 'Segoe UI', system-ui, sans-serif; overflow: hidden; user-select: none; }
+button { background: #585858; color: #e2e2e2; border: 1px solid #262626; border-radius: 3px; padding: 2px 10px; cursor: default; font: inherit; }
+button:hover:not(:disabled) { background: #676767; }
 button:disabled { opacity: 0.45; cursor: default; }
-input { background: #1a1c22; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; font: inherit; }
+input, select { background: #2a2a2a; color: #e2e2e2; border: 1px solid #212121; border-radius: 3px; padding: 1px 4px; font: inherit; outline: none; }
+input:focus, select:focus { border-color: #3a79bb; }
 .dim { color: var(--dim); }
 .empty { color: var(--dim); padding: 16px; text-align: center; }
 

@@ -6,8 +6,9 @@ import { getEngine } from '../engine';
 import { frameSelected, selectEntities } from '../selection';
 import { copy, cut, deleteSelection, duplicate, gameObjectMenu, hasClipboard, mutate, paste, rename } from '../commands';
 import { setState, useStore } from '../store';
-import { AssetIcon } from './icons';
-import { openContextMenu, type MenuItem } from '../ui/Menu';
+import { ChevronDown, ChevronRight, Diamond, Plus, Search, X } from 'lucide-react';
+import { ObjectIcon } from '../ui/icons';
+import { openContextMenu, openMenuBelow, type MenuItem } from '../ui/Menu';
 
 interface Row {
   id: string;
@@ -16,6 +17,8 @@ interface Row {
   kind: string;
   /** activeInHierarchy (false: dimmed, like Unity). */
   active: boolean;
+  /** camera / light / mesh / particles / audio / empty (the engine picks the main component) */
+  icon?: string;
 }
 
 export function SceneHierarchy() {
@@ -37,14 +40,24 @@ export function SceneHierarchy() {
     const e = getEngine();
     if (!e) return;
     setRows(JSON.parse(e.hierarchy()));
-  }, [rev, scene]);
+  }, [rev, scene, playing]);
+  // the running game changes by itself: re-read it while playing
+  useEffect(() => {
+    if (!playing) return;
+    // (Hierarchy and Inspector re-read; not while a field is being typed in)
+    const id = setInterval(() => {
+      const typing = (document.activeElement as HTMLElement | null)?.closest?.('.g-inspector') && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement!.tagName);
+      if (!typing) setState((s) => ({ hierarchyRev: s.hierarchyRev + 1 }));
+    }, 400);
+    return () => clearInterval(id);
+  }, [playing]);
   // instance children start collapsed (once per scene)
   useEffect(() => {
     const e = getEngine();
     if (!e) return;
     const all: Row[] = JSON.parse(e.hierarchy());
     setCollapsed(new Set(all.filter((r) => r.kind === 'prefab' || r.kind === 'model').map((r) => r.id)));
-  }, [scene]);
+  }, [scene, playing]);
 
   const byParent = useMemo(() => {
     const m = new Map<string | null, Row[]>();
@@ -60,7 +73,9 @@ export function SceneHierarchy() {
     const out: { row: Row; depth: number }[] = [];
     const q = filter.trim().toLowerCase();
     if (q) {
-      for (const r of rows) if (r.name.toLowerCase().includes(q)) out.push({ row: r, depth: 0 });
+      // Unity: `t:Camera` filters by type (here: the row's main component)
+      const type = q.startsWith('t:') ? q.slice(2).trim() : null;
+      for (const r of rows) if (type ? (r.icon ?? '').startsWith(type.replace(/^(directional|point|spot)?light$/, 'light').replace('meshrenderer', 'mesh').replace('particlesystem', 'particles').replace('audiosource', 'audio')) : r.name.toLowerCase().includes(q)) out.push({ row: r, depth: 0 });
       return out;
     }
     const walk = (parent: string | null, depth: number) => {
@@ -92,7 +107,7 @@ export function SceneHierarchy() {
     const el = document.elementFromPoint(x, y) as HTMLElement | null;
     const row = el?.closest<HTMLElement>('[data-entity]');
     if (row) return row.dataset.entity!;
-    return el?.closest('.hierarchy-list') ? '__root' : null;
+    return el?.closest('.g-hlist') ? '__root' : null;
   };
   useEffect(() => {
     const move = (e: PointerEvent) => {
@@ -130,14 +145,14 @@ export function SceneHierarchy() {
     const one = entities.length === 1;
     const sel = entities.length > 0;
     return [
-      { label: 'Copy', shortcut: 'Ctrl+C', disabled: !sel, action: copy },
-      { label: 'Cut', shortcut: 'Ctrl+X', disabled: !sel, action: cut },
-      { label: 'Paste', shortcut: 'Ctrl+V', disabled: !hasClipboard(), action: () => paste(null) },
-      { label: 'Paste As Child', disabled: !hasClipboard() || !r, action: () => paste(r?.id) },
+      { label: 'Cut', shortcut: 'Ctrl+X', disabled: !sel || playing, action: cut },
+      { label: 'Copy', shortcut: 'Ctrl+C', disabled: !sel || playing, action: copy },
+      { label: 'Paste', shortcut: 'Ctrl+V', disabled: !hasClipboard() || playing, action: () => paste(null) },
+      { label: 'Paste As Child', disabled: !hasClipboard() || !r || playing, action: () => paste(r?.id) },
       '-',
-      { label: 'Rename', shortcut: 'F2', disabled: !one, action: () => setState({ renaming: active }) },
-      { label: 'Duplicate', shortcut: 'Ctrl+D', disabled: !sel, action: duplicate },
-      { label: 'Delete', shortcut: 'Del', disabled: !sel, action: () => deleteSelection() },
+      { label: 'Rename', shortcut: 'F2', disabled: !one || playing, action: () => setState({ renaming: active }) },
+      { label: 'Duplicate', shortcut: 'Ctrl+D', disabled: !sel || playing, action: duplicate },
+      { label: 'Delete', shortcut: 'Del', disabled: !sel || playing, action: () => deleteSelection() },
       '-',
       { label: 'Select Children', disabled: !r, action: () => r && selectEntities([r.id, ...descendants(r.id)]) },
       { label: 'Frame Selected', shortcut: 'F', disabled: !sel, action: frameSelected },
@@ -147,108 +162,124 @@ export function SceneHierarchy() {
   };
   const descendants = (id: string): string[] => (byParent.get(id) ?? []).flatMap((c) => [c.id, ...descendants(c.id)]);
 
-  if (playing) return <div className="empty">Playing — edits are made on the scene, not the running game</div>;
   return (
-    <div
-      className="hierarchy-list"
-      tabIndex={0}
-      onContextMenu={(ev) => {
-        if (!(ev.target as HTMLElement).closest('[data-entity]')) {
-          selectEntities([]);
-          openContextMenu(ev, menuFor(null));
-        }
-      }}
-      onKeyDown={(ev) => {
-        // arrows: move the selection / fold (Unity)
-        const i = visible.findIndex((v) => v.row.id === active);
-        if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
-          ev.preventDefault();
-          const next = visible[Math.max(0, Math.min(visible.length - 1, i + (ev.key === 'ArrowDown' ? 1 : -1)))];
-          if (next) selectEntities([next.row.id]);
-        }
-        if ((ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') && active) {
-          ev.preventDefault();
-          setCollapsed((s) => {
-            const n = new Set(s);
-            if (ev.key === 'ArrowRight') n.delete(active);
-            else n.add(active);
-            return n;
-          });
-        }
-      }}
-      onPointerDown={(ev) => {
-        if (ev.button === 0 && !(ev.target as HTMLElement).closest('[data-entity], .hier-toolbar')) selectEntities([]);
-      }}
-    >
-      <div className="hier-toolbar">
+    <div className="g-panel">
+      <div className="g-panelbar">
         <button
+          className="g-btn small"
           title="Create (GameObject menu)"
-          onClick={(ev) => {
-            const r = (ev.target as HTMLElement).getBoundingClientRect();
-            openContextMenu({ clientX: r.left, clientY: r.bottom + 2 }, gameObjectMenu(() => active));
-          }}
+          disabled={!scene && !playing}
+          onClick={(ev) => openMenuBelow(ev.currentTarget, gameObjectMenu(() => active))}
         >
-          ＋ ▾
+          <Plus size={13} />
+          <ChevronDown size={11} />
         </button>
-        <input className="grow" placeholder="Search…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <div className="g-search-wrap">
+          <Search size={12} />
+          <input className="g-input g-search" placeholder="Search (t:Camera for type)" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          {filter && (
+            <button className="g-icon-btn" onClick={() => setFilter('')} title="Clear">
+              <X size={11} />
+            </button>
+          )}
+        </div>
       </div>
-      <div className="hier-scene-row">
-        <AssetIcon kind="scene" size={13} /> {scene?.split('/').pop()?.replace('.scene.json', '')}
-        {dirty ? '*' : ''}
-      </div>
-      {visible.map(({ row: r, depth }) => {
-        const has = byParent.has(r.id);
-        const open = !collapsed.has(r.id);
-        const selected = entities.includes(r.id);
-        return (
-          <div
-            key={r.id}
-            className={`tree-row${selected ? ' active' : ''}${r.id === active && entities.length > 1 ? ' primary' : ''}${r.kind === 'generated' ? ' generated' : ''}${r.kind === 'prefab' ? ' prefab' : ''}${r.active === false ? ' inactive' : ''}${dragging?.over === r.id && !dragging.ids.includes(r.id) ? ' drop-into' : ''}`}
-            style={{ paddingLeft: 6 + depth * 14 }}
-            data-entity={r.id}
-            onClick={(ev) => clickRow(ev, r.id)}
-            onDoubleClick={() => (selectEntities([r.id]), frameSelected())}
-            onContextMenu={(ev) => {
-              if (!entities.includes(r.id)) selectEntities([r.id]);
-              openContextMenu(ev, menuFor(r));
-            }}
-            onPointerDown={(e) => {
-              if (e.button === 0 && r.kind !== 'generated' && !e.shiftKey && !e.ctrlKey) press.current = { id: r.id, x: e.clientX, y: e.clientY };
-            }}
-          >
-            <span
-              className="twisty"
-              onClick={(ev) => {
-                ev.stopPropagation();
-                setCollapsed((s) => {
-                  const n = new Set(s);
-                  // Alt+click folds / unfolds the whole branch (Unity)
-                  const ids = ev.altKey ? [r.id, ...descendants(r.id)] : [r.id];
-                  const close = !n.has(r.id);
-                  for (const id of ids) close ? n.add(id) : n.delete(id);
-                  return n;
-                });
+      <div
+        className="g-hlist hierarchy-list"
+        tabIndex={0}
+        onContextMenu={(ev) => {
+          if (!(ev.target as HTMLElement).closest('[data-entity]')) {
+            selectEntities([]);
+            openContextMenu(ev, menuFor(null));
+          }
+        }}
+        onKeyDown={(ev) => {
+          // arrows: move the selection / fold (Unity)
+          const i = visible.findIndex((v) => v.row.id === active);
+          if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+            ev.preventDefault();
+            const next = visible[Math.max(0, Math.min(visible.length - 1, i + (ev.key === 'ArrowDown' ? 1 : -1)))];
+            if (next) selectEntities([next.row.id]);
+          }
+          if ((ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') && active) {
+            ev.preventDefault();
+            setCollapsed((s) => {
+              const n = new Set(s);
+              if (ev.key === 'ArrowRight') n.delete(active);
+              else n.add(active);
+              return n;
+            });
+          }
+          if (ev.key === 'F2' && active && !playing) setState({ renaming: active });
+        }}
+        onPointerDown={(ev) => {
+          if (ev.button === 0 && !(ev.target as HTMLElement).closest('[data-entity]')) selectEntities([]);
+        }}
+      >
+        <div className={`g-hscene${playing ? ' playing active' : ''}`} title={scene ?? ''}>
+          <Diamond size={12} className="g-hscene-icon" />
+          <span className="g-flex g-ellipsis">
+            {scene ? scene.split('/').pop()?.replace('.scene.json', '') : 'Game'}
+            {dirty && !playing ? '*' : ''}
+          </span>
+          <span className="g-hscene-tag">{playing ? 'Active' : '3D'}</span>
+        </div>
+        {visible.map(({ row: r, depth }) => {
+          const has = byParent.has(r.id);
+          const open = !collapsed.has(r.id);
+          const selected = entities.includes(r.id);
+          const over = dragging?.over === r.id && !dragging.ids.includes(r.id);
+          return (
+            <div
+              key={r.id}
+              className={`g-hrow${selected ? ' selected' : ''}${r.kind === 'prefab' || r.kind === 'model' ? ' prefab' : ''}${r.kind === 'generated' ? ' generated' : ''}${r.active === false ? ' inactive' : ''}${over ? ' drop-inside' : ''}`}
+              style={{ paddingLeft: 4 + depth * 14 }}
+              data-entity={r.id}
+              onClick={(ev) => clickRow(ev, r.id)}
+              onDoubleClick={() => (selectEntities([r.id]), frameSelected())}
+              onContextMenu={(ev) => {
+                if (!entities.includes(r.id)) selectEntities([r.id]);
+                openContextMenu(ev, menuFor(r));
+              }}
+              onPointerDown={(e) => {
+                if (e.button === 0 && r.kind !== 'generated' && !e.shiftKey && !e.ctrlKey && !playing) press.current = { id: r.id, x: e.clientX, y: e.clientY };
               }}
             >
-              {has && !filter ? (open ? '▾' : '▸') : ''}
-            </span>
-            <AssetIcon kind={r.kind === 'prefab' ? 'prefab' : r.kind === 'model' ? 'model' : 'entity'} size={13} />
-            {renaming === r.id ? (
-              <RenameBox
-                initial={r.name}
-                onDone={(name) => {
-                  setState({ renaming: null });
-                  if (name !== null && name !== r.name) rename(r.id, name);
+              <span
+                className={`g-harrow${open ? ' open' : ''}${has && !filter ? '' : ' empty'}`}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  setCollapsed((s) => {
+                    const n = new Set(s);
+                    // Alt+click folds / unfolds the whole branch (Unity)
+                    const ids = ev.altKey ? [r.id, ...descendants(r.id)] : [r.id];
+                    const close = !n.has(r.id);
+                    for (const id of ids) close ? n.add(id) : n.delete(id);
+                    return n;
+                  });
                 }}
-              />
-            ) : (
-              <span className="tree-name">{r.name}</span>
-            )}
-            {r.kind === 'prefab' && <span className="prefab-arrow">›</span>}
-          </div>
-        );
-      })}
-      <div className={`hier-root-drop${dragging?.over === '__root' ? ' drop-into' : ''}`}>{dragging ? 'drop here: no parent' : ''}</div>
+              >
+                <ChevronRight size={11} />
+              </span>
+              <span className="g-hicon">
+                <ObjectIcon icon={r.icon} kind={r.kind} />
+              </span>
+              {renaming === r.id ? (
+                <RenameBox
+                  initial={r.name}
+                  onDone={(name) => {
+                    setState({ renaming: null });
+                    if (name !== null && name !== r.name) rename(r.id, name);
+                  }}
+                />
+              ) : (
+                <span className="g-hname">{r.name}</span>
+              )}
+            </div>
+          );
+        })}
+        <div className={`g-hlist-spacer${dragging?.over === '__root' ? ' drop-inside' : ''}`} />
+      </div>
     </div>
   );
 }

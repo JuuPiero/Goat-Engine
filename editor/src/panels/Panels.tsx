@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, fileUrl, nameOf } from '../api';
 import { log, run, setState, useStore } from '../store';
+import { CircleAlert, Info, Search, TriangleAlert } from 'lucide-react';
 import { AssetIcon } from './icons';
 import { EntityInspector } from './ComponentEditor';
 import { SceneHierarchy } from './SceneHierarchy';
@@ -19,8 +20,9 @@ interface SceneEntity {
 /// scene view; this already shows the structure).
 export function Hierarchy() {
   const scene = useStore((s) => s.scene);
+  const playing = useStore((s) => s.playing);
   const drop = useStore((s) => s.dropTarget);
-  if (scene) {
+  if (scene || playing) {
     return (
       <div className={`panel-fill${drop === 'hierarchy' ? ' drop' : ''}`} data-drop="hierarchy">
         <SceneHierarchy />
@@ -63,7 +65,7 @@ export function Inspector() {
   const entity = useStore((s) => s.entity);
   const scene = useStore((s) => s.scene);
   const playing = useStore((s) => s.playing);
-  if (entity && scene && !playing) return <EntityInspector id={entity} />;
+  if (entity && (scene || playing)) return <EntityInspector id={entity} />;
   return <AssetInspector />;
 }
 
@@ -135,6 +137,8 @@ function AssetInspector() {
   }
 }
 
+/// Unity's Console: Clear, Collapse, search, level toggles with counts; a row per message (icon,
+/// text, time, repeat count), the selected message in full below.
 export function Console() {
   const logs = useStore((s) => s.logs);
   const [collapse, setCollapse] = useState(false);
@@ -160,40 +164,50 @@ export function Console() {
     // (Chromium returns a promise from scrollIntoView: never return it from an effect)
     void end.current?.scrollIntoView();
   }, [logs.length]);
+  const sel = picked !== null ? lines[picked] : null;
+  const icon = (lv: 'info' | 'warn' | 'error', size = 14) => (lv === 'info' ? <Info size={size} /> : lv === 'warn' ? <TriangleAlert size={size} /> : <CircleAlert size={size} />);
   return (
-    <div className="console-panel">
-      <div className="console-bar">
-        <button onClick={() => setState({ logs: [] })}>Clear</button>
-        <button className={collapse ? 'on' : ''} onClick={() => setCollapse(!collapse)}>
+    <div className="g-panel">
+      <div className="g-panelbar">
+        <button className="g-tbtn" onClick={() => (setState({ logs: [] }), setPicked(null))}>
+          Clear
+        </button>
+        <button className={`g-tbtn${collapse ? ' on' : ''}`} onClick={() => setCollapse(!collapse)}>
           Collapse
         </button>
-        <input className="grow" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+        <span className="g-flex" />
+        <div className="g-search-wrap">
+          <Search size={12} />
+          <input className="g-input g-search" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
         {(['info', 'warn', 'error'] as const).map((lv) => (
-          <button key={lv} className={`level ${lv}${show[lv] ? ' on' : ''}`} onClick={() => setShow({ ...show, [lv]: !show[lv] })} title={`Show ${lv} messages`}>
-            {lv === 'info' ? 'ⓘ' : lv === 'warn' ? '⚠' : '⛔'} {counts[lv]}
+          <button key={lv} className={`g-tbtn count${show[lv] ? ' on' : ''}`} onClick={() => setShow({ ...show, [lv]: !show[lv] })} title={`Show ${lv === 'info' ? 'messages' : lv === 'warn' ? 'warnings' : 'errors'}`}>
+            <span className={lv === 'info' ? 'log' : lv === 'warn' ? 'warning' : 'error'}>{icon(lv, 12)}</span> {counts[lv]}
           </button>
         ))}
       </div>
-      <div className="console">
+      <div className="g-console-list">
         {lines.map((l, i) => (
-          <div key={i} className={`log ${l.level}${picked === i ? ' picked' : ''}`} onClick={() => setPicked(i)} onDoubleClick={() => void navigator.clipboard?.writeText(l.text)} title="Double-click: copy">
-            <span className="dim">{l.time}</span> {l.text}
-            {l.n > 1 && <span className="count">{l.n}</span>}
+          <div key={i} className={`g-log${i % 2 ? ' odd' : ''}${picked === i ? ' selected' : ''}`} onClick={() => setPicked(i)} onDoubleClick={() => void navigator.clipboard?.writeText(l.text)} title="Double-click: copy">
+            <span className={`g-log-icon ${l.level === 'warn' ? 'warning' : l.level}`}>{icon(l.level)}</span>
+            <div className="g-log-text">
+              <div className="g-log-msg">{l.text}</div>
+              <div className="g-log-stack1">
+                <span className="g-log-time">[{l.time}]</span>
+              </div>
+            </div>
+            {l.n > 1 && <span className="g-log-count">{l.n}</span>}
           </div>
         ))}
         <div ref={end} />
       </div>
-    </div>
-  );
-}
-export function SceneView() {
-  const drop = useStore((s) => s.dropTarget);
-  return (
-    <div className={`scene-view${drop === 'scene' ? ' drop' : ''}`} data-drop="scene">
-      <div className="scene-placeholder">
-        Scene view
-        <div className="dim">the engine (wasm + WebGPU) renders here next</div>
-      </div>
+      {sel && (
+        <div className="g-console-detail">
+          <pre>
+            [{sel.time}] {sel.text}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

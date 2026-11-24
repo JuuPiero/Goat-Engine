@@ -24,7 +24,8 @@ impl EditorCore {
     // ------------------------------------------------------------------ selection
     /// Selects several entities (the last one is active: Inspector, gizmo).
     pub fn select_many(&mut self, list: Vec<Entity>) {
-        self.selection = list.into_iter().filter(|e| self.edit.world.contains(*e)).collect();
+        let world = &self.play.as_ref().unwrap_or(&self.edit).world;
+        self.selection = list.into_iter().filter(|e| world.contains(*e)).collect();
         self.selection.dedup();
         self.selected = self.selection.last().copied();
     }

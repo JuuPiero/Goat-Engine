@@ -8,8 +8,11 @@ import { getState, log, setState } from './store';
 /// Records an Undo step, runs the change, refreshes the Hierarchy / Inspector.
 export function mutate<T>(label: string, f: () => T): T | undefined {
   const e = getEngine();
-  if (!e || e.is_playing() || !getState().scene) return undefined;
-  e.record_undo(label);
+  if (!e) return undefined;
+  // Play mode: the change goes to the running game (gone on Stop, like Unity), no Undo step
+  const playing = e.is_playing();
+  if (!playing && !getState().scene) return undefined;
+  if (!playing) e.record_undo(label);
   try {
     return f();
   } catch (err) {
@@ -26,9 +29,11 @@ let lastEdit = { key: '', time: 0 };
 /// Undo step, like Unity.
 export function edit<T>(label: string, key: string, f: () => T): T | undefined {
   const e = getEngine();
-  if (!e || e.is_playing() || !getState().scene) return undefined;
+  if (!e) return undefined;
+  const playing = e.is_playing();
+  if (!playing && !getState().scene) return undefined;
   const now = performance.now();
-  if (lastEdit.key !== key || now - lastEdit.time > 1000) e.record_undo(label);
+  if (!playing && (lastEdit.key !== key || now - lastEdit.time > 1000)) e.record_undo(label);
   lastEdit = { key, time: now };
   try {
     return f();
@@ -43,7 +48,8 @@ export function edit<T>(label: string, key: string, f: () => T): T | undefined {
 /// Marks the scene changed and refreshes the panels (and the Edit menu's labels).
 export function afterChange() {
   const e = getEngine();
-  setState((s) => ({ sceneDirty: true, hierarchyRev: s.hierarchyRev + 1, undoLabel: e?.undo_label() ?? null, redoLabel: e?.redo_label() ?? null }));
+  const playing = !!e?.is_playing();
+  setState((s) => ({ sceneDirty: s.sceneDirty || !playing, hierarchyRev: s.hierarchyRev + 1, undoLabel: e?.undo_label() ?? null, redoLabel: e?.redo_label() ?? null }));
 }
 
 export function undo() {

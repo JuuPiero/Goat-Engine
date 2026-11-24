@@ -51,6 +51,41 @@ impl Game for PlayGame {
     }
 }
 
+/// The Hierarchy icon of an entity (Unity shows the most important component's icon).
+fn icon_of(w: &hecs::World, e: Entity) -> &'static str {
+    if w.get::<&Camera>(e).is_ok() {
+        "camera"
+    } else if w.get::<&DirectionalLight>(e).is_ok() || w.get::<&PointLight>(e).is_ok() || w.get::<&SpotLight>(e).is_ok() {
+        "light"
+    } else if w.get::<&goat_particles::ParticleSystem>(e).is_ok() {
+        "particles"
+    } else if w.get::<&goat_audio::AudioSource>(e).is_ok() {
+        "audio"
+    } else if w.get::<&MeshRenderer>(e).is_ok() {
+        "mesh"
+    } else {
+        "empty"
+    }
+}
+
+/// Scene view options (Unity's Scene view bar: 2D, Persp / Iso, Grid, Gizmos).
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct ViewOptions {
+    pub mode2d: bool,
+    pub ortho: bool,
+    pub grid: bool,
+    pub gizmos: bool,
+    /// The canvas shows the Scene view (editor camera; the play world through it while playing);
+    /// false = the Game view (the scene's / game's own cameras, editor drawables hidden).
+    pub scene_view: bool,
+}
+
+impl Default for ViewOptions {
+    fn default() -> Self {
+        ViewOptions { mode2d: false, ortho: false, grid: true, gizmos: true, scene_view: true }
+    }
+}
+
 /// Orbit camera of the Scene view.
 #[derive(Clone, Copy, Debug)]
 pub struct Orbit {
@@ -81,6 +116,8 @@ pub struct HierarchyRow {
     pub active: bool,
     pub active_self: bool,
     pub tag: String,
+    /// Hierarchy icon: camera / light / mesh / particles / audio / empty
+    pub icon: &'static str,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -117,6 +154,12 @@ pub struct EditorCore {
     pub paused: bool,
     pub step_once: bool,
     pub tools: crate::tools::Tools,
+    /// Scene view options (2D, orthographic, grid, gizmos, Scene view while playing).
+    pub view: ViewOptions,
+    /// the Scene view's camera inside the play world (Scene view shown while playing)
+    play_camera: Option<Entity>,
+    /// the 3D orbit kept while the view is in 2D mode
+    orbit3d: Option<Orbit>,
     /// Buttons held (Play mode input), by Button index.
     held: [bool; 14],
     axes: [f32; 4],
@@ -156,6 +199,9 @@ impl EditorCore {
             paused: false,
             step_once: false,
             tools: Default::default(),
+            view: ViewOptions::default(),
+            play_camera: None,
+            orbit3d: None,
             held: [false; 14],
             axes: [0.0; 4],
             aspect: 16.0 / 9.0,
@@ -166,6 +212,11 @@ impl EditorCore {
     pub fn first_frame(&mut self, gfx: &mut dyn GraphicsBackend) {
         self.edit.frame(0.0, gfx);
         game::register(self.edit.resources.get_or_default::<SceneRegistry>());
+    }
+
+    /// The world the Hierarchy / Inspector show: the play world while playing.
+    pub fn active_mut(&mut self) -> &mut Engine {
+        self.play.as_mut().unwrap_or(&mut self.edit)
     }
 
     pub fn is_playing(&self) -> bool {
@@ -212,7 +263,8 @@ impl EditorCore {
     }
 
     pub fn hierarchy(&self) -> Vec<HierarchyRow> {
-        let w = &self.edit.world;
+        let eng = self.play.as_ref().unwrap_or(&self.edit);
+        let w = &eng.world;
         let mut rows: Vec<(Entity, HierarchyRow)> = w
             .query::<(Option<&Name>, Option<&Parent>)>()
             .without::<&DontSave>()
@@ -227,7 +279,7 @@ impl EditorCore {
                 } else {
                     "entity"
                 };
-                (e, HierarchyRow { id: id_of(e), name: n.map(|n| n.0.clone()).unwrap_or_else(|| "Entity".into()), parent: p.map(|p| id_of(p.0)), kind: kind.into(), active: w.get::<&InactiveInHierarchy>(e).is_err(), active_self: w.get::<&Inactive>(e).is_err(), tag: w.get::<&Tag>(e).map(|t| t.0.clone()).unwrap_or_else(|_| "Untagged".into()) })
+                (e, HierarchyRow { id: id_of(e), name: n.map(|n| n.0.clone()).unwrap_or_else(|| "Entity".into()), parent: p.map(|p| id_of(p.0)), kind: kind.into(), active: w.get::<&InactiveInHierarchy>(e).is_err(), active_self: w.get::<&Inactive>(e).is_err(), tag: w.get::<&Tag>(e).map(|t| t.0.clone()).unwrap_or_else(|_| "Untagged".into()), icon: icon_of(w, e) })
             })
             .collect();
         rows.sort_by_key(|(e, _)| e.id());
@@ -235,7 +287,8 @@ impl EditorCore {
     }
 
     fn is_generated(&self, e: Entity) -> bool {
-        let w = &self.edit.world;
+        let eng = self.play.as_ref().unwrap_or(&self.edit);
+        let w = &eng.world;
         let mut cur = w.get::<&Parent>(e).ok().map(|p| p.0);
         for _ in 0..64 {
             let Some(p) = cur else { return false };
@@ -252,13 +305,15 @@ impl EditorCore {
     }
 
     pub fn transform(&self, e: Entity) -> Option<TransformEdit> {
-        let t = *self.edit.world.get::<&Transform>(e).ok()?;
+        let eng = self.play.as_ref().unwrap_or(&self.edit);
+        let t = *eng.world.get::<&Transform>(e).ok()?;
         let (y, x, z) = t.rotation.to_euler(EulerRot::YXZ);
         Some(TransformEdit { position: t.position.into(), euler: [x.to_degrees(), y.to_degrees(), z.to_degrees()], scale: t.scale.into() })
     }
 
     pub fn set_transform(&mut self, e: Entity, t: &TransformEdit) {
-        if let Ok(mut tr) = self.edit.world.get::<&mut Transform>(e) {
+        let eng = self.play.as_mut().unwrap_or(&mut self.edit);
+        if let Ok(mut tr) = eng.world.get::<&mut Transform>(e) {
             tr.position = Vec3::from(t.position);
             tr.rotation = Quat::from_euler(EulerRot::YXZ, t.euler[1].to_radians(), t.euler[0].to_radians(), t.euler[2].to_radians());
             tr.scale = Vec3::from(t.scale);
@@ -266,11 +321,16 @@ impl EditorCore {
     }
 
     pub fn rename(&mut self, e: Entity, name: &str) {
-        let _ = self.edit.world.insert_one(e, Name(name.to_string()));
+        let eng = self.play.as_mut().unwrap_or(&mut self.edit);
+        let _ = eng.world.insert_one(e, Name(name.to_string()));
     }
 
     // ------------------------------------------------------------------ editor camera
     pub fn orbit_by(&mut self, dx: f32, dy: f32) {
+        if self.view.mode2d {
+            // 2D views don't rotate (Unity: right drag pans there)
+            return self.pan_by(dx, dy);
+        }
         self.orbit.yaw -= dx * 0.008;
         self.orbit.pitch = (self.orbit.pitch - dy * 0.008).clamp(-1.55, 1.55);
     }
@@ -282,6 +342,57 @@ impl EditorCore {
     pub fn zoom_by(&mut self, delta: f32) {
         self.orbit.distance = (self.orbit.distance * (1.0 + delta * 0.001)).clamp(0.3, 400.0);
     }
+    /// Unity's 2D button: an orthographic view down −Z (X right, Y up) that only pans / zooms;
+    /// leaving it restores the 3D view.
+    pub fn set_2d(&mut self, on: bool) {
+        if on == self.view.mode2d {
+            return;
+        }
+        if on {
+            self.orbit3d = Some(self.orbit);
+            self.orbit.yaw = 0.0;
+            self.orbit.pitch = 0.0;
+            self.view.ortho = true;
+        } else {
+            if let Some(o) = self.orbit3d.take() {
+                self.orbit.yaw = o.yaw;
+                self.orbit.pitch = o.pitch;
+            }
+            self.view.ortho = false;
+        }
+        self.view.mode2d = on;
+    }
+    /// Persp / Iso (the label under the view gizmo).
+    pub fn set_ortho(&mut self, on: bool) {
+        if !self.view.mode2d {
+            self.view.ortho = on;
+        }
+    }
+    /// Clicking an axis of the view gizmo: look along it (`"x"` = from +X towards −X, `"-y"` = from
+    /// below...). Unity switches to orthographic for these views.
+    pub fn view_axis(&mut self, axis: &str) {
+        if self.view.mode2d {
+            return;
+        }
+        use std::f32::consts::FRAC_PI_2;
+        let (yaw, pitch) = match axis {
+            "x" => (FRAC_PI_2, 0.0),
+            "-x" => (-FRAC_PI_2, 0.0),
+            "y" => (0.0, -FRAC_PI_2 + 1e-3),
+            "-y" => (0.0, FRAC_PI_2 - 1e-3),
+            "-z" => (std::f32::consts::PI, 0.0),
+            _ => (0.0, 0.0),
+        };
+        self.orbit.yaw = yaw;
+        self.orbit.pitch = pitch;
+        self.view.ortho = true;
+    }
+    /// The editor camera's rotation and view options (the UI draws the view gizmo from it).
+    pub fn view_state(&self) -> serde_json::Value {
+        let q = self.orbit.rotation();
+        serde_json::json!({ "rotation": [q.x, q.y, q.z, q.w], "distance": self.orbit.distance, "view": self.view })
+    }
+
     /// Centers the camera on the selection (F key).
     pub fn frame_selected(&mut self, gfx: &dyn GraphicsBackend) {
         if let Some((c, r)) = self.selected.and_then(|e| self.world_sphere(gfx, e)) {
@@ -318,11 +429,8 @@ impl EditorCore {
     /// root for generated children).
     pub fn pick(&self, gfx: &dyn GraphicsBackend, x: f32, y: f32) -> Option<Entity> {
         let w = &self.edit.world;
-        let fov = 55f32.to_radians();
-        let ndc = (x * 2.0 - 1.0, 1.0 - y * 2.0);
-        let r = self.orbit.rotation();
-        let dir = (r * Vec3::new(ndc.0 * (fov * 0.5).tan() * self.aspect, ndc.1 * (fov * 0.5).tan(), -1.0)).normalize();
-        let origin = self.orbit.position();
+        let (origin, dir) = self.ray(x, y);
+
         let mut best: Option<(f32, Entity)> = None;
         for (e, (mr, g)) in w.query::<(&MeshRenderer, &GlobalTransform)>().without::<&DontSave>().without::<&InactiveInHierarchy>().iter() {
             let Some(b) = gfx.mesh_bounds(mr.mesh) else { continue };
@@ -355,12 +463,18 @@ impl EditorCore {
         engine.resources.insert(AssetServer::new(self.io.clone()));
         engine.resources.get_or_default::<Profiler>().keep_history = 300;
         self.play = Some(engine);
+        // ids belong to one world: the Hierarchy now lists the play world
+        self.selection.clear();
+        self.selected = None;
         self.step_once = false;
         self.held = [false; 14];
         self.axes = [0.0; 4];
     }
     pub fn stop(&mut self) {
         self.play = None;
+        self.play_camera = None;
+        self.selection.clear();
+        self.selected = None;
         self.paused = false;
     }
 
@@ -398,6 +512,9 @@ impl EditorCore {
 
     // ------------------------------------------------------------------ frame
     pub fn frame(&mut self, gfx: &mut dyn GraphicsBackend, dt: f32) {
+        if self.play.is_some() {
+            self.sync_play_camera();
+        }
         if let Some(play) = self.play.as_mut() {
             // Pause: draw only; Step: one 1/60 s frame
             if self.paused && !self.step_once {
@@ -422,10 +539,25 @@ impl EditorCore {
             t.position = self.orbit.position();
             t.rotation = self.orbit.rotation();
         }
+        let projection = self.camera_projection();
+        if let Ok(mut c) = self.edit.world.get::<&mut Camera>(self.camera) {
+            c.projection = projection;
+        }
         self.update_selection_box(gfx);
         self.update_tools(gfx);
         self.update_nav_preview(gfx);
         self.update_gizmos(gfx);
+        // Game view in edit mode: the scene's cameras draw (Unity), without the editor's drawables
+        let game_view = !self.view.scene_view;
+        goat_runtime::set_active(&mut self.edit.world, self.camera, !game_view);
+        self.edit.view_camera = if game_view { None } else { Some(self.camera) };
+        if game_view {
+            for (_, r) in self.edit.world.query_mut::<&mut MeshRenderer>() {
+                if r.layer == EDITOR_LAYER {
+                    r.visible = false;
+                }
+            }
+        }
         self.edit.frame(dt, gfx);
     }
 
@@ -472,6 +604,45 @@ impl EditorCore {
             "triangles": p.triangles,
             "history": p.history.iter().map(|f| serde_json::json!({ "s": f.sections.iter().map(|(k, v)| serde_json::json!([k, v])).collect::<Vec<_>>(), "d": f.draw_calls, "t": f.triangles })).collect::<Vec<_>>(),
         })
+    }
+
+    fn camera_projection(&self) -> Projection {
+        if self.view.ortho {
+            Projection::Orthographic { height: self.ortho_height(), near: 0.05, far: 2000.0 }
+        } else {
+            Projection::Perspective { fov_y_radians: 55f32.to_radians(), near: 0.05, far: 500.0 }
+        }
+    }
+
+    /// The Scene view while playing: the play world drawn through a copy of the editor camera
+    /// (spawned in the play world only while the Scene view shows; the game's cameras otherwise).
+    fn sync_play_camera(&mut self) {
+        let projection = self.camera_projection();
+        let (pos, rot) = (self.orbit.position(), self.orbit.rotation());
+        let Some(play) = self.play.as_mut() else { return };
+        if self.view.scene_view {
+            let cam = match self.play_camera.filter(|e| play.world.contains(*e)) {
+                Some(e) => e,
+                None => {
+                    let e = play.world.spawn((Name("Scene Camera".into()), DontSave, Transform::default(), GlobalTransform::default(), Camera { clear: Some(Color::hex(0x23262e)), projection, ..Default::default() }));
+                    self.play_camera = Some(e);
+                    e
+                }
+            };
+            if let Ok(mut t) = play.world.get::<&mut Transform>(cam) {
+                t.position = pos;
+                t.rotation = rot;
+            }
+            if let Ok(mut c) = play.world.get::<&mut Camera>(cam) {
+                c.projection = projection;
+            }
+            play.view_camera = Some(cam);
+        } else {
+            if let Some(e) = self.play_camera.take() {
+                let _ = play.world.despawn(e);
+            }
+            play.view_camera = None;
+        }
     }
 
     /// World matrix of the editor camera (gizmos in the UI).
@@ -676,5 +847,41 @@ mod playground_tests {
         assert!((pa.x - 0.5).abs() < 1e-3 && (pb.x - 0.5).abs() < 1e-3 && (pa.z + pb.z).abs() < 1e-3 && (pa.z - pb.z).abs() > 1.9, "{pa} {pb}");
         let rot = c.edit.world.get::<&Transform>(a).unwrap().rotation;
         assert!((rot.angle_between(Quat::IDENTITY) - 90f32.to_radians()).abs() < 1e-3, "each object turned 90°");
+    }
+
+    #[test]
+    fn scene_view_modes_and_play_world_hierarchy() {
+        let io = AssetIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/hello/assets"));
+        let mut gfx = NullBackend::new();
+        let mut c = EditorCore::new(io);
+        c.first_frame(&mut gfx);
+        c.open_scene(&mut gfx, "scenes/showcase.scene.json").unwrap();
+        // 2D: orthographic, looking down −Z, orbiting pans instead
+        c.set_2d(true);
+        assert!(c.view.ortho && c.view.mode2d);
+        let (o1, d1) = c.ray(0.2, 0.5);
+        let (o2, d2) = c.ray(0.8, 0.5);
+        assert!((d1 - d2).length() < 1e-5 && (d1 - Vec3::NEG_Z).length() < 1e-4, "parallel rays down −Z");
+        assert!((o2 - o1).x > 0.1, "ortho rays start across the view plane");
+        let before = c.orbit.yaw;
+        c.orbit_by(50.0, 0.0);
+        assert_eq!(c.orbit.yaw, before, "2D doesn't rotate");
+        c.set_2d(false);
+        assert!(!c.view.ortho);
+        c.view_axis("y");
+        assert!(c.orbit.pitch < -1.5 && c.view.ortho, "top view");
+        c.frame(&mut gfx, 1.0 / 60.0);
+        // Play: the Hierarchy lists the play world; the Scene view gets its own camera there
+        c.play();
+        c.view.scene_view = true;
+        c.frame(&mut gfx, 1.0 / 60.0);
+        c.frame(&mut gfx, 1.0 / 60.0);
+        let names: Vec<String> = c.hierarchy().into_iter().map(|r| r.name).collect();
+        assert!(names.iter().any(|n| n == "Main Camera"), "{names:?}");
+        assert!(c.play.as_ref().unwrap().view_camera.is_some());
+        c.view.scene_view = false;
+        c.frame(&mut gfx, 1.0 / 60.0);
+        assert!(c.play.as_ref().unwrap().view_camera.is_none());
+        c.stop();
     }
 }

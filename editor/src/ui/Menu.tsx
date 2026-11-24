@@ -1,6 +1,7 @@
-// Menus with submenus (Unity's main menu bar, context menus): one host renders the open
-// context menu; the menu bar opens its own dropdowns.
-import { useEffect, useState } from 'react';
+// Menus with submenus (Unity's main menu bar, context menus), drawn like the PiaEngine editor:
+// one host renders the open context menu; the menu bar opens its own dropdowns.
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Check, ChevronRight } from 'lucide-react';
 import { useStore, setState } from '../store';
 
 export type MenuItem =
@@ -14,34 +15,55 @@ export type MenuItem =
       children?: MenuItem[];
     };
 
-/// A vertical list of items; items with children open a submenu on hover.
-export function MenuList({ items, onClose, style }: { items: MenuItem[]; onClose: () => void; style?: React.CSSProperties }) {
+/// A vertical list of items at (x, y) (fixed), kept inside the window; items with children open
+/// a submenu on hover, to the right (or left when there's no room).
+export function MenuList({ items, onClose, x, y, minWidth }: { items: MenuItem[]; onClose: () => void; x: number; y: number; minWidth?: number }) {
   const [open, setOpen] = useState<number | null>(null);
+  const [pos, setPos] = useState({ x, y });
+  const ref = useRef<HTMLDivElement>(null);
+  const rows = useRef<(HTMLDivElement | null)[]>([]);
+  useLayoutEffect(() => {
+    const r = ref.current?.getBoundingClientRect();
+    if (!r) return;
+    setPos({ x: Math.max(2, Math.min(x, window.innerWidth - r.width - 2)), y: Math.max(2, Math.min(y, window.innerHeight - r.height - 2)) });
+  }, [x, y, items]);
+  const sub = open !== null ? items[open] : null;
+  const subAt = (() => {
+    const row = open !== null ? rows.current[open]?.getBoundingClientRect() : null;
+    if (!row) return { x: 0, y: 0 };
+    const right = row.right + 200 < window.innerWidth;
+    return { x: right ? row.right - 2 : row.left - 200, y: row.top - 5 };
+  })();
   return (
-    <div className="context-menu" style={style} onPointerDown={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
-      {items.map((it, i) =>
-        it === '-' ? (
-          <div key={i} className="sep" />
-        ) : (
-          <div
-            key={i}
-            className={`item${it.disabled ? ' disabled' : ''}${it.children ? ' sub' : ''}${open === i ? ' open' : ''}`}
-            onPointerEnter={() => setOpen(it.children ? i : null)}
-            onClick={() => {
-              if (it.disabled || it.children) return;
-              onClose();
-              it.action?.();
-            }}
-          >
-            <span className="check-mark">{it.checked ? '✓' : ''}</span>
-            <span className="label-text">{it.label}</span>
-            {it.shortcut && <span className="shortcut">{it.shortcut}</span>}
-            {it.children && <span className="arrow-right">▸</span>}
-            {it.children && open === i && !it.disabled && <MenuList items={it.children} onClose={onClose} style={{ position: 'absolute', left: '100%', top: -5 }} />}
-          </div>
-        ),
-      )}
-    </div>
+    <>
+      <div ref={ref} className="g-menu" style={{ left: pos.x, top: pos.y, minWidth }} onPointerDown={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
+        {items.map((it, i) =>
+          it === '-' ? (
+            <div key={i} className="g-menu-sep" />
+          ) : (
+            <div
+              key={i}
+              ref={(el) => {
+                rows.current[i] = el;
+              }}
+              className={`g-menu-item${it.disabled ? ' disabled' : ''}${open === i ? ' open' : ''}`}
+              onPointerEnter={() => setOpen(it.children && !it.disabled ? i : null)}
+              onClick={() => {
+                if (it.disabled || it.children) return;
+                onClose();
+                it.action?.();
+              }}
+            >
+              <span className="g-menu-check">{it.checked ? <Check size={12} /> : null}</span>
+              <span className="g-menu-label">{it.label}</span>
+              {it.shortcut && <span className="g-menu-shortcut">{it.shortcut}</span>}
+              <span className="g-menu-arrow">{it.children ? <ChevronRight size={12} /> : null}</span>
+            </div>
+          ),
+        )}
+      </div>
+      {sub && sub !== '-' && sub.children && <MenuList items={sub.children} onClose={onClose} x={subAt.x} y={subAt.y} minWidth={180} />}
+    </>
   );
 }
 
@@ -52,6 +74,12 @@ export function openContextMenu(ev: { clientX: number; clientY: number; preventD
   setState({ contextMenu: { x: ev.clientX, y: ev.clientY, items } });
 }
 
+/// Opens a dropdown under an element (toolbar "+ ▾" buttons).
+export function openMenuBelow(el: Element, items: MenuItem[]) {
+  const r = el.getBoundingClientRect();
+  setState({ contextMenu: { x: r.left, y: r.bottom + 1, items } });
+}
+
 /// Renders the open context menu (once, at the app root); closes on outside clicks / Escape.
 export function ContextMenuHost() {
   const menu = useStore((s) => s.contextMenu);
@@ -59,37 +87,42 @@ export function ContextMenuHost() {
     if (!menu) return;
     const close = () => setState({ contextMenu: null });
     const key = (e: KeyboardEvent) => e.key === 'Escape' && close();
-    window.addEventListener('pointerdown', close);
+    // a tick later: the click that opened the menu must not close it
+    const t = setTimeout(() => window.addEventListener('pointerdown', close), 0);
     window.addEventListener('keydown', key);
     window.addEventListener('blur', close);
     return () => {
+      clearTimeout(t);
       window.removeEventListener('pointerdown', close);
       window.removeEventListener('keydown', key);
       window.removeEventListener('blur', close);
     };
   }, [menu]);
   if (!menu) return null;
-  // keep inside the window
-  const x = Math.min(menu.x, window.innerWidth - 220);
-  const y = Math.min(menu.y, window.innerHeight - 30 - menu.items.length * 24);
-  return <MenuList items={menu.items} onClose={() => setState({ contextMenu: null })} style={{ left: x, top: Math.max(4, y) }} />;
+  return <MenuList items={menu.items} onClose={() => setState({ contextMenu: null })} x={menu.x} y={menu.y} />;
 }
 
-/// The main menu bar: click a title to open, hover to switch while one is open.
-export function MenuBar({ menus }: { menus: { title: string; items: () => MenuItem[] }[] }) {
+/// The main menu bar: click a title to open, hover to switch while one is open; `right` = what
+/// sits at the far right (project name, pipeline badge).
+export function MenuBar({ menus, right }: { menus: { title: string; items: () => MenuItem[] }[]; right?: React.ReactNode }) {
   const [open, setOpen] = useState<number | null>(null);
+  const titles = useRef<(HTMLDivElement | null)[]>([]);
   useEffect(() => {
     if (open === null) return;
     const close = () => setOpen(null);
     window.addEventListener('pointerdown', close);
     return () => window.removeEventListener('pointerdown', close);
   }, [open]);
+  const at = open !== null ? titles.current[open]?.getBoundingClientRect() : null;
   return (
-    <div className="menubar">
+    <div className="g-menubar">
       {menus.map((m, i) => (
         <div
           key={m.title}
-          className={`menubar-title${open === i ? ' open' : ''}`}
+          ref={(el) => {
+            titles.current[i] = el;
+          }}
+          className={`g-menubar-item${open === i ? ' open' : ''}`}
           onPointerDown={(e) => {
             e.stopPropagation();
             setOpen(open === i ? null : i);
@@ -97,9 +130,11 @@ export function MenuBar({ menus }: { menus: { title: string; items: () => MenuIt
           onPointerEnter={() => open !== null && setOpen(i)}
         >
           {m.title}
-          {open === i && <MenuList items={m.items()} onClose={() => setOpen(null)} style={{ position: 'absolute', left: 0, top: '100%' }} />}
         </div>
       ))}
+      {open !== null && at && <MenuList items={menus[open].items()} onClose={() => setOpen(null)} x={at.left} y={at.bottom} minWidth={200} />}
+      <div className="g-menubar-spacer" />
+      {right}
     </div>
   );
 }
