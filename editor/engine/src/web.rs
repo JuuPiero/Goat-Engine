@@ -229,16 +229,27 @@ impl EditorEngine {
     }
     /// Starts a gizmo drag if (x, y) (0..1 of a w × h view) is on a handle.
     pub fn gizmo_begin(&mut self, x: f32, y: f32, w: f32, h: f32) -> bool {
-        self.core.tools.dragging = self.core.gizmo_hit(x, y, w, h);
-        self.core.tools.dragging.is_some()
-    }
-    pub fn gizmo_drag(&mut self, dx: f32, dy: f32, w: f32, h: f32) {
-        if let Some(axis) = self.core.tools.dragging {
-            self.core.gizmo_drag(axis, dx, dy, w, h);
+        match self.core.gizmo_hit(x, y, w, h) {
+            Some(axis) => {
+                self.core.gizmo_start(axis);
+                true
+            }
+            None => false,
         }
     }
+    /// snap = Ctrl held (increment snapping).
+    pub fn gizmo_drag(&mut self, dx: f32, dy: f32, w: f32, h: f32, snap: bool) {
+        self.core.gizmo_drag(dx, dy, w, h, snap);
+    }
     pub fn gizmo_end(&mut self) {
-        self.core.tools.dragging = None;
+        self.core.gizmo_stop();
+    }
+    /// Tool handle settings: Local / Global axes, Center / Pivot, snap increments.
+    pub fn set_tool_handles(&mut self, local: bool, center: bool, snap_move: f32, snap_rotate: f32, snap_scale: f32) {
+        let t = &mut self.core.tools;
+        t.local = local;
+        t.center = center;
+        t.snap = [snap_move, snap_rotate, snap_scale];
     }
 
     pub fn orbit(&mut self, dx: f32, dy: f32) {

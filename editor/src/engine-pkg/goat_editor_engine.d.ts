@@ -45,7 +45,10 @@ export class EditorEngine {
      * Starts a gizmo drag if (x, y) (0..1 of a w × h view) is on a handle.
      */
     gizmo_begin(x: number, y: number, w: number, h: number): boolean;
-    gizmo_drag(dx: number, dy: number, w: number, h: number): void;
+    /**
+     * snap = Ctrl held (increment snapping).
+     */
+    gizmo_drag(dx: number, dy: number, w: number, h: number, snap: boolean): void;
     gizmo_end(): void;
     /**
      * JSON array of `{ id, name, parent, kind }`.
@@ -120,6 +123,10 @@ export class EditorEngine {
      * Sets the tag ("Untagged" / empty removes it).
      */
     set_tag(id: string, tag: string): void;
+    /**
+     * Tool handle settings: Local / Global axes, Center / Pivot, snap increments.
+     */
+    set_tool_handles(local: boolean, center: boolean, snap_move: number, snap_rotate: number, snap_scale: number): void;
     set_transform(id: string, json: string): void;
     /**
      * Draw calls / triangles of the last frame.
@@ -161,7 +168,7 @@ export interface InitOutput {
     readonly editorengine_frame: (a: number, b: number) => void;
     readonly editorengine_frame_selected: (a: number) => void;
     readonly editorengine_gizmo_begin: (a: number, b: number, c: number, d: number, e: number) => number;
-    readonly editorengine_gizmo_drag: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly editorengine_gizmo_drag: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly editorengine_gizmo_end: (a: number) => void;
     readonly editorengine_hierarchy: (a: number) => [number, number];
     readonly editorengine_instantiate: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
@@ -194,6 +201,7 @@ export interface InitOutput {
     readonly editorengine_set_parent: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_set_paused: (a: number, b: number) => void;
     readonly editorengine_set_tag: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly editorengine_set_tool_handles: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly editorengine_set_transform: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly editorengine_stats: (a: number) => [number, number];
     readonly editorengine_step: (a: number) => void;

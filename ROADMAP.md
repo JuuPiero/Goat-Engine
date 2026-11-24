@@ -100,7 +100,8 @@ Mọi ngôn ngữ đi qua cùng một lõi (`goat-script`: component `Script`, t
   - ✅ Gizmo của component trong Scene view (collider, camera, đèn, audio, navigation)
   - ✅ Build Settings (danh sách scene, nền tảng, Build từ editor) + Project Settings (`assets/project.json`: Time, gravity, tag, layer) + `SceneManager.loadScene` (JS / C#)
   - ✅ Game view: menu kích thước (3DS, Free Aspect, tỉ lệ, độ phân giải cố định)
-  - ⬜ Đợt 3 — cửa sổ: Animation window, Package Manager, prefab mode + Apply / Revert override, Scene view: tool Hand / Rect, Pivot / Center, Local / Global, snap, gizmo cho đèn / camera / collider, sửa nhiều vật cùng lúc trong Inspector, behaviour (script Rust) trong Inspector
+  - ✅ Scene view: tool Hand (Q), Pivot / Center, Local / Global, snap khi giữ Ctrl, kéo gizmo cho cả vùng chọn
+  - ⬜ Đợt 3 — cửa sổ: Animation window, Package Manager, prefab mode + Apply / Revert override, tool Rect, sửa nhiều vật cùng lúc trong Inspector, behaviour (script Rust) trong Inspector
 - ⬜ Prefab mode, cửa sổ Input Actions, chạy thử trên 3DS từ editor (`3dslink` + log qua mạng), profiler
 
 ## Giai đoạn 6 — Thêm nền tảng (làm sau cùng, khi các thành phần engine đã xong)

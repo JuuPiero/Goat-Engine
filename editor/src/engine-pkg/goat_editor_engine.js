@@ -225,13 +225,15 @@ export class EditorEngine {
         return ret !== 0;
     }
     /**
+     * snap = Ctrl held (increment snapping).
      * @param {number} dx
      * @param {number} dy
      * @param {number} w
      * @param {number} h
+     * @param {boolean} snap
      */
-    gizmo_drag(dx, dy, w, h) {
-        wasm.editorengine_gizmo_drag(this.__wbg_ptr, dx, dy, w, h);
+    gizmo_drag(dx, dy, w, h, snap) {
+        wasm.editorengine_gizmo_drag(this.__wbg_ptr, dx, dy, w, h, snap);
     }
     gizmo_end() {
         wasm.editorengine_gizmo_end(this.__wbg_ptr);
@@ -664,6 +666,17 @@ export class EditorEngine {
             throw e;
         }
         wasm.editorengine_set_tag(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+    }
+    /**
+     * Tool handle settings: Local / Global axes, Center / Pivot, snap increments.
+     * @param {boolean} local
+     * @param {boolean} center
+     * @param {number} snap_move
+     * @param {number} snap_rotate
+     * @param {number} snap_scale
+     */
+    set_tool_handles(local, center, snap_move, snap_rotate, snap_scale) {
+        wasm.editorengine_set_tool_handles(this.__wbg_ptr, local, center, snap_move, snap_rotate, snap_scale);
     }
     /**
      * @param {string} id

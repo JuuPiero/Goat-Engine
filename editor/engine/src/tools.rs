@@ -20,12 +20,42 @@ pub enum GizmoMode {
     Scale,
 }
 
-#[derive(Default)]
 pub struct Tools {
     pub mode: GizmoMode,
     grid: Option<Entity>,
     handles: [Option<Entity>; 3],
     pub dragging: Option<usize>,
+    /// Handle axes: the active object's (Local) or the world's (Global).
+    pub local: bool,
+    /// Several objects: the gizmo at their centre (Center) or at the active one (Pivot).
+    pub center: bool,
+    /// Ctrl-drag increments: move (units), rotate (degrees), scale (factor).
+    pub snap: [f32; 3],
+    pub(crate) drag: Option<GizmoDrag>,
+}
+
+impl Default for Tools {
+    fn default() -> Self {
+        Tools { mode: GizmoMode::Move, grid: None, handles: [None; 3], dragging: None, local: false, center: false, snap: [0.25, 15.0, 0.1], drag: None }
+    }
+}
+
+pub(crate) struct DragObject {
+    entity: Entity,
+    start: Transform,
+    world: Mat4,
+    parent: Mat4,
+}
+
+/// A gizmo drag in progress: the frame it started in, pixels dragged along the axis so far and
+/// the transforms it started from (each step recomputes from them, so snapping is exact).
+pub(crate) struct GizmoDrag {
+    axis: usize,
+    origin: Vec3,
+    basis: Quat,
+    size: f32,
+    total: f32,
+    objects: Vec<DragObject>,
 }
 
 const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
@@ -205,22 +235,36 @@ impl EditorCore {
     }
 
     // ------------------------------------------------------------------ gizmos
-    fn gizmo_frame(&self) -> Option<(Vec3, f32)> {
+    /// Where the gizmo is drawn: origin, axes (Global = world, Local = the active object's
+    /// rotation; Scale is always local, like Unity) and handle length. Frozen while dragging.
+    pub(crate) fn gizmo_frame(&self) -> Option<(Vec3, Quat, f32)> {
+        if let Some(d) = &self.tools.drag {
+            return Some((d.origin, d.basis, d.size));
+        }
         let e = self.selected?;
-        let p = self.edit.world.get::<&GlobalTransform>(e).ok()?.0.w_axis.truncate();
+        let g = self.edit.world.get::<&GlobalTransform>(e).ok()?.0;
+        let (_, rot, pos) = g.to_scale_rotation_translation();
+        let roots = self.selection_roots();
+        let p = if self.tools.center && roots.len() > 1 {
+            let ps: Vec<Vec3> = roots.iter().filter_map(|r| self.edit.world.get::<&GlobalTransform>(*r).ok().map(|g| g.0.w_axis.truncate())).collect();
+            ps.iter().copied().sum::<Vec3>() / ps.len().max(1) as f32
+        } else {
+            pos
+        };
+        let basis = if self.tools.local || self.tools.mode == GizmoMode::Scale { rot.normalize() } else { Quat::IDENTITY };
         let dist = (p - self.orbit.position()).length().max(0.5);
-        Some((p, dist * 0.16))
+        Some((p, basis, dist * 0.16))
     }
 
     /// The gizmo axis under a view point (pixels of a `w × h` view), if any.
     pub fn gizmo_hit(&self, x: f32, y: f32, w: f32, h: f32) -> Option<usize> {
-        let (o, size) = self.gizmo_frame()?;
+        let (o, basis, size) = self.gizmo_frame()?;
         let px = |v: Vec2| Vec2::new(v.x * w, v.y * h);
         let p = Vec2::new(x * w, y * h);
         let a = px(self.project(o)?);
         let mut best: Option<(f32, usize)> = None;
         for (i, axis) in AXES.iter().enumerate() {
-            let Some(b) = self.project(o + *axis * size).map(px) else { continue };
+            let Some(b) = self.project(o + basis * *axis * size).map(px) else { continue };
             let ab = b - a;
             let t = ((p - a).dot(ab) / ab.length_squared().max(1e-4)).clamp(0.0, 1.0);
             let d = (a + ab * t - p).length();
@@ -231,28 +275,75 @@ impl EditorCore {
         best.map(|(_, i)| i)
     }
 
-    /// Applies a drag of (dx, dy) pixels on gizmo `axis` in a `w × h` view.
-    pub fn gizmo_drag(&mut self, axis: usize, dx: f32, dy: f32, w: f32, h: f32) {
-        let (Some(e), Some((o, size))) = (self.selected, self.gizmo_frame()) else { return };
-        let dir_world = AXES[axis.min(2)];
-        let (Some(a), Some(b)) = (self.project(o), self.project(o + dir_world * size)) else { return };
+    /// Starts dragging `axis`: remembers the selection's transforms (every selected object
+    /// without a selected ancestor moves).
+    pub fn gizmo_start(&mut self, axis: usize) {
+        let Some((origin, basis, size)) = self.gizmo_frame() else { return };
+        let w = &self.edit.world;
+        let parent_world = |e: Entity| w.get::<&Parent>(e).ok().and_then(|p| w.get::<&GlobalTransform>(p.0).ok().map(|g| g.0)).unwrap_or(Mat4::IDENTITY);
+        let mut roots = self.selection_roots();
+        if roots.is_empty() {
+            roots.extend(self.selected);
+        }
+        let objects = roots
+            .into_iter()
+            .filter_map(|e| {
+                let t = *w.get::<&Transform>(e).ok()?;
+                let g = w.get::<&GlobalTransform>(e).ok()?.0;
+                Some(DragObject { entity: e, start: t, world: g, parent: parent_world(e) })
+            })
+            .collect();
+        self.tools.dragging = Some(axis);
+        self.tools.drag = Some(GizmoDrag { axis: axis.min(2), origin, basis, size, total: 0.0, objects });
+    }
+
+    pub fn gizmo_stop(&mut self) {
+        self.tools.dragging = None;
+        self.tools.drag = None;
+    }
+
+    /// Applies a drag of (dx, dy) pixels on the dragged axis in a `w × h` view; `snap` (Ctrl
+    /// held) rounds to the snap increments (Unity's Increment Snapping).
+    pub fn gizmo_drag(&mut self, dx: f32, dy: f32, w: f32, h: f32, snap: bool) {
+        let Some(d) = self.tools.drag.as_ref() else { return };
+        let dir_world = d.basis * AXES[d.axis];
+        let (Some(a), Some(b)) = (self.project(d.origin), self.project(d.origin + dir_world * d.size)) else { return };
         let screen = Vec2::new((b.x - a.x) * w, (b.y - a.y) * h);
         let len = screen.length().max(1.0);
         let along = Vec2::new(dx, dy).dot(screen / len);
-        let parent_m = self.edit.world.get::<&Parent>(e).ok().and_then(|p| self.edit.world.get::<&GlobalTransform>(p.0).ok().map(|g| g.0)).unwrap_or(Mat4::IDENTITY);
-        let Ok(mut t) = self.edit.world.get::<&mut Transform>(e) else { return };
-        match self.tools.mode {
-            GizmoMode::Move => {
-                let world_delta = dir_world * (along / len * size);
-                t.position += parent_m.inverse().transform_vector3(world_delta);
+        let mode = self.tools.mode;
+        let steps = self.tools.snap;
+        let d = self.tools.drag.as_mut().unwrap();
+        d.total += along;
+        let round = |v: f32, step: f32| if snap && step > 0.0 { (v / step).round() * step } else { v };
+        let (origin, axis) = (d.origin, d.axis);
+        for o in &d.objects {
+            let (_, start_rot, start_pos) = o.world.to_scale_rotation_translation();
+            let inv_parent = o.parent.inverse();
+            let (_, parent_rot, _) = o.parent.to_scale_rotation_translation();
+            let mut t = o.start;
+            match mode {
+                GizmoMode::Move => {
+                    let amount = round(d.total / len * d.size, steps[0]);
+                    t.position += inv_parent.transform_vector3(dir_world * amount);
+                }
+                GizmoMode::Rotate => {
+                    let angle = round(d.total * 0.01, steps[1].to_radians());
+                    let r = Quat::from_axis_angle(dir_world.normalize_or(Vec3::Y), angle);
+                    t.rotation = (parent_rot.inverse() * (r * start_rot)).normalize();
+                    t.position += inv_parent.transform_vector3(origin + r * (start_pos - origin) - start_pos);
+                }
+                GizmoMode::Scale => {
+                    let f = (1.0 + round(d.total * 0.01, steps[2])).max(0.01);
+                    t.scale[axis] = o.start.scale[axis] * f;
+                    // several objects scale apart from the centre too
+                    let off = start_pos - origin;
+                    let along_axis = dir_world.normalize_or(Vec3::X);
+                    t.position += inv_parent.transform_vector3(along_axis * off.dot(along_axis) * (f - 1.0));
+                }
             }
-            GizmoMode::Rotate => {
-                let local_axis = parent_m.inverse().transform_vector3(dir_world).normalize_or(dir_world);
-                t.rotation = (Quat::from_axis_angle(local_axis, along * 0.01) * t.rotation).normalize();
-            }
-            GizmoMode::Scale => {
-                let f = (1.0 + along * 0.01).max(0.01);
-                t.scale[axis.min(2)] *= f;
+            if let Ok(mut cur) = self.edit.world.get::<&mut Transform>(o.entity) {
+                *cur = t;
             }
         }
     }
@@ -283,12 +374,12 @@ impl EditorCore {
             if let Ok(mut r) = self.edit.world.get::<&mut MeshRenderer>(h) {
                 r.visible = frame.is_some();
             }
-            if let (Some((o, size)), Ok(mut t)) = (frame, self.edit.world.get::<&mut Transform>(h)) {
+            if let (Some((o, basis, size)), Ok(mut t)) = (frame, self.edit.world.get::<&mut Transform>(h)) {
                 let thick = size * if hot { 0.07 } else { 0.045 };
                 let head = matches!(self.tools.mode, GizmoMode::Scale);
                 let along = AXES[i];
                 let dims = along * size + (Vec3::ONE - along) * thick;
-                *t = Transform::from_position(o + along * size * 0.5).with_scale(if head { dims + (Vec3::ONE - along) * thick } else { dims });
+                *t = Transform::from_position(o + basis * along * size * 0.5).with_rotation(basis).with_scale(if head { dims + (Vec3::ONE - along) * thick } else { dims });
             }
         }
     }

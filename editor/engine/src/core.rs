@@ -625,5 +625,56 @@ mod playground_tests {
             assert!(v < 0.2, "{name} at rest: {v}");
         }
     }
-}
 
+    #[test]
+    fn gizmo_moves_rotates_the_selection_with_snapping() {
+        use crate::tools::GizmoMode;
+        use goat_core::math::Vec2;
+        let io = AssetIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/hello/assets"));
+        let mut gfx = NullBackend::new();
+        let mut c = EditorCore::new(io);
+        c.first_frame(&mut gfx);
+        c.open_scene(&mut gfx, "scenes/showcase.scene.json").unwrap();
+        let a = c.create_entity("A", None);
+        let b = c.create_entity("B", None);
+        c.edit.world.get::<&mut Transform>(a).unwrap().position = Vec3::new(-1.0, 0.0, 0.0);
+        c.edit.world.get::<&mut Transform>(b).unwrap().position = Vec3::new(1.0, 0.0, 0.0);
+        c.frame(&mut gfx, 1.0 / 60.0);
+        c.select_many(vec![a, b]);
+        let (w, h) = (800.0, 600.0);
+        // pixels along the X handle on screen
+        let along = |c: &EditorCore| {
+            let (o, basis, size) = c.gizmo_frame().unwrap();
+            let (p, q) = (c.project(o).unwrap(), c.project(o + basis * Vec3::X * size).unwrap());
+            let s = Vec2::new((q.x - p.x) * w, (q.y - p.y) * h);
+            (s.normalize(), s.length() / size)
+        };
+        let pos = |c: &EditorCore, e| c.edit.world.get::<&Transform>(e).unwrap().position;
+
+        // Move, Ctrl held: both objects by the same snapped amount
+        let (dir, px_per_unit) = along(&c);
+        c.gizmo_start(0);
+        let d = dir * px_per_unit * 0.6; // 0.6 units → snaps to 0.5
+        c.gizmo_drag(d.x, d.y, w, h, true);
+        c.gizmo_stop();
+        assert!((pos(&c, a).x + 0.5).abs() < 1e-4 && (pos(&c, b).x - 1.5).abs() < 1e-4, "{} {}", pos(&c, a), pos(&c, b));
+
+        // Rotate around the centre (Center): 90° about Y swaps them onto the Z axis
+        c.frame(&mut gfx, 1.0 / 60.0);
+        c.tools.center = true;
+        c.tools.mode = GizmoMode::Rotate;
+        let centre = c.gizmo_frame().unwrap().0;
+        assert!((centre.x - 0.5).abs() < 1e-4, "centre of the selection: {centre}");
+        let (o, basis, size) = c.gizmo_frame().unwrap();
+        let (p, q) = (c.project(o).unwrap(), c.project(o + basis * Vec3::Y * size).unwrap());
+        let s = Vec2::new((q.x - p.x) * w, (q.y - p.y) * h).normalize();
+        c.gizmo_start(1);
+        let d = s * (90f32.to_radians() / 0.01 + 3.0); // a bit past 90°: snaps back to 90
+        c.gizmo_drag(d.x, d.y, w, h, true);
+        c.gizmo_stop();
+        let (pa, pb) = (pos(&c, a), pos(&c, b));
+        assert!((pa.x - 0.5).abs() < 1e-3 && (pb.x - 0.5).abs() < 1e-3 && (pa.z + pb.z).abs() < 1e-3 && (pa.z - pb.z).abs() > 1.9, "{pa} {pb}");
+        let rot = c.edit.world.get::<&Transform>(a).unwrap().rotation;
+        assert!((rot.angle_between(Quat::IDENTITY) - 90f32.to_radians()).abs() < 1e-3, "each object turned 90°");
+    }
+}

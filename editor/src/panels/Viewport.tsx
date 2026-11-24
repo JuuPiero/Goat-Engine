@@ -56,15 +56,36 @@ export function Viewport() {
   const [stats, setStats] = useState('');
   const [error, setError] = useState<string | null>(null);
   const drag = useRef<{ x: number; y: number; mode: 'orbit' | 'pan' | 'click' | 'gizmo'; moved: boolean } | null>(null);
-  const [gizmo, setGizmo] = useState<'move' | 'rotate' | 'scale'>('move');
   const [gameSize, setGameSize] = useState(savedSize);
   const sizing = useRef({ game: false, size: gameSize });
   sizing.current = { game: tab === 'game' && playing, size: gameSize };
   const relayout = useRef<() => void>(() => {});
-  const setMode = (m: 'move' | 'rotate' | 'scale') => {
+  // Unity's tools: Q hand (left drag pans), W move, E rotate, R scale; Z Pivot / Center, X Local / Global
+  const [gizmo, setGizmo] = useState<'hand' | 'move' | 'rotate' | 'scale'>('move');
+  const tool = useRef(gizmo);
+  tool.current = gizmo;
+  const setMode = (m: 'hand' | 'move' | 'rotate' | 'scale') => {
     setGizmo(m);
-    getEngine()?.set_gizmo_mode(m);
+    if (m !== 'hand') getEngine()?.set_gizmo_mode(m);
   };
+  const [handles, setHandles] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('goat.editor.handles') ?? '') as { local: boolean; center: boolean };
+    } catch {
+      return { local: false, center: false };
+    }
+  });
+  useEffect(() => {
+    getEngine()?.set_tool_handles(handles.local, handles.center, 0.25, 15, 0.1);
+    try {
+      localStorage.setItem('goat.editor.handles', JSON.stringify(handles));
+    } catch {
+      /* not remembered */
+    }
+  }, [handles]);
+  const handlesRef = useRef(handles);
+  handlesRef.current = handles;
+  const toggleHandles = useRef((k: 'local' | 'center') => setHandles((h) => ({ ...h, [k]: !h[k] })));
 
   useEffect(() => {
     const c = canvas.current!;
@@ -92,6 +113,7 @@ export function Viewport() {
     startEngine(c)
       .then(() => {
         resize();
+        getEngine()?.set_tool_handles(handlesRef.current.local, handlesRef.current.center, 0.25, 15, 0.1);
         const loop = (now: number) => {
           const e = getEngine();
           if (e) {
@@ -141,6 +163,9 @@ export function Viewport() {
       if (!wrap.current?.matches(':hover')) return;
       if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
       if (ev.code === 'KeyF') frameSelected();
+      if (ev.code === 'KeyQ') setMode('hand');
+      if (ev.code === 'KeyZ') toggleHandles.current('center');
+      if (ev.code === 'KeyX') toggleHandles.current('local');
       if (ev.code === 'KeyW') setMode('move');
       if (ev.code === 'KeyE') setMode('rotate');
       if (ev.code === 'KeyR') setMode('scale');
@@ -158,10 +183,10 @@ export function Viewport() {
     const e = getEngine();
     if (!e || e.is_playing()) return;
     const r = canvas.current!.getBoundingClientRect();
-    const onGizmo = ev.button === 0 && !ev.altKey && e.gizmo_begin((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height, r.width, r.height);
+    const onGizmo = ev.button === 0 && !ev.altKey && tool.current !== 'hand' && e.gizmo_begin((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height, r.width, r.height);
     // the drag is one Undo step (recorded before the first change)
     if (onGizmo) e.record_undo(gizmo === 'move' ? 'Move' : gizmo === 'rotate' ? 'Rotate' : 'Scale');
-    const mode = onGizmo ? 'gizmo' : ev.button === 2 || (ev.button === 0 && ev.altKey) ? 'orbit' : ev.button === 1 ? 'pan' : 'click';
+    const mode = onGizmo ? 'gizmo' : ev.button === 2 || (ev.button === 0 && ev.altKey) ? 'orbit' : ev.button === 1 || (ev.button === 0 && tool.current === 'hand') ? 'pan' : 'click';
     drag.current = { x: ev.clientX, y: ev.clientY, mode, moved: false };
     (ev.target as HTMLElement).setPointerCapture(ev.pointerId);
     ev.preventDefault();
@@ -177,7 +202,7 @@ export function Viewport() {
     if (d.mode === 'pan') e.pan(dx, dy);
     if (d.mode === 'gizmo') {
       const r = canvas.current!.getBoundingClientRect();
-      e.gizmo_drag(dx, dy, r.width, r.height);
+      e.gizmo_drag(dx, dy, r.width, r.height, ev.ctrlKey || ev.metaKey);
     }
     d.x = ev.clientX;
     d.y = ev.clientY;
@@ -213,12 +238,20 @@ export function Viewport() {
             Game
           </button>
         </div>
-        <div className="seg" title="Gizmo: W move · E rotate · R scale">
-          {(['move', 'rotate', 'scale'] as const).map((m) => (
-            <button key={m} className={gizmo === m ? 'on' : ''} onClick={() => setMode(m)}>
-              {m === 'move' ? '✥' : m === 'rotate' ? '⟳' : '⤢'}
+        <div className="seg" title="Tools: Q hand · W move · E rotate · R scale (Ctrl-drag snaps)">
+          {(['hand', 'move', 'rotate', 'scale'] as const).map((m) => (
+            <button key={m} className={gizmo === m ? 'on' : ''} onClick={() => setMode(m)} title={{ hand: 'View Tool (Q)', move: 'Move Tool (W)', rotate: 'Rotate Tool (E)', scale: 'Scale Tool (R)' }[m]}>
+              {m === 'hand' ? '✋' : m === 'move' ? '✥' : m === 'rotate' ? '⟳' : '⤢'}
             </button>
           ))}
+        </div>
+        <div className="seg">
+          <button onClick={() => toggleHandles.current('center')} title="Tool handle position: Pivot / Center (Z)">
+            {handles.center ? 'Center' : 'Pivot'}
+          </button>
+          <button onClick={() => toggleHandles.current('local')} title="Tool handle rotation: Local / Global (X)">
+            {handles.local ? 'Local' : 'Global'}
+          </button>
         </div>
         <span className="dim scene-name">
           {scene ? `${scene}${dirty ? ' *' : ''}` : 'no scene open — double-click a .scene.json'}
