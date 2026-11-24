@@ -60,9 +60,11 @@ export interface EditorState {
   stats: string;
   engineError: string | null;
   engineReady: boolean;
+  /// Prefab Mode: the scenes to go back to (the open file is the prefab being edited).
+  prefabStack: string[];
 }
 
-let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, entities: [], renaming: null, undoLabel: null, redoLabel: null, contextMenu: null, hierarchyRev: 0, playing: false, paused: false, dual3ds: true, viewTab: 'scene', controller: null, tool: 'move', pivotCenter: false, toolLocal: false, view2d: false, viewOrtho: false, showGrid: true, showGizmos: true, gameSize: '3ds', gameZoom: 1, gameStats: false, stats: '', engineError: null, engineReady: false };
+let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, entities: [], renaming: null, undoLabel: null, redoLabel: null, contextMenu: null, hierarchyRev: 0, playing: false, paused: false, dual3ds: true, viewTab: 'scene', controller: null, tool: 'move', pivotCenter: false, toolLocal: false, view2d: false, viewOrtho: false, showGrid: true, showGizmos: true, gameSize: '3ds', gameZoom: 1, gameStats: false, stats: '', engineError: null, engineReady: false, prefabStack: [] };
 /// Editor preferences remembered between sessions (per machine, like Unity's EditorPrefs).
 const PREFS_KEY = 'goat.editor.prefs.v1';
 const PREF_KEYS = ['tool', 'pivotCenter', 'toolLocal', 'showGrid', 'showGizmos', 'gameSize', 'gameZoom', 'gameStats', 'dual3ds'] as const;

@@ -10,10 +10,10 @@
 // resolutions), Scale, Stats; keyboard = 3DS buttons while playing.
 import { useEffect, useRef, useState } from 'react';
 import type { DockviewPanelApi } from 'dockview-react';
-import { Box, Grid3x3, Hand, Move, Rotate3d, Scale3d, Shapes } from 'lucide-react';
+import { Box, ChevronLeft, Grid3x3, Hand, Move, Rotate3d, Scale3d, Shapes } from 'lucide-react';
 import { frameSelected, selectEntities } from '../selection';
 import { afterChange } from '../commands';
-import { getEngine, saveScene, startPlay, stopPlay } from '../engine';
+import { exitPrefab, getEngine, saveScene, startPlay, stopPlay } from '../engine';
 import { getState, log, setState, useStore } from '../store';
 import { attach, GAME_SIZES, onViewChange, relayout, viewHost, viewMode, type ViewMode } from '../viewport';
 
@@ -57,6 +57,7 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
   const gizmos = useStore((s) => s.showGizmos);
   const error = useStore((s) => s.engineError);
   const ready = useStore((s) => s.engineReady);
+  const prefabStack = useStore((s) => s.prefabStack);
   const [backend, setBackend] = useState('');
   const drag = useRef<{ x: number; y: number; mode: 'orbit' | 'pan' | 'click' | 'gizmo'; moved: boolean } | null>(null);
   useEffect(() => {
@@ -159,6 +160,16 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
           Save
         </button>
       </div>
+      {prefabStack.length > 0 && scene && (
+        <div className="g-prefab-crumbs">
+          <button className="g-tbtn" title="Back to the scene (saves the prefab)" onClick={() => void exitPrefab()}>
+            <ChevronLeft size={13} /> Back
+          </button>
+          <span className="g-status-dim">{prefabStack.map((k) => k.split('/').pop()?.replace(/\.(scene|prefab)\.json$/, '')).join(' › ')} ›</span>
+          <span className="prefab">{scene.split('/').pop()?.replace('.prefab.json', '')}</span>
+          <span className="g-status-dim">(Prefab Mode · Auto Save)</span>
+        </div>
+      )}
       <div className="g-viewport-wrap">
         <div
           ref={host}

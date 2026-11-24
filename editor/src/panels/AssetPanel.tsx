@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, fileUrl, nameOf, parentOf, type Entry, type Folder } from '../api';
 import { beginAssetDrag } from '../dnd';
-import { openScene } from '../engine';
+import { openPrefab, openScene } from '../engine';
 import { getState, log, refresh, run, setState, useStore } from '../store';
 import { ChevronDown, ChevronRight, Plus, Search, X } from 'lucide-react';
 import { AssetGlyph, AssetSmallIcon } from '../ui/icons';
@@ -107,6 +107,8 @@ export function AssetPanel() {
       setExpanded((s) => new Set([...s, parentOf(entry.key), entry.key]));
     } else if (entry.kind === 'scene') {
       void openScene(entry.key);
+    } else if (entry.kind === 'prefab') {
+      void openPrefab(entry.key);
     } else if (entry.kind === 'controller') {
       openController(entry.key);
     } else {

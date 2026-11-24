@@ -884,4 +884,36 @@ mod playground_tests {
         assert!(c.play.as_ref().unwrap().view_camera.is_none());
         c.stop();
     }
+
+    #[test]
+    fn prefab_overrides_revert_and_apply() {
+        let io = AssetIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/hello/assets"));
+        let mut gfx = NullBackend::new();
+        let mut c = EditorCore::new(io.clone());
+        c.first_frame(&mut gfx);
+        c.open_scene(&mut gfx, "scenes/showcase.scene.json").unwrap();
+        c.frame(&mut gfx, 1.0 / 60.0);
+        let find = |c: &EditorCore, n: &str| c.edit.world.query::<&Name>().iter().find(|(_, x)| x.0 == n).map(|(e, _)| e).unwrap();
+        let pedestal = find(&c, "Pedestal");
+        let info = c.prefab_info(pedestal);
+        assert_eq!(info["key"], "prefabs/shrine.prefab.json");
+        let base_overrides = info["overrides"].as_array().unwrap().len();
+        // an edit inside the instance shows up as an override; Revert undoes it
+        c.edit.world.get::<&mut Transform>(pedestal).unwrap().position.y += 2.0;
+        let y_before = c.edit.world.get::<&Transform>(pedestal).unwrap().position.y - 2.0;
+        assert!(c.prefab_info(pedestal)["overrides"].as_array().unwrap().len() > base_overrides || base_overrides > 0);
+        c.revert_prefab(&mut gfx, pedestal).unwrap();
+        c.frame(&mut gfx, 1.0 / 60.0);
+        let pedestal = find(&c, "Pedestal");
+        assert!(c.prefab_info(pedestal)["overrides"].as_array().unwrap().is_empty(), "{}", c.prefab_info(pedestal));
+        let _ = y_before;
+        // Apply: the change goes into the prefab file, the instance has no overrides left
+        c.rename(pedestal, "Big Pedestal");
+        let out = c.apply_prefab(&mut gfx, pedestal).unwrap();
+        assert!(out["text"].as_str().unwrap().contains("Big Pedestal"), "the prefab now holds the edit");
+        c.frame(&mut gfx, 1.0 / 60.0);
+        let p = find(&c, "Big Pedestal");
+        assert!(c.prefab_info(p)["overrides"].as_array().unwrap().is_empty(), "applied: {}", c.prefab_info(p));
+        assert!(io.read_string("prefabs/shrine.prefab.json").unwrap().contains("Big Pedestal"));
+    }
 }

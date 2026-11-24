@@ -216,10 +216,10 @@ export function SceneHierarchy() {
           if (ev.button === 0 && !(ev.target as HTMLElement).closest('[data-entity]')) selectEntities([]);
         }}
       >
-        <div className={`g-hscene${playing ? ' playing active' : ''}`} title={scene ?? ''}>
+        <div className={`g-hscene${playing ? ' playing active' : ''}${scene?.endsWith('.prefab.json') ? ' prefab' : ''}`} title={scene ?? ''}>
           <Diamond size={12} className="g-hscene-icon" />
           <span className="g-flex g-ellipsis">
-            {scene ? scene.split('/').pop()?.replace('.scene.json', '') : 'Game'}
+            {scene ? scene.split('/').pop()?.replace(/\.(scene|prefab)\.json$/, '') : 'Game'}
             {dirty && !playing ? '*' : ''}
           </span>
           <span className="g-hscene-tag">{playing ? 'Active' : '3D'}</span>

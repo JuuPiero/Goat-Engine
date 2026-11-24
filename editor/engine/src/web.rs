@@ -254,6 +254,22 @@ impl EditorEngine {
         t.snap = [snap_move, snap_rotate, snap_scale];
     }
 
+    // ------------------------------------------------------------ prefabs
+    /// `{ root, key, overrides: [...] }` of the prefab instance an entity belongs to, or "null".
+    pub fn prefab_info(&mut self, id: &str) -> String {
+        entity_of(id).map(|e| self.core.prefab_info(e).to_string()).unwrap_or_else(|| "null".into())
+    }
+    /// Revert All: returns the new root id.
+    pub fn revert_prefab(&mut self, id: &str) -> Result<String, JsValue> {
+        let e = entity_of(id).ok_or_else(|| JsValue::from_str("no such entity"))?;
+        self.core.revert_prefab(&mut self.gfx, e).map(id_of).map_err(|e| JsValue::from_str(&e))
+    }
+    /// Apply All: returns `{ key, text }` (the prefab file to write).
+    pub fn apply_prefab(&mut self, id: &str) -> Result<String, JsValue> {
+        let e = entity_of(id).ok_or_else(|| JsValue::from_str("no such entity"))?;
+        self.core.apply_prefab(&mut self.gfx, e).map(|v| v.to_string()).map_err(|e| JsValue::from_str(&e))
+    }
+
     // ------------------------------------------------------------ Scene view options
     /// Unity's 2D button (orthographic view down −Z, pan / zoom only).
     pub fn set_2d(&mut self, on: bool) {

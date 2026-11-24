@@ -25,7 +25,7 @@ mod component_info;
 pub mod prefab;
 pub mod registry;
 
-pub use prefab::{apply_overrides, find_in_instance, resolve_file, set_track_overrides, PrefabBaseline, PrefabOverride, PrefabSource};
+pub use prefab::{apply_overrides, find_in_instance, merge_overrides, resolve_file, set_track_overrides, PrefabBaseline, PrefabOverride, PrefabSource};
 
 pub use registry::{load_serde, remove_typed, save_serde, serde_codec, ActionFn, ComponentCodec, ComponentInfo, FieldHint, LoadContext, SaveContext, SceneRegistry};
 

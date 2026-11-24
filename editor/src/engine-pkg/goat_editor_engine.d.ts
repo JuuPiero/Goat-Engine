@@ -5,6 +5,10 @@ export class EditorEngine {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
+    /**
+     * Apply All: returns `{ key, text }` (the prefab file to write).
+     */
+    apply_prefab(id: string): string;
     backend_name(): string;
     /**
      * Runs an Inspector button of a component (e.g. NavMeshSurface ▸ Bake); returns its message.
@@ -77,6 +81,10 @@ export class EditorEngine {
      */
     play(dual_3ds: boolean): void;
     /**
+     * `{ root, key, overrides: [...] }` of the prefab instance an entity belongs to, or "null".
+     */
+    prefab_info(id: string): string;
+    /**
      * The profiler as JSON: `{ sections: [[name, ms]], draw_calls, triangles, history: [{ s, d, t }] }`.
      */
     profiler(): string;
@@ -93,6 +101,10 @@ export class EditorEngine {
     remove_component(id: string, name: string): void;
     rename(id: string, name: string): void;
     resize(width: number, height: number): void;
+    /**
+     * Revert All: returns the new root id.
+     */
+    revert_prefab(id: string): string;
     save_scene(): string;
     scene(): string | undefined;
     select(id?: string | null): void;
@@ -181,6 +193,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_editorengine_free: (a: number, b: number) => void;
+    readonly editorengine_apply_prefab: (a: number, b: number, c: number) => [number, number, number, number];
     readonly editorengine_backend_name: (a: number) => [number, number];
     readonly editorengine_component_action: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly editorengine_component_info: (a: number) => [number, number];
@@ -207,6 +220,7 @@ export interface InitOutput {
     readonly editorengine_paste: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly editorengine_pick: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_play: (a: number, b: number) => void;
+    readonly editorengine_prefab_info: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_profiler: (a: number) => [number, number];
     readonly editorengine_put_file: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_record_undo: (a: number, b: number, c: number) => void;
@@ -215,6 +229,7 @@ export interface InitOutput {
     readonly editorengine_remove_component: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_rename: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_resize: (a: number, b: number, c: number) => void;
+    readonly editorengine_revert_prefab: (a: number, b: number, c: number) => [number, number, number, number];
     readonly editorengine_save_scene: (a: number) => [number, number, number, number];
     readonly editorengine_scene: (a: number) => [number, number];
     readonly editorengine_select: (a: number, b: number, c: number) => void;

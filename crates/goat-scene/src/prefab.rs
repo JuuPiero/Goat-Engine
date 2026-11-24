@@ -47,7 +47,7 @@ impl PrefabOverride {
 }
 
 /// `existing` overrides followed by `new` ones, one entry per target (new edits win).
-pub(crate) fn merge_overrides(existing: &[PrefabOverride], mut new: Vec<PrefabOverride>) -> Vec<PrefabOverride> {
+pub fn merge_overrides(existing: &[PrefabOverride], mut new: Vec<PrefabOverride>) -> Vec<PrefabOverride> {
     let mut out: Vec<PrefabOverride> = Vec::new();
     new.sort_by(|a, b| a.target.cmp(&b.target));
     for ov in existing.iter().cloned().chain(new) {

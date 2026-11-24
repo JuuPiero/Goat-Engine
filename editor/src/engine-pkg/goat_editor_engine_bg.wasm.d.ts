@@ -2,6 +2,7 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __wbg_editorengine_free: (a: number, b: number) => void;
+export const editorengine_apply_prefab: (a: number, b: number, c: number) => [number, number, number, number];
 export const editorengine_backend_name: (a: number) => [number, number];
 export const editorengine_component_action: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const editorengine_component_info: (a: number) => [number, number];
@@ -28,6 +29,7 @@ export const editorengine_pan: (a: number, b: number, c: number) => void;
 export const editorengine_paste: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const editorengine_pick: (a: number, b: number, c: number) => [number, number];
 export const editorengine_play: (a: number, b: number) => void;
+export const editorengine_prefab_info: (a: number, b: number, c: number) => [number, number];
 export const editorengine_profiler: (a: number) => [number, number];
 export const editorengine_put_file: (a: number, b: number, c: number, d: number, e: number) => void;
 export const editorengine_record_undo: (a: number, b: number, c: number) => void;
@@ -36,6 +38,7 @@ export const editorengine_redo_label: (a: number) => [number, number];
 export const editorengine_remove_component: (a: number, b: number, c: number, d: number, e: number) => void;
 export const editorengine_rename: (a: number, b: number, c: number, d: number, e: number) => void;
 export const editorengine_resize: (a: number, b: number, c: number) => void;
+export const editorengine_revert_prefab: (a: number, b: number, c: number) => [number, number, number, number];
 export const editorengine_save_scene: (a: number) => [number, number, number, number];
 export const editorengine_scene: (a: number) => [number, number];
 export const editorengine_select: (a: number, b: number, c: number) => void;

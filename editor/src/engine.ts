@@ -48,7 +48,7 @@ export async function openScene(key: string) {
   await syncFiles(e);
   try {
     e.open_scene(key);
-    setState({ scene: key, entity: null, entities: [], undoLabel: null, redoLabel: null, sceneDirty: false, hierarchyRev: getState().hierarchyRev + 1 });
+    setState({ scene: key, prefabStack: key.endsWith('.prefab.json') ? getState().prefabStack : [], entity: null, entities: [], undoLabel: null, redoLabel: null, sceneDirty: false, hierarchyRev: getState().hierarchyRev + 1 });
     log(`opened ${key}`);
   } catch (err) {
     log(`open ${key}: ${err}`, 'error');
@@ -104,4 +104,27 @@ export function stepFrame() {
     setState({ paused: true });
   }
   e.step();
+}
+
+/// Prefab Mode (Unity): edits the prefab file in the Scene view; Back saves it and returns.
+export async function openPrefab(key: string) {
+  const s = getState();
+  if (s.playing) stopPlay();
+  if (s.scene && s.sceneDirty && !s.scene.endsWith('.prefab.json')) {
+    if (window.confirm(`Save the changes to ${s.scene} before opening the prefab?`)) await saveScene();
+  }
+  const back = s.scene ? [...s.prefabStack, s.scene] : s.prefabStack;
+  await openScene(key);
+  setState({ prefabStack: back });
+}
+
+/// Leaves Prefab Mode: saves the prefab (Auto Save) and reopens the previous scene / prefab.
+export async function exitPrefab() {
+  const s = getState();
+  if (!s.prefabStack.length) return;
+  if (s.sceneDirty) await saveScene();
+  const stack = [...s.prefabStack];
+  const back = stack.pop()!;
+  await openScene(back);
+  setState({ prefabStack: stack });
 }

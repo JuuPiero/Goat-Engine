@@ -7,11 +7,11 @@ import { ComponentIcon, ObjectIcon } from '../ui/icons';
 import { useSettings } from '../projectSettings';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, nameOf } from '../api';
-import { getEngine } from '../engine';
+import { getEngine, openPrefab } from '../engine';
 import { edit, mutate } from '../commands';
 import { registerFieldDrop } from '../dnd';
-import { log, useStore } from '../store';
-import { openContextMenu } from '../ui/Menu';
+import { log, setState, useStore } from '../store';
+import { openContextMenu, openMenuBelow, type MenuItem } from '../ui/Menu';
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
@@ -659,6 +659,7 @@ export function EntityInspector({ id }: { id: string }) {
           </div>
         </div>
       </div>
+      {count === 1 && <PrefabBar id={id} />}
       {count > 1 && <div className="dim multi-note">{count} objects selected — edits apply to all, — = different values</div>}
       {kind === 'generated' && <div className="dim multi-note">Part of a prefab / model instance: changes are saved as overrides</div>}
       <div className="component">
@@ -685,6 +686,75 @@ export function EntityInspector({ id }: { id: string }) {
         ))}
       </div>
       <ComponentList id={id} ids={ids} />
+    </div>
+  );
+}
+
+/// Unity's prefab instance bar: Open (Prefab Mode), Select (the root), Overrides ▾ with the
+/// changed objects / components, Revert All and Apply All.
+function PrefabBar({ id }: { id: string }) {
+  const rev = useStore((s) => s.hierarchyRev);
+  const playing = useStore((s) => s.playing);
+  const [info, setInfo] = useState<{ root: string; key: string; overrides: { target: number[]; object: string; name?: string; active?: boolean; components: string[]; scripts: boolean }[] } | null>(null);
+  useEffect(() => {
+    const e = getEngine();
+    if (!e || playing) return setInfo(null);
+    setInfo(JSON.parse(e.prefab_info(id)));
+  }, [id, rev, playing]);
+  if (!info) return null;
+  const name = info.key.split('/').pop()?.replace('.prefab.json', '');
+  const items: MenuItem[] = [
+    ...(info.overrides.length
+      ? info.overrides.map((o) => ({
+          label: `${o.object}: ${[o.name !== undefined && o.name !== null ? 'Name' : '', o.active !== undefined && o.active !== null ? 'Active' : '', ...o.components.map(displayName), o.scripts ? 'Scripts' : ''].filter(Boolean).join(', ')}`,
+          disabled: true,
+        }))
+      : [{ label: 'No overrides', disabled: true }]),
+    '-',
+    {
+      label: 'Revert All',
+      disabled: !info.overrides.length,
+      action: () =>
+        mutate('Revert Prefab', () => {
+          const root = getEngine()?.revert_prefab(info.root);
+          if (root) setState({ entity: root, entities: [root] });
+        }),
+    },
+    {
+      label: 'Apply All',
+      disabled: !info.overrides.length,
+      action: () =>
+        void (async () => {
+          const e = getEngine();
+          if (!e) return;
+          e.record_undo('Apply Prefab');
+          try {
+            const out = JSON.parse(e.apply_prefab(info.root)) as { key: string; text: string };
+            await api.writeText(out.key, out.text);
+            log(`applied the overrides to ${out.key}`);
+            setState((s) => ({ entity: null, entities: [], sceneDirty: true, hierarchyRev: s.hierarchyRev + 1 }));
+          } catch (err) {
+            log(`Apply: ${err}`, 'error');
+          }
+        })(),
+    },
+  ];
+  return (
+    <div className="g-prefabbar">
+      <span className="g-prefabbar-label">Prefab</span>
+      <span className="g-prefabbar-name" title={info.key}>
+        {name}
+      </span>
+      <span className="g-flex" />
+      <button className="g-btn small" onClick={() => void openPrefab(info.key)} title="Edit the prefab (Prefab Mode)">
+        Open
+      </button>
+      <button className="g-btn small" onClick={() => setState({ entity: info.root, entities: [info.root] })} title="Select the instance root">
+        Select
+      </button>
+      <button className={`g-btn small${info.overrides.length ? ' accent' : ''}`} onClick={(ev) => openMenuBelow(ev.currentTarget, items)} title="Overrides of this instance">
+        Overrides{info.overrides.length ? ` (${info.overrides.length})` : ''} ▾
+      </button>
     </div>
   );
 }
