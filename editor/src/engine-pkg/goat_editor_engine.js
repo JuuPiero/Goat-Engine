@@ -264,6 +264,16 @@ export class EditorEngine {
         wasm.editorengine_gizmo_end(this.__wbg_ptr);
     }
     /**
+     * Pointer over the Scene view without a button: highlights the handle under it.
+     * @param {number} x
+     * @param {number} y
+     * @param {number} w
+     * @param {number} h
+     */
+    gizmo_hover(x, y, w, h) {
+        wasm.editorengine_gizmo_hover(this.__wbg_ptr, x, y, w, h);
+    }
+    /**
      * JSON array of `{ id, name, parent, kind }`.
      * @returns {string}
      */
@@ -603,6 +613,27 @@ export class EditorEngine {
         return v1;
     }
     /**
+     * JSON shapes the UI draws over the Scene view (handles, selection outlines, icons), in
+     * pixels of a `w × h` view; `px, py` = pointer (pixels, negative = none).
+     * @param {number} w
+     * @param {number} h
+     * @param {number} px
+     * @param {number} py
+     * @returns {string}
+     */
+    scene_overlay(w, h, px, py) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.editorengine_scene_overlay(this.__wbg_ptr, w, h, px, py);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * @param {string | null} [id]
      */
     select(id) {
@@ -698,7 +729,7 @@ export class EditorEngine {
         wasm.editorengine_set_dual_3ds(this.__wbg_ptr, on);
     }
     /**
-     * "move" / "rotate" / "scale".
+     * "move" / "rotate" / "scale" / "transform".
      * @param {string} mode
      */
     set_gizmo_mode(mode) {

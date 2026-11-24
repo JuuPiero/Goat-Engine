@@ -4,6 +4,7 @@
 pub mod core;
 pub mod editing;
 pub mod gizmos;
+pub mod handles;
 pub mod navpreview;
 pub mod prefabs;
 pub mod tools;

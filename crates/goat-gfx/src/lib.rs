@@ -388,6 +388,8 @@ pub struct Fog {
 pub struct Bounds {
     pub center: Vec3,
     pub radius: f32,
+    /// Half size of the axis-aligned box around the vertices (mesh space), centred on `center`.
+    pub half_extents: Vec3,
 }
 
 impl Projection {

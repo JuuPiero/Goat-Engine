@@ -10,9 +10,10 @@ use goat_runtime::*;
 
 use crate::core::{EditorCore, EDITOR_LAYER};
 
-const COLLIDER: [f32; 4] = [0.55, 1.0, 0.45, 0.95];
-const LIGHT: [f32; 4] = [1.0, 0.92, 0.45, 0.9];
-const CAMERA: [f32; 4] = [0.85, 0.88, 0.95, 0.9];
+// PiaEngine's gizmo colours: colliders 0x8ef08e, lights 0xffe066, camera frustum 0xdddddd
+const COLLIDER: [f32; 4] = [0.557, 0.941, 0.557, 0.9];
+const LIGHT: [f32; 4] = [1.0, 0.878, 0.4, 0.9];
+const CAMERA: [f32; 4] = [0.867, 0.867, 0.867, 0.9];
 const AUDIO: [f32; 4] = [0.45, 0.7, 1.0, 0.8];
 const NAV: [f32; 4] = [0.4, 0.95, 0.85, 0.9];
 

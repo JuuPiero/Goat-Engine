@@ -12,6 +12,7 @@
 .g-viewpanel { background: #2a2a2a; }
 .g-viewport { background: #23262e; }
 .g-viewport .g-canvas { position: absolute; }
+.g-overlay { position: absolute; pointer-events: none; z-index: 2; }
 .g-gameview { background: #1e1e1e; }
 .g-viewport.drop { outline: 2px dashed var(--drop, #f2b53c); outline-offset: -2px; }
 .g-viewbar .g-tbtn { display: inline-flex; align-items: center; gap: 4px; }

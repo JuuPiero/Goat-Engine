@@ -55,6 +55,10 @@ export class EditorEngine {
     gizmo_drag(dx: number, dy: number, w: number, h: number, snap: boolean): void;
     gizmo_end(): void;
     /**
+     * Pointer over the Scene view without a button: highlights the handle under it.
+     */
+    gizmo_hover(x: number, y: number, w: number, h: number): void;
+    /**
      * JSON array of `{ id, name, parent, kind }`.
      */
     hierarchy(): string;
@@ -107,6 +111,11 @@ export class EditorEngine {
     revert_prefab(id: string): string;
     save_scene(): string;
     scene(): string | undefined;
+    /**
+     * JSON shapes the UI draws over the Scene view (handles, selection outlines, icons), in
+     * pixels of a `w × h` view; `px, py` = pointer (pixels, negative = none).
+     */
+    scene_overlay(w: number, h: number, px: number, py: number): string;
     select(id?: string | null): void;
     /**
      * Selects several entities (JSON array of ids; the last is active).
@@ -131,7 +140,7 @@ export class EditorEngine {
      */
     set_dual_3ds(on: boolean): void;
     /**
-     * "move" / "rotate" / "scale".
+     * "move" / "rotate" / "scale" / "transform".
      */
     set_gizmo_mode(mode: string): void;
     set_gizmos(on: boolean): void;
@@ -209,6 +218,7 @@ export interface InitOutput {
     readonly editorengine_gizmo_begin: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly editorengine_gizmo_drag: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly editorengine_gizmo_end: (a: number) => void;
+    readonly editorengine_gizmo_hover: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_hierarchy: (a: number) => [number, number];
     readonly editorengine_instantiate: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly editorengine_is_paused: (a: number) => number;
@@ -232,6 +242,7 @@ export interface InitOutput {
     readonly editorengine_revert_prefab: (a: number, b: number, c: number) => [number, number, number, number];
     readonly editorengine_save_scene: (a: number) => [number, number, number, number];
     readonly editorengine_scene: (a: number) => [number, number];
+    readonly editorengine_scene_overlay: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly editorengine_select: (a: number, b: number, c: number) => void;
     readonly editorengine_select_many: (a: number, b: number, c: number) => void;
     readonly editorengine_selected: (a: number) => [number, number];

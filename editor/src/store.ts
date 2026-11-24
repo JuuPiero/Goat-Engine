@@ -43,8 +43,8 @@ export interface EditorState {
   viewTab: 'scene' | 'game';
   /// The controller open in the Animator window.
   controller: string | null;
-  /// Unity's transform tools (Q W E R) and handle settings (Z Pivot / Center, X Local / Global).
-  tool: 'hand' | 'move' | 'rotate' | 'scale';
+  /// Unity's transform tools (Q W E R Y) and handle settings (Z Pivot / Center, X Local / Global).
+  tool: 'hand' | 'move' | 'rotate' | 'scale' | 'transform';
   pivotCenter: boolean;
   toolLocal: boolean;
   /// Scene view bar: 2D, Persp / Iso, Grid, Gizmos.

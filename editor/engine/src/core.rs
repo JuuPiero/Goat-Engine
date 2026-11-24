@@ -10,7 +10,7 @@
 use goat_assets::{AssetIo, AssetServer};
 use goat_core::math::{EulerRot, Mat4, Quat, Vec3};
 use goat_core::Color;
-use goat_gfx::{BlendMode, CullMode, GraphicsBackend, LightingModel, MaterialDesc, MeshData, Projection};
+use goat_gfx::{GraphicsBackend, Projection};
 use goat_runtime::*;
 use goat_scene::SceneRegistry;
 use serde::{Deserialize, Serialize};
@@ -145,7 +145,6 @@ pub struct EditorCore {
     /// The active selected entity (Inspector, gizmo); `selection` holds all of them.
     pub selected: Option<Entity>,
     pub selection: Vec<Entity>,
-    selection_boxes: Vec<Entity>,
     pub(crate) undo: Vec<crate::editing::UndoStep>,
     pub(crate) redo: Vec<crate::editing::UndoStep>,
     pub(crate) nav_preview: crate::navpreview::NavPreview,
@@ -191,7 +190,6 @@ impl EditorCore {
             scene: None,
             selected: None,
             selection: Vec::new(),
-            selection_boxes: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
             nav_preview: Default::default(),
@@ -428,6 +426,10 @@ impl EditorCore {
     /// renderer whose bounding sphere the ray hits, mapped to its selectable owner (the instance
     /// root for generated children).
     pub fn pick(&self, gfx: &dyn GraphicsBackend, x: f32, y: f32) -> Option<Entity> {
+        // camera / light icons first (objects without renderers)
+        if let Some(e) = self.icon_hit(x, y) {
+            return Some(e);
+        }
         let w = &self.edit.world;
         let (origin, dir) = self.ray(x, y);
 
@@ -561,35 +563,13 @@ impl EditorCore {
         self.edit.frame(dt, gfx);
     }
 
-    /// Translucent boxes around the selected entities (editor layer); the active one brighter.
-    fn update_selection_box(&mut self, gfx: &mut dyn GraphicsBackend) {
+    /// Drops deleted entities from the selection (outlines: handles.rs `scene_overlay`).
+    fn update_selection_box(&mut self, _gfx: &mut dyn GraphicsBackend) {
         self.selection.retain(|e| self.edit.world.contains(*e));
         if self.selected.is_some_and(|e| !self.edit.world.contains(e)) {
             self.selected = self.selection.last().copied();
         }
-        let spheres: Vec<(Vec3, f32, bool)> = self.selection.iter().filter_map(|&e| self.world_sphere(gfx, e).map(|(c, r)| (c, r, Some(e) == self.selected))).collect();
-        while self.selection_boxes.len() < spheres.len() {
-            let (Ok(mesh), Ok(mat)) = (
-                gfx.create_mesh(&MeshData::cube(1.0)),
-                gfx.create_material(&MaterialDesc { base_color: Color::rgba(1.0, 0.65, 0.15, 0.18), lighting: LightingModel::Unlit, blend: BlendMode::Additive, cull: CullMode::None, depth_write: false, fog: false, ..Default::default() }),
-            ) else {
-                return;
-            };
-            let e = self.edit.world.spawn((Name("Selection".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, mat).with_layer(EDITOR_LAYER).with_sorting_order(1000)));
-            self.selection_boxes.push(e);
-        }
-        for (i, &b) in self.selection_boxes.iter().enumerate() {
-            let s = spheres.get(i).copied();
-            if let Ok(mut r) = self.edit.world.get::<&mut MeshRenderer>(b) {
-                r.visible = s.is_some();
-            }
-            if let (Some((c, r, active)), Ok(mut t)) = (s, self.edit.world.get::<&mut Transform>(b)) {
-                // inactive members of a multi-selection: a slightly smaller box
-                *t = Transform::from_position(c).with_scale(Vec3::splat(r * if active { 2.0 } else { 1.9 }));
-            }
-        }
     }
-
     /// The profiler of the running game (or of the edit world): smoothed sections, the last
     /// frames' history, draw calls.
     pub fn profiler_json(&mut self) -> serde_json::Value {
@@ -813,19 +793,14 @@ mod playground_tests {
         c.frame(&mut gfx, 1.0 / 60.0);
         c.select_many(vec![a, b]);
         let (w, h) = (800.0, 600.0);
-        // pixels along the X handle on screen
-        let along = |c: &EditorCore| {
-            let (o, basis, size) = c.gizmo_frame().unwrap();
-            let (p, q) = (c.project(o).unwrap(), c.project(o + basis * Vec3::X * size).unwrap());
-            let s = Vec2::new((q.x - p.x) * w, (q.y - p.y) * h);
-            (s.normalize(), s.length() / size)
-        };
         let pos = |c: &EditorCore, e| c.edit.world.get::<&Transform>(e).unwrap().position;
 
         // Move, Ctrl held: both objects by the same snapped amount
-        let (dir, px_per_unit) = along(&c);
-        c.gizmo_start(0);
-        let d = dir * px_per_unit * 0.6; // 0.6 units → snaps to 0.5
+        c.tools.view_px = Vec2::new(w, h);
+        let (o, _, _) = c.gizmo_frame().unwrap();
+        let start = c.project(o).unwrap() * Vec2::new(w, h);
+        c.gizmo_start(crate::handles::AXIS, start);
+        let d = c.project(o + Vec3::X * 0.6).unwrap() * Vec2::new(w, h) - start; // 0.6 units → snaps to 0.5
         c.gizmo_drag(d.x, d.y, w, h, true);
         c.gizmo_stop();
         assert!((pos(&c, a).x + 0.5).abs() < 1e-4 && (pos(&c, b).x - 1.5).abs() < 1e-4, "{} {}", pos(&c, a), pos(&c, b));
@@ -836,12 +811,18 @@ mod playground_tests {
         c.tools.mode = GizmoMode::Rotate;
         let centre = c.gizmo_frame().unwrap().0;
         assert!((centre.x - 0.5).abs() < 1e-4, "centre of the selection: {centre}");
-        let (o, basis, size) = c.gizmo_frame().unwrap();
-        let (p, q) = (c.project(o).unwrap(), c.project(o + basis * Vec3::Y * size).unwrap());
-        let s = Vec2::new((q.x - p.x) * w, (q.y - p.y) * h).normalize();
-        c.gizmo_start(1);
-        let d = s * (90f32.to_radians() / 0.01 + 3.0); // a bit past 90°: snaps back to 90
-        c.gizmo_drag(d.x, d.y, w, h, true);
+        // grab the Y ring at +X, drag (in steps, like a pointer) to a bit past −Z: 90° about Y
+        let (o, _, unit) = c.gizmo_frame().unwrap();
+        let r = 0.5 * unit;
+        let px = |c: &EditorCore, p: Vec3| c.project(p).unwrap() * Vec2::new(w, h);
+        let mut at = px(&c, o + Vec3::X * r);
+        c.gizmo_start(crate::handles::RING + 1, at);
+        for k in 1..=10 {
+            let a = (93f32 * k as f32 / 10.0).to_radians();
+            let next = px(&c, o + Quat::from_rotation_y(a) * Vec3::X * r);
+            c.gizmo_drag(next.x - at.x, next.y - at.y, w, h, true);
+            at = next;
+        }
         c.gizmo_stop();
         let (pa, pb) = (pos(&c, a), pos(&c, b));
         assert!((pa.x - 0.5).abs() < 1e-3 && (pb.x - 0.5).abs() < 1e-3 && (pa.z + pb.z).abs() < 1e-3 && (pa.z - pb.z).abs() > 1.9, "{pa} {pb}");

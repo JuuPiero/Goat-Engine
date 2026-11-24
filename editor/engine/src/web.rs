@@ -221,23 +221,34 @@ impl EditorEngine {
     }
 
     // ------------------------------------------------------------ gizmos
-    /// "move" / "rotate" / "scale".
+    /// "move" / "rotate" / "scale" / "transform".
     pub fn set_gizmo_mode(&mut self, mode: &str) {
         self.core.tools.mode = match mode {
             "rotate" => GizmoMode::Rotate,
             "scale" => GizmoMode::Scale,
+            "transform" => GizmoMode::Transform,
             _ => GizmoMode::Move,
         };
     }
     /// Starts a gizmo drag if (x, y) (0..1 of a w × h view) is on a handle.
     pub fn gizmo_begin(&mut self, x: f32, y: f32, w: f32, h: f32) -> bool {
         match self.core.gizmo_hit(x, y, w, h) {
-            Some(axis) => {
-                self.core.gizmo_start(axis);
+            Some(handle) => {
+                self.core.gizmo_start(handle, goat_core::math::Vec2::new(x * w, y * h));
                 true
             }
             None => false,
         }
+    }
+    /// Pointer over the Scene view without a button: highlights the handle under it.
+    pub fn gizmo_hover(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.core.gizmo_hover(x, y, w, h);
+    }
+    /// JSON shapes the UI draws over the Scene view (handles, selection outlines, icons), in
+    /// pixels of a `w × h` view; `px, py` = pointer (pixels, negative = none).
+    pub fn scene_overlay(&mut self, w: f32, h: f32, px: f32, py: f32) -> String {
+        let pointer = (px >= 0.0).then(|| goat_core::math::Vec2::new(px, py));
+        self.core.scene_overlay(&self.gfx, w, h, pointer).to_string()
     }
     /// snap = Ctrl held (increment snapping).
     pub fn gizmo_drag(&mut self, dx: f32, dy: f32, w: f32, h: f32, snap: bool) {

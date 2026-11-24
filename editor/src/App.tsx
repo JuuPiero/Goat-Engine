@@ -7,7 +7,7 @@ import { DockviewReact, themeDark, type DockviewApi, type DockviewReadyEvent, ty
 import 'dockview-react/dist/styles/dockview.css';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { listen } from '@tauri-apps/api/event';
-import { Activity, Box, Clapperboard, Crosshair, Globe, Hammer, Hand, Move, Pause, Play, Rotate3d, Scale3d, StepForward } from 'lucide-react';
+import { Activity, Box, Clapperboard, Crosshair, Globe, Hammer, Hand, Move, Move3d, Pause, Play, Rotate3d, Scale3d, StepForward } from 'lucide-react';
 import { api } from './api';
 import { handleDrop, installDropHandling } from './dnd';
 import { getState, log, refresh, run, setState, useStore } from './store';
@@ -77,6 +77,7 @@ const TOOLS = [
   { id: 'move', icon: Move, title: 'Move Tool (W)' },
   { id: 'rotate', icon: Rotate3d, title: 'Rotate Tool (E)' },
   { id: 'scale', icon: Scale3d, title: 'Scale Tool (R)' },
+  { id: 'transform', icon: Move3d, title: 'Transform Tool (Y)' },
 ] as const;
 
 /// The main toolbar (Unity's): transform tools, Pivot / Local, Play / Pause / Step, windows, Build.

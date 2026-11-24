@@ -10,7 +10,7 @@
 // resolutions), Scale, Stats; keyboard = 3DS buttons while playing.
 import { useEffect, useRef, useState } from 'react';
 import type { DockviewPanelApi } from 'dockview-react';
-import { Box, ChevronLeft, Grid3x3, Hand, Move, Rotate3d, Scale3d, Shapes } from 'lucide-react';
+import { Box, ChevronLeft, Grid3x3, Hand, Move, Move3d, Rotate3d, Scale3d, Shapes } from 'lucide-react';
 import { frameSelected, selectEntities } from '../selection';
 import { afterChange } from '../commands';
 import { exitPrefab, getEngine, saveScene, startPlay, stopPlay } from '../engine';
@@ -41,7 +41,10 @@ const TOOLS = [
   { id: 'move', icon: Move, title: 'Move Tool (W)' },
   { id: 'rotate', icon: Rotate3d, title: 'Rotate Tool (E)' },
   { id: 'scale', icon: Scale3d, title: 'Scale Tool (R)' },
+  { id: 'transform', icon: Move3d, title: 'Transform Tool (Y)' },
 ] as const;
+
+const UNDO_LABEL: Record<string, string> = { move: 'Move', rotate: 'Rotate', scale: 'Scale', transform: 'Transform' };
 
 const typing = () => ['INPUT', 'TEXTAREA', 'SELECT'].includes((document.activeElement?.tagName ?? '').toUpperCase());
 
@@ -60,6 +63,7 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
   const prefabStack = useStore((s) => s.prefabStack);
   const [backend, setBackend] = useState('');
   const drag = useRef<{ x: number; y: number; mode: 'orbit' | 'pan' | 'click' | 'gizmo'; moved: boolean } | null>(null);
+  const pointer = useRef<{ x: number; y: number } | null>(null);
   useEffect(() => {
     if (ready) setBackend(getEngine()?.backend_name() ?? '');
   }, [ready]);
@@ -75,6 +79,7 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
       else if (k === 'KeyW') setState({ tool: 'move' });
       else if (k === 'KeyE') setState({ tool: 'rotate' });
       else if (k === 'KeyR') setState({ tool: 'scale' });
+      else if (k === 'KeyY') setState({ tool: 'transform' });
       else if (k === 'KeyZ') setState({ pivotCenter: !s.pivotCenter });
       else if (k === 'KeyX') setState({ toolLocal: !s.toolLocal });
       else if (k === 'KeyF') frameSelected();
@@ -97,7 +102,7 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
     const editing = !e.is_playing();
     const onGizmo = editing && ev.button === 0 && !ev.altKey && tool !== 'hand' && e.gizmo_begin((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height, r.width, r.height);
     // the drag is one Undo step (recorded before the first change)
-    if (onGizmo) e.record_undo(tool === 'move' ? 'Move' : tool === 'rotate' ? 'Rotate' : 'Scale');
+    if (onGizmo) e.record_undo(UNDO_LABEL[tool] ?? 'Move');
     const mode = onGizmo ? 'gizmo' : ev.button === 2 || (ev.button === 0 && ev.altKey) ? 'orbit' : ev.button === 1 || (ev.button === 0 && tool === 'hand') ? 'pan' : 'click';
     drag.current = { x: ev.clientX, y: ev.clientY, mode, moved: false };
     (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
@@ -106,6 +111,10 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
   const onPointerMove = (ev: React.PointerEvent) => {
     const d = drag.current;
     const e = getEngine();
+    const r = (ev.currentTarget as HTMLElement).querySelector('canvas')?.getBoundingClientRect();
+    if (r) pointer.current = { x: ev.clientX - r.left, y: ev.clientY - r.top };
+    // no button: highlight the handle under the pointer (like three.js TransformControls)
+    if (!d && e && r && owner && !e.is_playing() && tool !== 'hand') e.gizmo_hover((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height, r.width, r.height);
     if (!d || !e) return;
     const dx = ev.clientX - d.x;
     const dy = ev.clientY - d.y;
@@ -178,6 +187,11 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onPointerLeave={() => {
+            pointer.current = null;
+            const e = getEngine();
+            if (!drag.current && e && !e.is_playing()) e.gizmo_hover(-1, -1, 1, 1);
+          }}
           onWheel={(ev) => owner && getEngine()?.zoom(ev.deltaY)}
           onContextMenu={(e) => e.preventDefault()}
         >
@@ -197,12 +211,132 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
                 </button>
               ))}
             </div>
+            <SceneOverlay host={host} pointer={pointer} />
             <ViewGizmo view2d={view2d} />
           </>
         )}
       </div>
     </div>
   );
+}
+
+type OverlayItem = { k: 'l' | 's' | 'p' | 'c' | 't' | 'i'; p: number[]; s?: string | null; w?: number; a?: number; z?: boolean; f?: string; fa?: number; t?: string; n?: string };
+
+/// The Scene view overlay (PiaEngine's handles, selection outlines, camera / light icons): shapes
+/// from the engine (`scene_overlay`, view pixels) drawn on a canvas over the engine's canvas.
+function SceneOverlay({ host, pointer }: { host: React.RefObject<HTMLDivElement | null>; pointer: React.RefObject<{ x: number; y: number } | null> }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    const draw = () => {
+      raf = requestAnimationFrame(draw);
+      const c = ref.current;
+      const e = getEngine();
+      const view = host.current?.querySelector('canvas:not(.g-overlay)') as HTMLCanvasElement | null;
+      if (!c || !e || !view || viewMode() !== 'scene') return;
+      const wrap = c.parentElement!.getBoundingClientRect();
+      const r = view.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      Object.assign(c.style, { left: `${r.left - wrap.left}px`, top: `${r.top - wrap.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+      if (c.width !== Math.round(r.width * dpr) || c.height !== Math.round(r.height * dpr)) {
+        c.width = Math.round(r.width * dpr);
+        c.height = Math.round(r.height * dpr);
+      }
+      const g = c.getContext('2d')!;
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.clearRect(0, 0, r.width, r.height);
+      const p = pointer.current;
+      let items: OverlayItem[];
+      try {
+        items = JSON.parse(e.scene_overlay(r.width, r.height, p?.x ?? -1, p?.y ?? -1));
+      } catch {
+        return;
+      }
+      g.lineJoin = 'round';
+      g.lineCap = 'round';
+      for (const it of items) {
+        const q = it.p;
+        g.globalAlpha = 1;
+        if (it.k === 'l' || it.k === 's') {
+          g.beginPath();
+          if (it.k === 'l') {
+            for (let i = 0; i < q.length; i += 2) (i ? g.lineTo : g.moveTo).call(g, q[i], q[i + 1]);
+            if (it.z) g.closePath();
+          } else {
+            for (let i = 0; i + 3 < q.length; i += 4) {
+              g.moveTo(q[i], q[i + 1]);
+              g.lineTo(q[i + 2], q[i + 3]);
+            }
+          }
+          g.strokeStyle = it.s ?? '#fff';
+          g.lineWidth = it.w ?? 1;
+          g.globalAlpha = it.a ?? 1;
+          g.stroke();
+        } else if (it.k === 'p') {
+          g.beginPath();
+          for (let i = 0; i < q.length; i += 2) (i ? g.lineTo : g.moveTo).call(g, q[i], q[i + 1]);
+          g.closePath();
+          g.fillStyle = it.f ?? '#fff';
+          g.globalAlpha = it.fa ?? 1;
+          g.fill();
+          if (it.s) {
+            g.globalAlpha = 1;
+            g.strokeStyle = it.s;
+            g.lineWidth = it.w ?? 1;
+            g.stroke();
+          }
+        } else if (it.k === 'c') {
+          g.beginPath();
+          g.arc(q[0], q[1], Math.max(0, q[2]), 0, Math.PI * 2);
+          if (it.f) {
+            g.fillStyle = it.f;
+            g.globalAlpha = it.fa ?? 1;
+            g.fill();
+          } else {
+            g.strokeStyle = it.s ?? '#fff';
+            g.lineWidth = it.w ?? 1;
+            g.globalAlpha = it.a ?? 1;
+            g.stroke();
+          }
+        } else if (it.k === 't') {
+          g.font = '12px Inter, "Segoe UI", sans-serif';
+          g.textAlign = 'left';
+          g.textBaseline = 'top';
+          g.lineWidth = 3;
+          g.strokeStyle = '#000';
+          g.strokeText(it.t ?? '', q[0], q[1]);
+          g.fillStyle = '#fff';
+          g.fillText(it.t ?? '', q[0], q[1]);
+        } else if (it.k === 'i') {
+          const [x, y] = q;
+          if (it.n === 'camera2d') {
+            // PiaEngine's 2D camera glyph
+            g.globalAlpha = 0.85;
+            g.fillStyle = '#dddddd';
+            g.beginPath();
+            g.roundRect(x - 9, y - 6, 13, 12, 2);
+            g.fill();
+            g.beginPath();
+            g.moveTo(x + 4, y - 2);
+            g.lineTo(x + 10, y - 6);
+            g.lineTo(x + 10, y + 6);
+            g.lineTo(x + 4, y + 2);
+            g.closePath();
+            g.fill();
+          } else {
+            g.font = '18px "Segoe UI Emoji", "Apple Color Emoji", sans-serif';
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.fillText(it.n === 'camera' ? '🎥' : '💡', x, y);
+          }
+        }
+      }
+      g.globalAlpha = 1;
+    };
+    draw();
+    return () => cancelAnimationFrame(raf);
+  }, [host, pointer]);
+  return <canvas ref={ref} className="g-overlay" />;
 }
 
 /// Unity's scene view gizmo: the world axes as seen by the editor camera; click a cone to look

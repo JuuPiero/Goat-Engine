@@ -38,11 +38,11 @@ impl MeshData {
             max = max.max(p);
         }
         if self.vertices.is_empty() {
-            return crate::Bounds { center: Vec3::ZERO, radius: 0.0 };
+            return crate::Bounds { center: Vec3::ZERO, radius: 0.0, half_extents: Vec3::ZERO };
         }
         let center = (min + max) * 0.5;
         let radius = self.vertices.iter().map(|v| (Vec3::from(v.position) - center).length()).fold(0.0, f32::max);
-        crate::Bounds { center, radius }
+        crate::Bounds { center, radius, half_extents: (max - min) * 0.5 }
     }
 
     pub fn triangle_count(&self) -> usize {
