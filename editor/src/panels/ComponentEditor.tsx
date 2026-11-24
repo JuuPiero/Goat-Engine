@@ -134,7 +134,7 @@ const ASSET_EXT: Record<string, RegExp> = {
   scene: /\.scene\.json$/i,
 };
 const BUILTINS: Record<string, string[]> = {
-  mesh: ['builtin:cube', 'builtin:sphere', 'builtin:plane'],
+  mesh: ['builtin:cube', 'builtin:sphere', 'builtin:capsule', 'builtin:cylinder', 'builtin:plane', 'builtin:quad'],
   material: ['builtin:default'],
   texture: ['builtin:white'],
 };

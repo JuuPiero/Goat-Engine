@@ -118,4 +118,85 @@ impl MeshData {
         }
         m
     }
+
+    /// Unity's Capsule: `radius`, total `height` along Y (hemispheres included).
+    pub fn capsule(radius: f32, height: f32, rings: u32, segments: u32) -> Self {
+        let mut m = MeshData::default();
+        let half = (height / 2.0 - radius).max(0.0);
+        // a sphere split at the equator, the halves pushed apart; the equator row is doubled
+        let rings = rings.max(2) & !1;
+        let w = segments + 1;
+        let mut rows = 0;
+        for r in 0..=rings {
+            let phi = r as f32 / rings as f32 * std::f32::consts::PI;
+            let copies: &[f32] = if r == rings / 2 { &[half, -half] } else if r < rings / 2 { &[half] } else { &[-half] };
+            for &off in copies {
+                for s in 0..=segments {
+                    let u = s as f32 / segments as f32;
+                    let th = u * std::f32::consts::TAU;
+                    let n = Vec3::new(phi.sin() * th.cos(), phi.cos(), phi.sin() * th.sin());
+                    let p = n * radius + Vec3::new(0.0, off, 0.0);
+                    let v = 0.5 - p.y / height.max(1e-6);
+                    m.vertices.push(Vertex::new(p.into(), n.into(), [u, v]));
+                }
+                rows += 1;
+            }
+        }
+        for r in 0..rows - 1 {
+            for s in 0..segments {
+                let a = (r * w + s) as u16;
+                let b = a + w as u16;
+                m.indices.extend_from_slice(&[a, a + 1, b, b, a + 1, b + 1]);
+            }
+        }
+        m
+    }
+
+    /// Unity's Cylinder: `radius`, `height` along Y, capped.
+    pub fn cylinder(radius: f32, height: f32, segments: u32) -> Self {
+        let mut m = MeshData::default();
+        let h = height / 2.0;
+        // side
+        for s in 0..=segments {
+            let u = s as f32 / segments as f32;
+            let th = u * std::f32::consts::TAU;
+            let n = Vec3::new(th.cos(), 0.0, th.sin());
+            for (y, v) in [(h, 0.0), (-h, 1.0)] {
+                m.vertices.push(Vertex::new([n.x * radius, y, n.z * radius], n.into(), [u, v]));
+            }
+        }
+        for s in 0..segments {
+            let a = (s * 2) as u16;
+            m.indices.extend_from_slice(&[a, a + 2, a + 1, a + 1, a + 2, a + 3]);
+        }
+        // caps
+        for (y, ny) in [(h, 1.0f32), (-h, -1.0)] {
+            let center = m.vertices.len() as u16;
+            m.vertices.push(Vertex::new([0.0, y, 0.0], [0.0, ny, 0.0], [0.5, 0.5]));
+            for s in 0..=segments {
+                let th = s as f32 / segments as f32 * std::f32::consts::TAU;
+                m.vertices.push(Vertex::new([th.cos() * radius, y, th.sin() * radius], [0.0, ny, 0.0], [0.5 + th.cos() * 0.5, 0.5 + th.sin() * 0.5]));
+            }
+            for s in 0..segments as u16 {
+                let (a, b) = (center + 1 + s, center + 2 + s);
+                if ny > 0.0 {
+                    m.indices.extend_from_slice(&[center, b, a]);
+                } else {
+                    m.indices.extend_from_slice(&[center, a, b]);
+                }
+            }
+        }
+        m
+    }
+
+    /// Unity's Quad: `size` × `size` in the XY plane, normal +Z.
+    pub fn quad(size: f32) -> Self {
+        let h = size / 2.0;
+        let mut m = MeshData::default();
+        for (x, y, u, v) in [(-h, -h, 0.0, 1.0), (h, -h, 1.0, 1.0), (h, h, 1.0, 0.0), (-h, h, 0.0, 0.0)] {
+            m.vertices.push(Vertex::new([x, y, 0.0], [0.0, 0.0, 1.0], [u, v]));
+        }
+        m.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+        m
+    }
 }

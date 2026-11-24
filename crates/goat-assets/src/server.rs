@@ -247,6 +247,9 @@ impl AssetServer {
         let data = match key {
             "builtin:cube" => MeshData::cube(1.0),
             "builtin:sphere" => MeshData::sphere(0.5, 16, 24),
+            "builtin:capsule" => MeshData::capsule(0.5, 2.0, 12, 24),
+            "builtin:cylinder" => MeshData::cylinder(0.5, 2.0, 24),
+            "builtin:quad" => MeshData::quad(1.0),
             "builtin:plane" => MeshData::plane(10.0, 10.0),
             _ => return Err(AssetError::Format(key.into(), "unknown mesh (builtin:cube|sphere|plane or a model sub-asset)".into())),
         };
@@ -299,6 +302,9 @@ impl AssetServer {
         match key {
             "builtin:cube" => return Ok(MeshData::cube(1.0)),
             "builtin:sphere" => return Ok(MeshData::sphere(0.5, 16, 24)),
+            "builtin:capsule" => return Ok(MeshData::capsule(0.5, 2.0, 12, 24)),
+            "builtin:cylinder" => return Ok(MeshData::cylinder(0.5, 2.0, 24)),
+            "builtin:quad" => return Ok(MeshData::quad(1.0)),
             "builtin:plane" => return Ok(MeshData::plane(10.0, 10.0)),
             _ => {}
         }
@@ -327,6 +333,9 @@ impl AssetServer {
         match key {
             "builtin:cube" => add(&MeshData::cube(1.0), &Mat4::IDENTITY),
             "builtin:sphere" => add(&MeshData::sphere(0.5, 16, 24), &Mat4::IDENTITY),
+            "builtin:capsule" => add(&MeshData::capsule(0.5, 2.0, 12, 24), &Mat4::IDENTITY),
+            "builtin:cylinder" => add(&MeshData::cylinder(0.5, 2.0, 24), &Mat4::IDENTITY),
+            "builtin:quad" => add(&MeshData::quad(1.0), &Mat4::IDENTITY),
             "builtin:plane" => add(&MeshData::plane(10.0, 10.0), &Mat4::IDENTITY),
             _ => {
                 let data = load_model(&self.io, file_of(key))?;

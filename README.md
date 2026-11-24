@@ -210,7 +210,7 @@ Thư mục `assets/` của game:
 
 Asset được gọi bằng **key** là đường dẫn tương đối:
 - `textures/logo.png`, `models/suzanne.glb`, `materials/logo.mat.json`;
-- asset dựng sẵn: `builtin:cube` / `sphere` / `plane` / `default`;
+- asset dựng sẵn: mesh `builtin:cube` / `sphere` / `capsule` / `cylinder` / `plane` / `quad` (kích thước như Unity), material `builtin:default`, texture `builtin:white`;
 - một phần của model: `models/a.glb#mesh:0:1`, `#material:2`;
 - theo GUID: `guid:<32 ký tự hex>` (và `guid:...#mesh:0:1`). Mỗi asset có file `<tên file>.meta` = `{ "guid": "..." }`, do editor tạo và giữ nguyên khi đổi tên / di chuyển, như Unity. Nên commit cả file `.meta`.
 

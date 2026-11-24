@@ -133,6 +133,9 @@ const UI_RECT = (w: number, h: number) => ({ RectTransform: { size: [w, h] } });
 export const PRESETS: Record<string, Preset> = {
   Cube: { name: 'Cube', components: { MeshRenderer: { mesh: 'builtin:cube', material: 'builtin:default' }, Collider: { shape: { box: [0.5, 0.5, 0.5] } } } },
   Sphere: { name: 'Sphere', components: { MeshRenderer: { mesh: 'builtin:sphere', material: 'builtin:default' }, Collider: { shape: { sphere: 0.5 } } } },
+  Capsule: { name: 'Capsule', components: { MeshRenderer: { mesh: 'builtin:capsule', material: 'builtin:default' }, Collider: { shape: { capsule: { half_height: 0.5, radius: 0.5 } } } } },
+  Cylinder: { name: 'Cylinder', components: { MeshRenderer: { mesh: 'builtin:cylinder', material: 'builtin:default' }, Collider: { shape: { capsule: { half_height: 0.5, radius: 0.5 } } } } },
+  Quad: { name: 'Quad', components: { MeshRenderer: { mesh: 'builtin:quad', material: 'builtin:default' }, Collider: { shape: { box: [0.5, 0.5, 0.005] } } } },
   Plane: { name: 'Plane', components: { MeshRenderer: { mesh: 'builtin:plane', material: 'builtin:default' }, Collider: { shape: { box: [5, 0.01, 5] } } } },
   Sprite: { name: 'Sprite', components: { SpriteRenderer: { texture: 'builtin:white' } } },
   Text3D: { name: 'Text', components: { Text: { text: 'Hello', font: '' } } },
@@ -201,7 +204,7 @@ export function gameObjectMenu(parent: () => string | null) {
     c('Create Empty', undefined, 'Ctrl+Shift+N'),
     { label: 'Create Empty Child', shortcut: 'Alt+Shift+N', disabled: !getState().entity, action: () => createObject(undefined, getState().entity) },
     '-' as const,
-    { label: '3D Object', children: [c('Cube', 'Cube'), c('Sphere', 'Sphere'), c('Plane', 'Plane'), c('Text', 'Text3D')] },
+    { label: '3D Object', children: [c('Cube', 'Cube'), c('Sphere', 'Sphere'), c('Capsule', 'Capsule'), c('Cylinder', 'Cylinder'), c('Plane', 'Plane'), c('Quad', 'Quad'), '-' as const, c('Text', 'Text3D')] },
     { label: '2D Object', children: [c('Sprite', 'Sprite')] },
     { label: 'Effects', children: [c('Particle System', 'ParticleSystem')] },
     { label: 'Light', children: [c('Directional Light', 'DirectionalLight'), c('Point Light', 'PointLight'), c('Spot Light', 'SpotLight')] },
