@@ -96,6 +96,7 @@ Mọi ngôn ngữ đi qua cùng một lõi (`goat-script`: component `Script`, t
   - ✅ Constant Force (3D / 2D), Area / Point / Buoyancy Effector 2D, Target Joint 2D
   - ✅ Sprite Mask (hình chữ nhật, Visible Inside / Outside)
   - ✅ Platform / Surface Effector 2D, Wheel / Friction / Relative Joint 2D
+  - ✅ Inspector sửa nhiều object cùng lúc (giá trị khác nhau hiện —)
   - ✅ Callback cho script: onCollision* / onTrigger* (3D + 2D), onMouse*, onPointer* (Physics Raycaster / Physics 2D Raycaster), Camera.ScreenPointToRay
   - ⬜ Đợt 2 — component lõi còn thiếu: Constant Force, joint 3D đủ loại (Character / Configurable) và joint / effector 2D, Sprite Mask, Light / Reflection Probe đơn giản, Animation (legacy), UI: Raw Image, Toggle Group, Scrollbar, Rect Mask 2D, Shadow / Outline, Grid Layout, Aspect Ratio Fitter, Canvas Group, raycaster; mesh dựng sẵn capsule / cylinder / quad
   - ✅ Pause / Step, cửa sổ Profiler (đồng hồ cho wasm, lịch sử frame)
@@ -104,7 +105,7 @@ Mọi ngôn ngữ đi qua cùng một lõi (`goat-script`: component `Script`, t
   - ✅ Game view: menu kích thước (3DS, Free Aspect, tỉ lệ, độ phân giải cố định)
   - ✅ Scene view: tool Hand (Q), Pivot / Center, Local / Global, snap khi giữ Ctrl, kéo gizmo cho cả vùng chọn
   - ✅ Giao diện editor như PiaEngine: menu / toolbar / dock / status bar, Scene và Game view riêng (2D, Grid, Gizmos, con quay trục, Persp / Iso, Scene view khi Play, Game view khi chưa Play), Hierarchy / Inspector của game đang chạy, menu Hierarchy / Project như Pia
-  - ⬜ Đợt 3 — cửa sổ: Animation window, Package Manager, prefab mode + Apply / Revert override, tool Rect, sửa nhiều vật cùng lúc trong Inspector, behaviour (script Rust) trong Inspector
+  - ⬜ Đợt 3 — cửa sổ: Animation window, Package Manager, prefab mode + Apply / Revert override, tool Rect, behaviour (script Rust) trong Inspector
 - ⬜ Prefab mode, cửa sổ Input Actions, chạy thử trên 3DS từ editor (`3dslink` + log qua mạng), profiler
 
 ## Giai đoạn 6 — Thêm nền tảng (làm sau cùng, khi các thành phần engine đã xong)

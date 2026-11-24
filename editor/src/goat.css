@@ -83,3 +83,8 @@
 /* ---------- older panels inside the dock ---------- */
 .panel-scroll { background: var(--bg-panel); }
 .console-bar { background: var(--bg-bar); border-bottom: 1px solid var(--border); }
+
+/* multi-object editing: fields whose values differ */
+.component > div:not([class]) > .field, .component > div:not([class]) > .vec, .component > div:not([class]) > .nested, .component > .mixed-field > * { margin: 0 6px 0 18px; }
+.mixed-field .field-name::after { content: ' —'; color: var(--text-dim); }
+

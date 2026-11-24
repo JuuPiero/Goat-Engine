@@ -53,14 +53,15 @@ export const displayName = (name: string) => componentInfo().components[name]?.m
 
 // ------------------------------------------------------------------ basic fields
 
-export function NumberField({ label, value, onChange, integer }: { label: string; value: number; onChange: (v: number) => void; integer?: boolean }) {
-  const fmt = (v: number) => String(integer ? Math.round(v) : +v.toFixed(4));
+export function NumberField({ label, value, onChange, integer, mixed }: { label: string; value: number; onChange: (v: number) => void; integer?: boolean; mixed?: boolean }) {
+  const fmt = (v: number) => (mixed ? '—' : String(integer ? Math.round(v) : +v.toFixed(4)));
   const [text, setText] = useState(fmt(value));
-  useEffect(() => setText(fmt(value)), [value]);
+  useEffect(() => setText(fmt(value)), [value, mixed]);
   const scrub = useRef<{ x: number; v: number } | null>(null);
   const step = integer ? 0.1 : Math.max(0.01, Math.abs(value) * 0.01);
   const commit = () => {
     // simple expressions like Unity ("2*3", "10/4")
+    if (mixed && text === '—') return;
     const v = /^[-+*/().\d\s]+$/.test(text) ? Number(Function(`"use strict";return (${text})`)()) : NaN;
     if (!isNaN(v)) onChange(integer ? Math.round(v) : v);
     else setText(fmt(value));
@@ -347,46 +348,70 @@ function Field({ path, name, value, hints, onChange }: { path: string; name: str
 
 let componentClipboard: { name: string; value: Json } | null = null;
 
-/// Adds `name` (and the components it requires) with its defaults.
-function addComponent(id: string, name: string) {
+/// Adds `name` (and the components it requires) with its defaults, to every entity of `ids`.
+function addComponent(ids: string[], name: string) {
   const e = getEngine();
   if (!e) return;
   const info = componentInfo().components;
-  const present = new Set((JSON.parse(e.components(id)) as { name: string }[]).map((c) => c.name));
   mutate(`Add ${displayName(name)}`, () => {
-    for (const n of [...(info[name]?.requires ?? []), name]) {
-      if (present.has(n)) continue;
-      e.set_component(id, n, JSON.stringify(info[n]?.defaults ?? {}));
+    for (const id of ids) {
+      const present = new Set((JSON.parse(e.components(id)) as { name: string }[]).map((c) => c.name));
+      for (const n of [...(info[name]?.requires ?? []), name]) {
+        if (present.has(n)) continue;
+        e.set_component(id, n, JSON.stringify(info[n]?.defaults ?? {}));
+      }
     }
   });
 }
 
-/// Every component of an entity except Transform (drawn above it).
-export function ComponentList({ id }: { id: string }) {
+type CompList = { name: string; value: Json }[];
+
+/// Every component of the active entity except Transform (drawn above it). With several entities
+/// selected (`ids`), only the components they all have; a field edit sets that field on every
+/// one (their other fields stay), fields that differ are marked (Unity's mixed values).
+export function ComponentList({ id, ids = [id] }: { id: string; ids?: string[] }) {
   const rev = useStore((s) => s.hierarchyRev);
-  const [list, setList] = useState<{ name: string; value: Json }[]>([]);
+  const [list, setList] = useState<CompList>([]);
+  const [others, setOthers] = useState<CompList[]>([]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const reload = () => {
     const e = getEngine();
-    if (e) setList(JSON.parse(e.components(id)));
+    if (!e) return;
+    setList(JSON.parse(e.components(id)));
+    setOthers(ids.filter((x) => x !== id).map((x) => JSON.parse(e.components(x)) as CompList));
   };
-  useEffect(reload, [id, rev]);
+  useEffect(reload, [id, rev, ids.join(',')]);
   const write = (name: string, value: Json, key: string) => {
-    edit(`Modify ${displayName(name)}`, `${id}/${name}/${key}`, () => getEngine()?.set_component(id, name, JSON.stringify(value)));
+    edit(`Modify ${displayName(name)}`, `${ids.join(',')}/${name}/${key}`, () => {
+      const e = getEngine();
+      if (!e) return;
+      e.set_component(id, name, JSON.stringify(value));
+      for (const x of ids) {
+        if (x === id) continue;
+        const cur = (JSON.parse(e.components(x)) as CompList).find((c) => c.name === name)?.value;
+        const next = cur && typeof cur === 'object' && !Array.isArray(cur) ? { ...(cur as object), [key]: (value as Record<string, Json>)[key] } : value;
+        e.set_component(x, name, JSON.stringify(next));
+      }
+    });
     reload();
+  };
+  const shared = (name: string) => others.every((o) => o.some((c) => c.name === name));
+  const mixed = (name: string, key: string) => {
+    const mine = JSON.stringify((list.find((c) => c.name === name)?.value as Record<string, Json> | undefined)?.[key]);
+    return others.some((o) => JSON.stringify((o.find((c) => c.name === name)?.value as Record<string, Json> | undefined)?.[key]) !== mine);
   };
   const info = componentInfo().components;
   return (
     <>
       {list
-        .filter((c) => c.name !== 'Transform')
+        .filter((c) => c.name !== 'Transform' && shared(c.name))
         .map((c) => {
           const hints = info[c.name]?.fields ?? {};
           const menu = (ev: React.MouseEvent) =>
             openContextMenu(ev, [
               { label: 'Reset', action: () => mutate(`Reset ${displayName(c.name)}`, () => getEngine()?.set_component(id, c.name, JSON.stringify(info[c.name]?.defaults ?? {}))) },
               '-',
-              { label: 'Remove Component', action: () => mutate(`Remove ${displayName(c.name)}`, () => getEngine()?.remove_component(id, c.name)) },
+              { label: 'Remove Component', action: () => mutate(`Remove ${displayName(c.name)}`, () => ids.forEach((x) => getEngine()?.remove_component(x, c.name))) },
               '-',
               { label: 'Copy Component', action: () => (componentClipboard = { name: c.name, value: c.value }) },
               { label: 'Paste Component Values', disabled: componentClipboard?.name !== c.name, action: () => componentClipboard && mutate('Paste Component Values', () => getEngine()?.set_component(id, c.name, JSON.stringify(componentClipboard!.value))) },
@@ -416,7 +441,11 @@ export function ComponentList({ id }: { id: string }) {
               </div>
               {!collapsed.has(c.name) &&
                 (c.value && typeof c.value === 'object' && !Array.isArray(c.value) && Object.keys(c.value).length ? (
-                  Object.entries(c.value).map(([k, v]) => <Field key={k} path={k} name={k} value={v} hints={hints} onChange={(nv) => write(c.name, { ...(c.value as object), [k]: nv }, k)} />)
+                  Object.entries(c.value).map(([k, v]) => (
+                    <div key={k} className={ids.length > 1 && mixed(c.name, k) ? 'mixed-field' : undefined} title={ids.length > 1 && mixed(c.name, k) ? 'Different values: an edit sets this field on every selected object' : undefined}>
+                      <Field path={k} name={k} value={v} hints={hints} onChange={(nv) => write(c.name, { ...(c.value as object), [k]: nv }, k)} />
+                    </div>
+                  ))
                 ) : (
                   <div className="dim">(no settings)</div>
                 ))}
@@ -439,13 +468,13 @@ export function ComponentList({ id }: { id: string }) {
             </div>
           );
         })}
-      <AddComponent id={id} present={new Set(list.map((c) => c.name))} />
+      <AddComponent ids={ids} present={new Set(list.filter((c) => shared(c.name)).map((c) => c.name))} />
     </>
   );
 }
 
 /// Unity's Add Component button: a popup with a search box and the menu categories.
-function AddComponent({ id, present }: { id: string; present: Set<string> }) {
+function AddComponent({ ids, present }: { ids: string[]; present: Set<string> }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [path, setPath] = useState<string[]>([]);
@@ -464,7 +493,7 @@ function AddComponent({ id, present }: { id: string; present: Set<string> }) {
     return () => window.removeEventListener('pointerdown', close);
   }, [open]);
   const pick = (name: string) => {
-    addComponent(id, name);
+    addComponent(ids, name);
     setOpen(false);
     setQ('');
     setPath([]);
@@ -532,8 +561,13 @@ interface TransformEdit {
 
 export function EntityInspector({ id }: { id: string }) {
   const rev = useStore((s) => s.hierarchyRev);
-  const count = useStore((s) => s.entities.length);
+  const selected = useStore((s) => s.entities);
+  // every selected entity (the active one included): edits apply to all of them
+  const ids = selected.includes(id) ? selected : [id];
+  const count = ids.length;
   const [t, setT] = useState<TransformEdit | null>(null);
+  const [all, setAll] = useState<TransformEdit[]>([]);
+  const [names, setNames] = useState<string[]>([]);
   const [name, setName] = useState('');
   const [kind, setKind] = useState('entity');
   const [activeSelf, setActiveSelf] = useState(true);
@@ -545,20 +579,34 @@ export function EntityInspector({ id }: { id: string }) {
     if (!e) return;
     const json = e.transform(id);
     setT(json ? JSON.parse(json) : null);
+    setAll(ids.map((x) => e.transform(x)).filter(Boolean).map((j) => JSON.parse(j!) as TransformEdit));
     const rows: { id: string; name: string; kind: string }[] = JSON.parse(e.hierarchy());
+    setNames(ids.map((x) => rows.find((r) => r.id === x)?.name ?? ''));
     const r = rows.find((r) => r.id === id) as ({ id: string; name: string; kind: string; active_self?: boolean; tag?: string; icon?: string } | undefined);
     setIcon(r?.icon ?? 'empty');
     setActiveSelf(r?.active_self ?? true);
     setTag(r?.tag ?? 'Untagged');
     setName(r?.name ?? '');
     setKind(r?.kind ?? 'entity');
-  }, [id, rev]);
+  }, [id, rev, ids.join(',')]);
   if (!t) return <div className="empty">No transform</div>;
+  /// One axis of one field on every selected entity (their other values stay, like Unity).
   const set = (field: keyof TransformEdit, i: number, v: number) => {
-    const next = { ...t, [field]: t[field].map((x, j) => (j === i ? v : x)) };
-    setT(next);
-    edit(field === 'position' ? 'Move' : field === 'euler' ? 'Rotate' : 'Scale', `${id}/transform/${field}`, () => getEngine()?.set_transform(id, JSON.stringify(next)));
+    setT({ ...t, [field]: t[field].map((x, j) => (j === i ? v : x)) });
+    edit(field === 'position' ? 'Move' : field === 'euler' ? 'Rotate' : 'Scale', `${ids.join(',')}/transform/${field}`, () => {
+      const e = getEngine();
+      if (!e) return;
+      for (const x of ids) {
+        const cur = e.transform(x);
+        if (!cur) continue;
+        const tt = JSON.parse(cur) as TransformEdit;
+        tt[field] = tt[field].map((y, j) => (j === i ? v : y));
+        e.set_transform(x, JSON.stringify(tt));
+      }
+    });
   };
+  const mixedAxis = (field: keyof TransformEdit, i: number) => all.some((o) => Math.abs(o[field][i] - t[field][i]) > 1e-5);
+  const mixedName = names.some((n) => n !== names[0]);
   return (
     <div className="g-inspector inspector">
       <div className="g-gohead">
@@ -575,15 +623,20 @@ export function EntityInspector({ id }: { id: string }) {
               onChange={(e) => {
                 const on = e.target.checked;
                 setActiveSelf(on);
-                mutate(on ? 'Activate' : 'Deactivate', () => getEngine()?.set_active(id, on));
+                mutate(on ? 'Activate' : 'Deactivate', () => ids.forEach((x) => getEngine()?.set_active(x, on)));
               }}
             />
             <input
               className="g-input g-gohead-name"
-              value={name}
+              value={mixedName && name === names[0] ? '' : name}
+              placeholder={mixedName ? '—' : ''}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-              onBlur={() => mutate('Rename', () => getEngine()?.rename(id, name))}
+              onBlur={() => {
+                // several objects: only a typed name renames them all
+                if (mixedName && (name === names[0] || !name)) return;
+                mutate('Rename', () => ids.forEach((x) => getEngine()?.rename(x, name)));
+              }}
             />
           </div>
           <div className="g-row g-gohead-tags">
@@ -594,7 +647,7 @@ export function EntityInspector({ id }: { id: string }) {
               onChange={(e) => {
                 const v = e.target.value;
                 setTag(v);
-                mutate('Change Tag', () => getEngine()?.set_tag(id, v || 'Untagged'));
+                mutate('Change Tag', () => ids.forEach((x) => getEngine()?.set_tag(x, v || 'Untagged')));
               }}
             >
               {[...new Set([...TAGS, ...projectTags, tag])].map((t) => (
@@ -606,7 +659,7 @@ export function EntityInspector({ id }: { id: string }) {
           </div>
         </div>
       </div>
-      {count > 1 && <div className="dim multi-note">{count} objects selected — editing the active one</div>}
+      {count > 1 && <div className="dim multi-note">{count} objects selected — edits apply to all, — = different values</div>}
       {kind === 'generated' && <div className="dim multi-note">Part of a prefab / model instance: changes are saved as overrides</div>}
       <div className="component">
         <div
@@ -626,12 +679,12 @@ export function EntityInspector({ id }: { id: string }) {
           <div key={f} className="vec">
             <span className="vec-label">{f === 'euler' ? 'Rotation' : f[0].toUpperCase() + f.slice(1)}</span>
             {['X', 'Y', 'Z'].map((axis, i) => (
-              <NumberField key={axis} label={axis} value={t[f][i]} onChange={(v) => set(f, i, v)} />
+              <NumberField key={axis} label={axis} value={t[f][i]} mixed={count > 1 && mixedAxis(f, i)} onChange={(v) => set(f, i, v)} />
             ))}
           </div>
         ))}
       </div>
-      <ComponentList id={id} />
+      <ComponentList id={id} ids={ids} />
     </div>
   );
 }
