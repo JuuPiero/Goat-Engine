@@ -52,11 +52,42 @@ impl EditorCore {
         v
     }
 
-    /// A project file changed: script answers are recomputed (new code, new fields).
-    pub fn file_changed(&mut self, key: &str) {
+    /// A `.shader` file as the Inspector shows it: `{ name, kind, properties, state, fallback,
+    /// customVertex, warnings, standard }`, or `{ errors: [{ line, message }] }`.
+    pub fn shader_info(&self, key: &str) -> Value {
+        let text = match self.io.read_string(key) {
+            Ok(t) => t,
+            Err(e) => return json!({ "errors": [{ "line": 0, "message": e.to_string() }] }),
+        };
+        match goat_shader::compile(&text) {
+            Ok(s) => {
+                let mut v = serde_json::to_value(&s).unwrap_or(Value::Null);
+                if let Some(o) = v.as_object_mut() {
+                    o.remove("wgsl");
+                    o.remove("params");
+                }
+                v
+            }
+            Err(errs) => json!({ "errors": errs }),
+        }
+    }
+
+    /// A project file changed: script answers are recomputed (new code, new fields); materials
+    /// and shaders of the edit world are updated in place.
+    pub fn file_changed(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) {
         if is_script(key) || key.ends_with(".asset.json") {
             self.scripts.cache.clear();
             self.scripts.host = None;
+        }
+        if key.ends_with(".mat.json") || key.ends_with(".shader") {
+            if let Some(mut assets) = self.edit.resources.take::<goat_assets::AssetServer>() {
+                if key.ends_with(".shader") {
+                    assets.reload_shader(gfx, key);
+                } else if let Err(e) = assets.reload_material(gfx, key) {
+                    goat_core::error!("{e}");
+                }
+                self.edit.resources.put_back(assets);
+            }
         }
     }
 }
@@ -82,7 +113,7 @@ mod tests {
         // edits are seen once the file changes
         io.put("scripts/Mover.js", b"import { Behaviour } from 'goat';\nexport default class Mover extends Behaviour { speed = 5; }\n".to_vec());
         assert_eq!(c.script_info(&mut gfx, "scripts/Mover.js")["fields"], json!({ "speed": 2, "target": null, "label": "go" }), "cached");
-        c.file_changed("scripts/Mover.js");
+        c.file_changed(&mut gfx, "scripts/Mover.js");
         assert_eq!(c.script_info(&mut gfx, "scripts/Mover.js")["fields"], json!({ "speed": 5 }));
     }
 }

@@ -3,7 +3,8 @@
 //!
 //! - One window surface; each engine [`Display`] is a rectangle of it ([`DisplayLayout`]): the
 //!   whole window normally, or the 3DS's two screens stacked (preview of a 3DS game on PC).
-//! - The standard material = `standard.wgsl` (per-pixel Lambert + Blinn-Phong, like the 3DS).
+//! - The standard material = goat-shader's WGSL prelude + `standard.wgsl` (per-pixel Lambert +
+//!   Blinn-Phong, like the 3DS); Goat shaders (`create_shader`) are the same prelude + their program.
 //! - Per frame: one uniform block per view (group 0) and per draw (group 1, dynamic offsets into
 //!   one buffer), a bind group per material (group 2: texture + sampler).
 //! - `request_screenshot` saves the next frame as PNG (tests, docs).
@@ -66,6 +67,13 @@ struct GpuMaterial {
     desc: MaterialDesc,
     bind_group: wgpu::BindGroup,
     texture: Option<TextureId>,
+    /// A custom shader's parameter block (materials without one bind a shared zero block).
+    params: Option<wgpu::Buffer>,
+}
+
+struct GpuShader {
+    module: wgpu::ShaderModule,
+    custom_vertex: bool,
 }
 
 #[repr(C)]
@@ -228,6 +236,8 @@ struct PipelineKey {
     depth_test: bool,
     /// The outline pass (back faces pushed out, flat color).
     outline: bool,
+    /// 0 = the standard material, else a custom shader's index + 1.
+    shader: u32,
 }
 
 pub struct WgpuBackend {
@@ -261,6 +271,10 @@ pub struct WgpuBackend {
     gpu_textures: HashMap<u32, GpuTexture>,
     materials: Pool<MaterialDesc>,
     gpu_materials: HashMap<u32, GpuMaterial>,
+    shaders: Pool<ShaderDesc>,
+    gpu_shaders: HashMap<u32, GpuShader>,
+    /// The parameter block of materials without a custom shader.
+    zero_params: wgpu::Buffer,
     white: GpuTexture,
     /// Stand-in reflection (materials without an env map).
     black_cube: GpuTexture,
@@ -327,7 +341,7 @@ impl WgpuBackend {
         surface.configure(&device, &config);
         let depth = make_depth(&device, config.width, config.height);
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("standard"), source: wgpu::ShaderSource::Wgsl(include_str!("standard.wgsl").into()) });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("standard"), source: wgpu::ShaderSource::Wgsl(standard_wgsl().into()) });
         let clear_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("clear"), source: wgpu::ShaderSource::Wgsl(include_str!("clear.wgsl").into()) });
         let uniform_entry = |vis| wgpu::BindGroupLayoutEntry {
             binding: 0,
@@ -336,26 +350,23 @@ impl WgpuBackend {
             count: None,
         };
         let vf = wgpu::ShaderStages::VERTEX_FRAGMENT;
+        let tex_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: vf,
+            ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+            count: None,
+        };
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("frame"), entries: &[uniform_entry(vf)] });
         let object_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("object"), entries: &[uniform_entry(vf)] });
         let clear_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("clear"), entries: &[uniform_entry(wgpu::ShaderStages::FRAGMENT)] });
         let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("material"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
-                // emissive map
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
-                    count: None,
-                },
+                // base texture (custom shaders: texture unit 0); vertex stages may sample (tex2Dlod)
+                tex_entry(0),
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: vf, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                // emissive map (custom shaders: unit 1)
+                tex_entry(2),
                 // reflection cube map + its sampler
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
@@ -364,6 +375,10 @@ impl WgpuBackend {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                // custom shaders: parameter block + texture units 2, 3
+                wgpu::BindGroupLayoutEntry { binding: 5, visibility: vf, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                tex_entry(6),
+                tex_entry(7),
             ],
         });
         // shadow map: depth from the light, sampled with comparisons (PCF)
@@ -462,6 +477,7 @@ impl WgpuBackend {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let zero_params = device.create_buffer(&wgpu::BufferDescriptor { label: Some("no shader params"), size: PARAMS_SIZE, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let white = upload_texture(&device, &queue, &TextureData::solid(Color::WHITE));
         let black_cube = upload_cubemap(&device, &queue, &std::array::from_fn(|_| TextureData::solid(Color::BLACK)));
         Ok(WgpuBackend {
@@ -495,6 +511,9 @@ impl WgpuBackend {
             gpu_textures: HashMap::new(),
             materials: Pool::new(),
             gpu_materials: HashMap::new(),
+            shaders: Pool::new(),
+            gpu_shaders: HashMap::new(),
+            zero_params,
             white,
             black_cube,
             cubes: Default::default(),
@@ -554,8 +573,14 @@ impl WgpuBackend {
     }
 
     fn pipeline_with(&mut self, m: &MaterialDesc, outline: bool) {
-        let key = PipelineKey { blend: m.blend as u8, cull: m.cull as u8, depth_write: m.depth_write, depth_test: m.depth_test, outline };
-        let (device, layout, shader, format) = (&self.device, &self.pipeline_layout, &self.shader, self.config.format);
+        let custom = if outline { None } else { m.shader.and_then(|s| self.gpu_shaders.get(&s.index()).map(|g| (s, g))) };
+        let key = PipelineKey { blend: m.blend as u8, cull: m.cull as u8, depth_write: m.depth_write, depth_test: m.depth_test, outline, shader: custom.map(|(s, _)| s.index() + 1).unwrap_or(0) };
+        let (device, layout, format) = (&self.device, &self.pipeline_layout, self.config.format);
+        let (shader, vs, fs) = match custom {
+            Some((_, g)) => (&g.module, if g.custom_vertex { "vs_custom" } else { "vs_main" }, "fs_custom"),
+            None if outline => (&self.shader, "vs_outline", "fs_outline"),
+            None => (&self.shader, "vs_main", "fs_main"),
+        };
         let _ = self.pipelines.entry(key).or_insert_with(|| {
             let blend = match m.blend {
                 _ if outline => None,
@@ -572,13 +597,13 @@ impl WgpuBackend {
                 layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: shader,
-                    entry_point: Some(if outline { "vs_outline" } else { "vs_main" }),
+                    entry_point: Some(vs),
                     compilation_options: Default::default(),
                     buffers: &[wgpu::VertexBufferLayout { array_stride: Vertex::SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attrs }],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
-                    entry_point: Some(if outline { "fs_outline" } else { "fs_main" }),
+                    entry_point: Some(fs),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
                 }),
@@ -607,12 +632,30 @@ impl WgpuBackend {
         });
     }
 
-    fn material_bind_group(&self, m: &MaterialDesc) -> wgpu::BindGroup {
+    /// A custom shader's parameters as uploaded (colors converted like `base_color`).
+    fn params_bytes(&self, m: &MaterialDesc) -> Vec<u8> {
+        let lin = self.config.format.is_srgb();
+        let p: Vec<[f32; 4]> = m.shader_params.iter().enumerate().map(|(i, v)| if m.shader_color_slots & (1 << i) != 0 { c4(Color::rgba(v[0], v[1], v[2], v[3]), lin) } else { *v }).collect();
+        bytemuck::cast_slice(&p).to_vec()
+    }
+
+    fn material_bind_group(&self, m: &MaterialDesc) -> (wgpu::BindGroup, Option<wgpu::Buffer>) {
         let get = |id: Option<TextureId>, cube: bool| id.filter(|t| self.cubes.contains(&t.index()) == cube).and_then(|t| self.gpu_textures.get(&t.index()));
-        let t = get(m.texture, false).unwrap_or(&self.white);
-        let e = get(m.emissive_texture, false).unwrap_or(&self.white);
+        let custom = m.shader.is_some_and(|s| self.gpu_shaders.contains_key(&s.index()));
+        // custom shaders: units 0..4 from shader_textures; standard: base + emissive
+        let (t, e, t2, t3) = if custom {
+            let u = |i: usize| get(m.shader_textures[i], false).unwrap_or(&self.white);
+            (u(0), u(1), u(2), u(3))
+        } else {
+            (get(m.texture, false).unwrap_or(&self.white), get(m.emissive_texture, false).unwrap_or(&self.white), &self.white, &self.white)
+        };
         let c = get(m.env_map, true).unwrap_or(&self.black_cube);
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let params = custom.then(|| {
+            let b = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("shader params"), size: PARAMS_SIZE, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            self.queue.write_buffer(&b, 0, &self.params_bytes(m));
+            b
+        });
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material"),
             layout: &self.material_layout,
             entries: &[
@@ -621,8 +664,12 @@ impl WgpuBackend {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&e.view) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&c.view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&c.sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: params.as_ref().unwrap_or(&self.zero_params).as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&t2.view) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&t3.view) },
             ],
-        })
+        });
+        (group, params)
     }
 
     #[cfg(feature = "screenshot")]
@@ -855,10 +902,26 @@ impl GraphicsBackend for WgpuBackend {
         Ok(id)
     }
 
+    fn create_shader(&mut self, desc: &ShaderDesc) -> Result<ShaderId, GfxError> {
+        // checked first: an invalid module would be a device error (a panic on native)
+        goat_shader::validate_wgsl(&desc.wgsl).map_err(|e| GfxError::Backend(format!("{}: {e}", desc.name)))?;
+        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(&desc.name), source: wgpu::ShaderSource::Wgsl(desc.wgsl.as_str().into()) });
+        let id = self.shaders.insert(desc.clone());
+        self.gpu_shaders.insert(id.index(), GpuShader { module, custom_vertex: desc.custom_vertex });
+        Ok(id)
+    }
+
+    fn destroy_shader(&mut self, id: ShaderId) {
+        if self.shaders.remove(id).is_some() {
+            self.gpu_shaders.remove(&id.index());
+            self.pipelines.retain(|k, _| k.shader != id.index() + 1);
+        }
+    }
+
     fn create_material(&mut self, mat: &MaterialDesc) -> Result<MaterialId, GfxError> {
-        let bind_group = self.material_bind_group(mat);
+        let (bind_group, params) = self.material_bind_group(mat);
         let id = self.materials.insert(mat.clone());
-        self.gpu_materials.insert(id.index(), GpuMaterial { desc: mat.clone(), bind_group, texture: mat.texture });
+        self.gpu_materials.insert(id.index(), GpuMaterial { desc: mat.clone(), bind_group, texture: mat.texture, params });
         Ok(id)
     }
 
@@ -870,13 +933,23 @@ impl GraphicsBackend for WgpuBackend {
         if self.materials.get(id).is_none() {
             return;
         }
-        let rebind = self.gpu_materials.get(&id.index()).map(|g| g.texture != mat.texture || g.desc.emissive_texture != mat.emissive_texture || g.desc.env_map != mat.env_map).unwrap_or(true);
+        let rebind = self.gpu_materials.get(&id.index()).map(|g| g.texture != mat.texture || g.desc.emissive_texture != mat.emissive_texture || g.desc.env_map != mat.env_map || g.desc.shader != mat.shader || g.desc.shader_textures != mat.shader_textures).unwrap_or(true);
         let bind_group = if rebind { Some(self.material_bind_group(mat)) } else { None };
+        let bytes = self.params_bytes(mat);
         if let Some(g) = self.gpu_materials.get_mut(&id.index()) {
             g.desc = mat.clone();
             g.texture = mat.texture;
-            if let Some(b) = bind_group {
-                g.bind_group = b;
+            match bind_group {
+                Some((b, p)) => {
+                    g.bind_group = b;
+                    g.params = p;
+                }
+                // same textures: only the parameter values changed
+                None => {
+                    if let Some(p) = &g.params {
+                        self.queue.write_buffer(p, 0, &bytes);
+                    }
+                }
             }
         }
     }
@@ -986,7 +1059,7 @@ impl GraphicsBackend for WgpuBackend {
                 ambient: c4(v.lighting.ambient, lin),
                 ambient_ground: v.lighting.ambient_ground.map(|g| { let c = c4(g, lin); [c[0], c[1], c[2], 1.0] }).unwrap_or([0.0; 4]),
                 fog_color: fog.map(|f| { let c = c4(f.color, lin); [c[0], c[1], c[2], 1.0] }).unwrap_or([0.0; 4]),
-                fog_range: fog.map(|f| [f.start, f.end.max(f.start + 1e-3), 0.0, 0.0]).unwrap_or([0.0; 4]),
+                fog_range: fog.map(|f| [f.start, f.end.max(f.start + 1e-3), v.time, 0.0]).unwrap_or([0.0, 0.0, v.time, 0.0]),
                 lights,
                 light_view_proj: light_vp.unwrap_or(Mat4::IDENTITY).to_cols_array_2d(),
                 shadow: match (light_vp, v.lighting.shadow) {
@@ -1137,7 +1210,8 @@ impl GraphicsBackend for WgpuBackend {
                     if gm.index_count == 0 {
                         continue;
                     }
-                    let key = PipelineKey { blend: mat.desc.blend as u8, cull: mat.desc.cull as u8, depth_write: mat.desc.depth_write, depth_test: mat.desc.depth_test, outline: false };
+                    let shader = mat.desc.shader.filter(|s| self.gpu_shaders.contains_key(&s.index())).map(|s| s.index() + 1).unwrap_or(0);
+                    let key = PipelineKey { blend: mat.desc.blend as u8, cull: mat.desc.cull as u8, depth_write: mat.desc.depth_write, depth_test: mat.desc.depth_test, outline: false, shader };
                     let Some(pipe) = self.pipelines.get(&key) else { continue };
                     pass.set_pipeline(pipe);
                     pass.set_bind_group(1, &object_bg, &[off]);
@@ -1149,7 +1223,7 @@ impl GraphicsBackend for WgpuBackend {
                     stats.draw_calls += 1;
                     stats.triangles += gm.index_count / 3;
                     if mat.desc.outline_width > 0.0 {
-                        if let Some(p) = self.pipelines.get(&PipelineKey { outline: true, ..key }) {
+                        if let Some(p) = self.pipelines.get(&PipelineKey { outline: true, shader: 0, ..key }) {
                             pass.set_pipeline(p);
                             pass.draw_indexed(0..gm.index_count, 0, 0..1);
                             stats.draw_calls += 1;
@@ -1214,5 +1288,21 @@ impl GraphicsBackend for WgpuBackend {
         frame.present();
         let _ = (&self.clear_shader,);
         stats
+    }
+}
+
+/// Size of a custom shader's parameter block (`goat_params`: 16 vec4).
+const PARAMS_SIZE: u64 = (SHADER_PARAMS * 16) as u64;
+
+/// The standard material's module: goat-shader's prelude + standard.wgsl.
+pub fn standard_wgsl() -> String {
+    format!("{}\n{}", goat_shader::WGSL_PRELUDE, include_str!("standard.wgsl"))
+}
+
+#[cfg(test)]
+mod standard_module_tests {
+    #[test]
+    fn standard_module_is_valid_wgsl() {
+        goat_shader::validate_wgsl(&super::standard_wgsl()).unwrap_or_else(|e| panic!("{e}"));
     }
 }

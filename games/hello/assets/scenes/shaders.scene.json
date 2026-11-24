@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "entities": [
+    { "id": 1, "name": "Render Settings", "components": { "RenderSettings": { "ambient": "#3a4055", "fog": { "color": "#161a24", "start": 14, "end": 32 } } } },
+    { "id": 2, "name": "Sun", "components": { "Transform": { "euler": [-45, 30, 0] }, "DirectionalLight": { "color": "#fff4e0", "intensity": 0.9 } } },
+    { "id": 3, "name": "Main Camera", "components": {
+        "Transform": { "position": [0, 2.2, 6.5], "euler": [-12, 0, 0] },
+        "Camera": { "projection": { "perspective": { "fov": 55, "near": 0.1, "far": 100 } }, "clear": "#161a24" } } },
+    { "id": 4, "name": "Ground", "components": {
+        "Transform": { "scale": [2, 1, 2] },
+        "MeshRenderer": { "mesh": "builtin:plane", "material": "materials/ground.mat.json" } } },
+    { "id": 5, "name": "Hologram", "components": {
+        "Transform": { "position": [-2.4, 1.2, 0], "euler": [0, 25, 0], "scale": [1.4, 1.4, 1.4] },
+        "MeshRenderer": { "mesh": "builtin:cube", "material": "materials/hologram.mat.json" } } },
+    { "id": 6, "name": "Dissolve", "components": {
+        "Transform": { "position": [0, 1.1, 0], "scale": [1.8, 1.8, 1.8] },
+        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/dissolve.mat.json" } } },
+    { "id": 7, "name": "Wobble", "components": {
+        "Transform": { "position": [2.4, 1.1, 0], "scale": [1.6, 1.6, 1.6] },
+        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/wobble.mat.json" } } }
+  ]
+}

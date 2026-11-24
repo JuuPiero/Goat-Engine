@@ -63,8 +63,12 @@ impl EditorEngine {
 
     /// Makes a project file available to the engine (the UI reads files through Tauri).
     pub fn put_file(&mut self, key: &str, bytes: Vec<u8>) {
+        // the UI re-sends every file (syncFiles): only real changes reload things
+        let same = self.core.io.read(key).is_ok_and(|old| old == bytes);
         self.core.io.put(key, bytes);
-        self.core.file_changed(key);
+        if !same {
+            self.core.file_changed(&mut self.gfx, key);
+        }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -219,6 +223,12 @@ impl EditorEngine {
     pub fn instantiate(&mut self, key: &str, x: f32, y: f32) -> Result<String, JsValue> {
         let at = self.core.ground_point(x, y);
         self.core.instantiate(&mut self.gfx, key, at).map(id_of).map_err(|e| JsValue::from_str(&e))
+    }
+
+    // ------------------------------------------------------------ shaders
+    /// `{ name, kind, properties, state, … }` or `{ errors }` of a `.shader` file.
+    pub fn shader_info(&self, key: &str) -> String {
+        self.core.shader_info(key).to_string()
     }
 
     // ------------------------------------------------------------ scripts

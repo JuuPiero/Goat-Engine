@@ -172,6 +172,10 @@ export class EditorEngine {
     set_tool_handles(local: boolean, center: boolean, snap_move: number, snap_rotate: number, snap_scale: number): void;
     set_transform(id: string, json: string): void;
     /**
+     * `{ name, kind, properties, state, … }` or `{ errors }` of a `.shader` file.
+     */
+    shader_info(key: string): string;
+    /**
      * Draw calls / triangles of the last frame.
      */
     stats(): string;
@@ -266,6 +270,7 @@ export interface InitOutput {
     readonly editorengine_set_tag: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_set_tool_handles: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly editorengine_set_transform: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly editorengine_shader_info: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_stats: (a: number) => [number, number];
     readonly editorengine_step: (a: number) => void;
     readonly editorengine_stop: (a: number) => void;

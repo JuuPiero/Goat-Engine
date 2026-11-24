@@ -178,6 +178,28 @@ export function AssetPanel() {
           : `using GoatEngine;\n\n/// <summary>A data asset: Project ▸ Create ▸ ScriptableObject ▸ ${cls}.</summary>\npublic class ${cls} : ScriptableObject\n{\n    public int value = 1;\n    public string label = "";\n}\n`;
     await writeNew(key, text);
   };
+  /// Create ▸ Material: with a shader selected, a material of that shader (Unity).
+  const createMaterial = async () => {
+    const shader = selection.find((k) => k.endsWith('.shader'));
+    if (!shader) return void createAsset('material');
+    const key = await freeName(nameOf(shader).replace(/\.shader$/, ''), '.mat.json');
+    const from = key.split('/').slice(0, -1);
+    const to = shader.split('/');
+    let i = 0;
+    while (i < from.length && i < to.length - 1 && from[i] === to[i]) i++;
+    const rel = [...Array(from.length - i).fill('..'), ...to.slice(i)].join('/');
+    await writeNew(key, JSON.stringify({ shader: rel, properties: {} }, null, 2) + '\n');
+  };
+  /// Create ▸ Shader: Unity's templates (HLSL in ShaderLab; see the Goat Shader docs).
+  const createShader = async (kind: 'surface' | 'unlit') => {
+    const key = await freeName(kind === 'surface' ? 'NewSurfaceShader' : 'NewUnlitShader', '.shader');
+    const name = nameOf(key).replace(/\.shader$/, '');
+    const text =
+      kind === 'surface'
+        ? `Shader "Custom/${name}"\n{\n    Properties\n    {\n        _Color ("Color", Color) = (1, 1, 1, 1)\n        _MainTex ("Albedo (RGB)", 2D) = "white" {}\n        _Glossiness ("Smoothness", Range(0, 1)) = 0.5\n        _Metallic ("Metallic", Range(0, 1)) = 0.0\n    }\n    SubShader\n    {\n        Tags { "RenderType" = "Opaque" }\n\n        CGPROGRAM\n        #pragma surface surf Standard\n\n        sampler2D _MainTex;\n        fixed4 _Color;\n        half _Glossiness;\n        half _Metallic;\n\n        struct Input\n        {\n            float2 uv_MainTex;\n        };\n\n        void surf (Input IN, inout SurfaceOutputStandard o)\n        {\n            fixed4 c = tex2D(_MainTex, IN.uv_MainTex) * _Color;\n            o.Albedo = c.rgb;\n            o.Metallic = _Metallic;\n            o.Smoothness = _Glossiness;\n            o.Alpha = c.a;\n        }\n        ENDCG\n    }\n    Fallback "Diffuse"\n}\n`
+        : `Shader "Unlit/${name}"\n{\n    Properties\n    {\n        _MainTex ("Texture", 2D) = "white" {}\n    }\n    SubShader\n    {\n        Tags { "RenderType" = "Opaque" }\n\n        Pass\n        {\n            CGPROGRAM\n            #pragma vertex vert\n            #pragma fragment frag\n            #include "UnityCG.cginc"\n\n            struct appdata\n            {\n                float4 vertex : POSITION;\n                float2 uv : TEXCOORD0;\n            };\n\n            struct v2f\n            {\n                float2 uv : TEXCOORD0;\n                float4 vertex : SV_POSITION;\n            };\n\n            sampler2D _MainTex;\n            float4 _MainTex_ST;\n\n            v2f vert (appdata v)\n            {\n                v2f o;\n                o.vertex = UnityObjectToClipPos(v.vertex);\n                o.uv = TRANSFORM_TEX(v.uv, _MainTex);\n                return o;\n            }\n\n            fixed4 frag (v2f i) : SV_Target\n            {\n                fixed4 col = tex2D(_MainTex, i.uv);\n                return col;\n            }\n            ENDCG\n        }\n    }\n    Fallback "Goat/Unlit"\n}\n`;
+    await writeNew(key, text);
+  };
   /// Create ▸ ScriptableObject ▸ <type>: an asset of that script (Unity's CreateAssetMenu).
   const createScriptable = async (script: string) => {
     const key = await freeName(`New ${nameOf(script).replace(/\.(ts|js|mjs|cs)$/i, '')}`, '.asset.json');
@@ -312,7 +334,14 @@ export function AssetPanel() {
     '-',
     { label: 'Scene', action: () => void createAsset('scene') },
     { label: 'Prefab', action: () => void createAsset('prefab') },
-    { label: 'Material', action: () => void createAsset('material') },
+    { label: 'Material', action: () => void createMaterial() },
+    {
+      label: 'Shader',
+      children: [
+        { label: 'Standard Surface Shader', action: () => void createShader('surface') },
+        { label: 'Unlit Shader', action: () => void createShader('unlit') },
+      ],
+    },
     { label: 'Animator Controller', action: () => void createAsset('controller') },
     '-',
     {

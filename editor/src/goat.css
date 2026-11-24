@@ -89,3 +89,10 @@
 .component > div:not([class]) > .field, .component > div:not([class]) > .vec, .component > div:not([class]) > .nested, .component > .mixed-field > * { margin: 0 6px 0 18px; }
 .mixed-field .field-name::after { content: ' —'; color: var(--text-dim); }
 
+/* material / shader inspectors */
+.shader-problem { margin: 2px 6px 2px 18px; padding: 3px 6px; border-radius: 3px; font-size: 11px; white-space: pre-wrap; }
+.shader-problem.error { background: #4a2222; color: #ffb4a8; }
+.shader-problem.warn { background: #463d1e; color: #f2d488; }
+.mat-header { margin: 8px 6px 2px 18px; font-weight: 600; color: var(--text-bright); }
+.mat-space { height: 8px; }
+.shader-props-title { margin: 8px 6px 2px 18px; font-weight: 600; }

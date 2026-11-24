@@ -24,6 +24,7 @@ goat-physics.workspace = true
 goat-audio.workspace = true
 goat-script.workspace = true
 goat-script-js.workspace = true
+goat-shader.workspace = true
 hecs.workspace = true
 serde.workspace = true
 serde_json.workspace = true

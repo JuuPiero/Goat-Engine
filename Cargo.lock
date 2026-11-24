@@ -2239,6 +2239,7 @@ dependencies = [
  "goat-core",
  "goat-gfx",
  "goat-runtime",
+ "goat-shader",
  "png 0.17.16",
  "serde",
  "serde_json",
@@ -2304,6 +2305,7 @@ dependencies = [
  "goat-scene",
  "goat-script",
  "goat-script-js",
+ "goat-shader",
  "hecs",
  "hello-game",
  "serde",
@@ -2339,6 +2341,7 @@ dependencies = [
  "bytemuck",
  "goat-core",
  "goat-gfx",
+ "goat-shader",
  "png 0.17.16",
  "pollster",
  "wgpu",
@@ -2553,6 +2556,15 @@ dependencies = [
  "goat-runtime",
  "goat-scene",
  "goat-script",
+ "serde_json",
+]
+
+[[package]]
+name = "goat-shader"
+version = "0.1.0"
+dependencies = [
+ "naga",
+ "serde",
  "serde_json",
 ]
 

@@ -1,0 +1,1 @@
+{ "shader": "../shaders/Wobble.shader", "properties": { "_MainTex": "../textures/logo.png", "_Amplitude": 0.1 } }

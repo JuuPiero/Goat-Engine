@@ -98,6 +98,13 @@ pub struct MaterialFile {
     /// `{ "kind": "water" | "fire" | "noise", "color_a": "#...", "color_b": "#...", "scale": 4, "speed": 1 }`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub procedural: Option<goat_gfx::Procedural>,
+    /// A Goat shader (`.shader`, relative like textures): the material's look comes from it and
+    /// `properties` (Unity's material properties: numbers, [x, y, z, w], "#rrggbb(aa)" colors,
+    /// texture paths; `<Texture>_ST` = [tiling x, y, offset x, y]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shader: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl MaterialFile {
@@ -137,6 +144,7 @@ impl MaterialFile {
             depth_write: self.depth_write.unwrap_or(blend == BlendMode::Opaque),
             fog: self.fog.unwrap_or(true),
             depth_test: true,
+            ..d
         }
     }
 }

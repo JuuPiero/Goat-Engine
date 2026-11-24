@@ -5,6 +5,7 @@ exclude = ["third_party"]
 members = [
     "crates/goat-core",
     "crates/goat-gfx",
+    "crates/goat-shader",
     "crates/goat-runtime",
     "crates/goat-gfx-wgpu",
     "crates/goat-gfx-citro3d",
@@ -40,6 +41,7 @@ members = [
 default-members = [
     "crates/goat-core",
     "crates/goat-gfx",
+    "crates/goat-shader",
     "crates/goat-runtime",
     "crates/goat-gfx-wgpu",
     "crates/goat-sprites",
@@ -76,6 +78,7 @@ license = "MIT"
 [workspace.dependencies]
 goat-core = { path = "crates/goat-core" }
 goat-gfx = { path = "crates/goat-gfx" }
+goat-shader = { path = "crates/goat-shader" }
 goat-runtime = { path = "crates/goat-runtime" }
 goat-gfx-wgpu = { path = "crates/goat-gfx-wgpu" }
 goat-gfx-citro3d = { path = "crates/goat-gfx-citro3d" }

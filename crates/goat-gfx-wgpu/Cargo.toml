@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 goat-core.workspace = true
 goat-gfx.workspace = true
+goat-shader = { workspace = true, features = ["validate"] }
 bytemuck.workspace = true
 wgpu = "25"
 png = { version = "0.17", optional = true }

@@ -280,6 +280,40 @@ Thêm vào đó:
 - `StaticBatching { bake_lighting }`: gộp vật tĩnh và nướng ánh sáng vào vertex.
 - `LodGroup`: tự chọn mesh theo kích thước vật trên màn hình.
 
+### Shader (Goat Shader: ShaderLab + HLSL)
+
+Shader tự viết là file `.shader` theo cú pháp của Unity: phần **ShaderLab** (`Properties`, `Tags`, `Blend` / `Cull` / `ZWrite` / `ZTest` / `Fog`, `Fallback`) bao quanh một chương trình **HLSL** (`HLSLPROGRAM … ENDHLSL` hoặc `CGPROGRAM … ENDCG`). Crate `goat-shader` (Rust thuần, chạy cả trong editor WebAssembly) đọc, kiểm tra kiểu rồi **dịch cho từng nền tảng**:
+
+- **Desktop / web (wgpu)** → WGSL, dùng chung ánh sáng, bóng đổ, fog với material chuẩn; được kiểm tra bằng naga trước khi đưa lên GPU.
+- **3DS (PICA200)**: GPU không có fragment shader lập trình được → dùng `Fallback`: material chuẩn với các property tương ứng (`_Color` / `_BaseColor` → màu, `_MainTex` → texture, `_EmissionColor`, `_Cutoff`). Bước tiếp theo: dịch hàm fragment đơn giản thành chuỗi texture combiner (TEV).
+
+Hai loại chương trình như built-in pipeline của Unity:
+
+```hlsl
+#pragma surface surf Lambert          // có chiếu sáng: Lambert | BlinnPhong | Standard | Toon | Unlit
+sampler2D _MainTex; fixed4 _Color;
+struct Input { float2 uv_MainTex; float3 worldPos; };
+void surf (Input IN, inout SurfaceOutput o) {
+    fixed4 c = tex2D(_MainTex, IN.uv_MainTex) * _Color;
+    o.Albedo = c.rgb; o.Alpha = c.a;
+}
+```
+
+```hlsl
+#pragma vertex vert                    // tùy chọn (desktop / web)
+#pragma fragment frag                  // unlit: trả về màu
+struct v2f { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; float3 worldPos : TEXCOORD1; };
+fixed4 frag (v2f i) : SV_Target { return tex2D(_MainTex, i.uv) * _Time.y; }
+```
+
+- HLSL hỗ trợ: `float/half/fixed/int/uint/bool` 1–4, `floatNxM`, struct, hàm (kể cả `out` / `inout`), `if` / `for` / `while` / `do`, `?:`, swizzle (kể cả gán `c.rgb = …`), ép kiểu, `#define`, `static const`; hàm `tex2D` / `tex2Dlod` / `tex2Dbias` / `tex2Dgrad`, `lerp`, `saturate`, `frac`, `mul`, `clip`, `step`, `smoothstep`, `pow`, `dot`, `cross`, `normalize`, `reflect`, `ddx` / `ddy`… và của Unity: `_Time`, `_SinTime`, `_CosTime`, `_WorldSpaceCameraPos`, `_LightColor0`, `_WorldSpaceLightPos0`, `unity_ObjectToWorld`, `UNITY_MATRIX_VP`, `UnityObjectToClipPos`, `UnityObjectToWorldNormal`, `TRANSFORM_TEX`, `UnpackNormal`, `Luminance`, `UNITY_INITIALIZE_OUTPUT`. `#include "UnityCG.cginc"` được bỏ qua.
+- `Input` của surface shader: `uv_<Texture>` (đã nhân Tiling / Offset), `uv`, `color`, `worldPos`, `worldNormal`, `viewDir`. Tùy chọn `#pragma surface`: `alpha`, `alphatest:_Cutoff`, `decal:add`, `nofog`.
+- Property: `Color` (`[HDR]`), `Vector`, `Float`, `Range(a, b)`, `Int`, `2D` (`"white"` / `"black"` / `"gray"` / `"bump"` / `"red"`), thuộc tính `[Toggle]`, `[Enum(…)]`, `[KeywordEnum(…)]`, `[IntRange]`, `[NoScaleOffset]`, `[HideInInspector]`, `[Header(…)]`, `[Space]`. Tối đa 16 slot tham số (mỗi Color / Vector / Float và Tiling / Offset của mỗi texture) và 4 texture.
+- Material dùng shader: `{ "shader": "../shaders/Dissolve.shader", "properties": { "_MainTex": "../textures/photo.jpg", "_Color": "#ffffff", "_EdgeColor": [2.5, 0.7, 0.1, 1], "_MainTex_ST": [2, 2, 0, 0] } }`. Shader bị lỗi vẽ màu hồng (như Unity), lỗi kèm số dòng hiện ở Console và Inspector.
+- Editor: Project ▸ Create ▸ **Shader** ▸ Standard Surface Shader / Unlit Shader (mẫu của Unity); Create ▸ Material khi đang chọn một shader = material của shader đó. Inspector của material: chọn Shader rồi sửa property theo kiểu (màu, slider, toggle, enum, texture + Tiling / Offset); Scene view cập nhật ngay khi sửa material hoặc file shader. Inspector của `.shader`: loại, render state, Fallback trên 3DS, property, lỗi.
+- Chưa có: keyword (`multi_compile` / `shader_feature`), nhiều Pass, `#if`, Stencil / GrabPass, tangent (normal map theo tangent space), bóng đổ theo `clip`.
+- Ví dụ: `games/hello/assets/shaders` (Hologram, Dissolve, Wobble), scene `scenes/shaders.scene.json` (`goat-hello --scene scenes/shaders.scene.json`).
+
 ## Text, physics, audio
 
 Chữ có thể có viền (`.with_outline(màu, 0.06)`), bóng (`.with_shadow(màu, [0.05, 0.05])`) và rich text (`.rich()`: `<color=#ff8800>`, `<size=1.5>`, `<b>`, `<i>`). Trong scene, các key tương ứng là `rich` / `outline` / `shadow` của `Text` và `UiText`.

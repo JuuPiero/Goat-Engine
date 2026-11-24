@@ -62,6 +62,7 @@ export const editorengine_set_scene_view: (a: number, b: number) => void;
 export const editorengine_set_tag: (a: number, b: number, c: number, d: number, e: number) => void;
 export const editorengine_set_tool_handles: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const editorengine_set_transform: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+export const editorengine_shader_info: (a: number, b: number, c: number) => [number, number];
 export const editorengine_stats: (a: number) => [number, number];
 export const editorengine_step: (a: number) => void;
 export const editorengine_stop: (a: number) => void;

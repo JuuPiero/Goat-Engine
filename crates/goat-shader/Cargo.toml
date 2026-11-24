@@ -1,0 +1,18 @@
+[package]
+name = "goat-shader"
+description = "Goat Shader: Unity-style .shader files (ShaderLab + an HLSL subset) compiled for every backend — WGSL for wgpu (desktop / web), the PICA200 texture combiners for the 3DS (or the shader's Fallback). Pure Rust: runs in the editor (WebAssembly), the players and `goat build`."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# validate_wgsl(): the generated WGSL checked by naga (the wgpu backend, the editor)
+validate = ["dep:naga"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+naga = { version = "25", features = ["wgsl-in"], optional = true }
+
+[dev-dependencies]
+naga = { version = "25", features = ["wgsl-in"] }

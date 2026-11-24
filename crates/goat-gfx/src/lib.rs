@@ -204,6 +204,14 @@ pub struct MaterialDesc {
     pub fog: bool,
     /// Tested against the depth buffer (false: drawn over everything — editor gizmos).
     pub depth_test: bool,
+    /// A custom shader (desktop / web); backends without one draw the fields above (the
+    /// shader's standard mapping).
+    pub shader: Option<ShaderId>,
+    /// The shader's parameters (colors, vectors, floats, texture tiling).
+    pub shader_params: [[f32; 4]; SHADER_PARAMS],
+    /// Bit `i` set: slot `i` is a color (sRGB-authored, converted like `base_color`).
+    pub shader_color_slots: u16,
+    pub shader_textures: [Option<TextureId>; SHADER_TEXTURES],
 }
 
 impl Default for MaterialDesc {
@@ -231,6 +239,10 @@ impl Default for MaterialDesc {
             depth_write: true,
             fog: true,
             depth_test: true,
+            shader: None,
+            shader_params: [[0.0; 4]; SHADER_PARAMS],
+            shader_color_slots: 0,
+            shader_textures: [None; SHADER_TEXTURES],
         }
     }
 }
@@ -270,6 +282,21 @@ impl Default for Procedural {
 pub type MeshId = Handle<MeshData>;
 pub type TextureId = Handle<TextureData>;
 pub type MaterialId = Handle<MaterialDesc>;
+pub type ShaderId = Handle<ShaderDesc>;
+
+/// A compiled Goat shader for a backend that runs custom programs (goat-shader: the WGSL
+/// module defines `fs_custom` and, with `custom_vertex`, `vs_custom`).
+#[derive(Clone, Debug)]
+pub struct ShaderDesc {
+    pub name: String,
+    /// The complete WGSL module (goat-shader's prelude + the program).
+    pub wgsl: String,
+    pub custom_vertex: bool,
+}
+
+/// Parameter slots of a custom shader (`goat_params.v`) and its texture units.
+pub const SHADER_PARAMS: usize = 16;
+pub const SHADER_TEXTURES: usize = 4;
 
 // ---------------------------------------------------------------------------------------------
 // displays and views
@@ -556,6 +583,12 @@ pub trait GraphicsBackend {
     fn create_cubemap(&mut self, _faces: &[TextureData; 6]) -> Result<TextureId, GfxError> {
         Err(GfxError::Unsupported("cube maps".into()))
     }
+    /// A custom shader program (backends without programmable fragments return Unsupported:
+    /// materials then draw their standard fields).
+    fn create_shader(&mut self, _desc: &ShaderDesc) -> Result<ShaderId, GfxError> {
+        Err(GfxError::Unsupported("custom shaders".into()))
+    }
+    fn destroy_shader(&mut self, _id: ShaderId) {}
     fn create_material(&mut self, mat: &MaterialDesc) -> Result<MaterialId, GfxError>;
     fn update_material(&mut self, id: MaterialId, mat: &MaterialDesc);
     /// A material's description (baking, tools). Backends keep it for drawing anyway.

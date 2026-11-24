@@ -1,0 +1,1 @@
+{ "shader": "../shaders/Hologram.shader", "properties": { "_MainTex": "../textures/logo.png", "_LineDensity": 10 } }

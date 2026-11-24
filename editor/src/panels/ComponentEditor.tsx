@@ -13,7 +13,7 @@ import { registerFieldDrop } from '../dnd';
 import { log, setState, useStore } from '../store';
 import { openContextMenu, openMenuBelow, type MenuItem } from '../ui/Menu';
 
-type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
+export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
 interface FieldHint {
   kind?: 'enum' | 'variant' | 'asset' | 'color' | 'entity' | 'mask' | 'layer' | 'hidden';
@@ -48,7 +48,7 @@ export function componentInfo(): InfoSet {
 
 const isHexColor = (s: string) => /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(s);
 /// `max_speed` / `maxSpeed` → "Max speed" / "Max Speed" (Unity's nicified names)
-const nice = (k: string) => k.replace(/_/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/^\w/, (c) => c.toUpperCase());
+const nice = (k: string) => k.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^\w/, (c) => c.toUpperCase());
 /// "Mesh/Mesh Renderer" → "Mesh Renderer"; components without metadata keep their name.
 export const displayName = (name: string) => componentInfo().components[name]?.menu.split('/').pop() || name;
 
@@ -89,7 +89,7 @@ export function NumberField({ label, value, onChange, integer, mixed }: { label:
   );
 }
 
-function TextField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+export function TextField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [text, setText] = useState(value);
   useEffect(() => setText(value), [value]);
   return (
@@ -101,7 +101,7 @@ function TextField({ value, onChange }: { value: string; onChange: (v: string) =
 }
 
 /// A color from a `[r, g, b, a?]` array (0..1) or a `#rrggbb[aa]` string: picker + alpha.
-function ColorField({ value, onChange }: { value: Json; onChange: (v: Json) => void }) {
+export function ColorField({ value, onChange }: { value: Json; onChange: (v: Json) => void }) {
   const arr = Array.isArray(value);
   const rgba: number[] = arr ? (value as number[]) : hexToRgba(value as string);
   const hex = '#' + rgba.slice(0, 3).map((c) => Math.round(Math.min(1, Math.max(0, c)) * 255).toString(16).padStart(2, '0')).join('');
@@ -138,6 +138,7 @@ const ASSET_EXT: Record<string, RegExp> = {
   controller: /\.controller\.json$/i,
   scene: /\.scene\.json$/i,
   scriptableObject: /\.asset\.json$/i,
+  shader: /\.shader$/i,
 };
 const KIND_LABEL: Record<string, string> = { scriptableObject: 'ScriptableObject', script: 'Script', controller: 'Animator Controller' };
 const BUILTINS: Record<string, string[]> = {
@@ -147,7 +148,7 @@ const BUILTINS: Record<string, string[]> = {
 };
 
 /// An asset reference: drop an asset from the Project panel, or pick one (⊙).
-function AssetField({ value, kind, onChange }: { value: string | null; kind: string; onChange: (v: string | null) => void }) {
+export function AssetField({ value, kind, onChange }: { value: string | null; kind: string; onChange: (v: string | null) => void }) {
   const [dropId, setDropId] = useState('');
   const drop = useStore((s) => s.dropTarget);
   const latest = useRef(onChange);
@@ -175,7 +176,7 @@ function AssetField({ value, kind, onChange }: { value: string | null; kind: str
   );
 }
 
-function Row({ name, tip, children }: { name: string; tip?: string; children: React.ReactNode }) {
+export function Row({ name, tip, children }: { name: string; tip?: string; children: React.ReactNode }) {
   return (
     <div className="field">
       <span className="field-name" title={tip ?? name}>

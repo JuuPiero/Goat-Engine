@@ -85,6 +85,8 @@ pub fn kind_of(name: &str, is_dir: bool) -> &'static str {
         "controller"
     } else if ends(".inputactions.json") {
         "input"
+    } else if ends(".shader") {
+        "shader"
     } else if ends(".asset.json") {
         "scriptableObject"
     } else if ends(".anim.json") {

@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 goat-core.workspace = true
 goat-gfx.workspace = true
+goat-shader.workspace = true
 goat-runtime.workspace = true
 serde.workspace = true
 serde_json.workspace = true

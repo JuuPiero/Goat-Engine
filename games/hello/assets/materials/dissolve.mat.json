@@ -1,0 +1,1 @@
+{ "shader": "../shaders/Dissolve.shader", "properties": { "_MainTex": "../textures/photo.jpg", "_Color": "#ffffff", "_EdgeColor": [2.5, 0.7, 0.1, 1] } }

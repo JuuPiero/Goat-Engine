@@ -44,6 +44,12 @@ pub struct AssetServer {
     pub io: AssetIo,
     textures: HashMap<String, TextureId>,
     materials: HashMap<String, MaterialId>,
+    /// Compiled `.shader` files (errors kept: reported once) and their GPU programs (None: the
+    /// backend can't run custom shaders, or it rejected this one).
+    shaders: HashMap<String, Result<std::sync::Arc<goat_shader::Shader>, String>>,
+    gpu_shaders: HashMap<String, Option<goat_gfx::ShaderId>>,
+    /// Material file → the shader it uses (reloading a shader updates its materials).
+    material_shaders: HashMap<String, String>,
     meshes: HashMap<String, MeshId>,
     models: HashMap<String, LoadedModel>,
     texture_keys: HashMap<TextureId, String>,
@@ -58,6 +64,9 @@ impl AssetServer {
             io,
             textures: HashMap::new(),
             materials: HashMap::new(),
+            shaders: HashMap::new(),
+            gpu_shaders: HashMap::new(),
+            material_shaders: HashMap::new(),
             meshes: HashMap::new(),
             models: HashMap::new(),
             texture_keys: HashMap::new(),
@@ -105,6 +114,17 @@ impl AssetServer {
         if key == "builtin:white" {
             // 8×8 white, 8 pixels per unit by convention: tinted sprites / UI rectangles
             return Ok(TextureData::checker(8, 1, goat_core::Color::WHITE, goat_core::Color::WHITE));
+        }
+        // shader property defaults (Unity's "black" / "gray" / "bump" / "red")
+        let solid = match key {
+            "builtin:black" => Some(goat_core::Color::rgba(0.0, 0.0, 0.0, 1.0)),
+            "builtin:gray" | "builtin:grey" => Some(goat_core::Color::rgba(0.5, 0.5, 0.5, 1.0)),
+            "builtin:bump" => Some(goat_core::Color::rgba(0.5, 0.5, 1.0, 1.0)),
+            "builtin:red" => Some(goat_core::Color::rgba(1.0, 0.0, 0.0, 1.0)),
+            _ => None,
+        };
+        if let Some(c) = solid {
+            return Ok(TextureData::checker(8, 1, c, c));
         }
         let bytes = self.io.read(key)?;
         let t = match ext_of(key).as_str() {
@@ -189,6 +209,39 @@ impl AssetServer {
         if let Some(id) = self.materials.get(key) {
             return Ok(*id);
         }
+        let desc = self.material_desc_of(gfx, key)?;
+        let id = gfx.create_material(&desc).map_err(|e| AssetError::Gpu(key.into(), e))?;
+        self.register_material(key, id);
+        Ok(id)
+    }
+
+    /// Re-reads a loaded `.mat.json` and updates its GPU material in place (renderers keep their
+    /// MaterialId): the editor, when the file changed. Not loaded = nothing to do.
+    pub fn reload_material(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<(), AssetError> {
+        let key: &str = &self.io.canonical(key);
+        let Some(id) = self.materials.get(key).copied() else { return Ok(()) };
+        let desc = self.material_desc_of(gfx, key)?;
+        gfx.update_material(id, &desc);
+        Ok(())
+    }
+
+    /// A `.shader` file changed: compiled again, and every loaded material using it updated.
+    pub fn reload_shader(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) {
+        let key = self.io.canonical(key);
+        let old = self.gpu_shaders.remove(&key).flatten();
+        self.shaders.remove(&key);
+        let users: Vec<String> = self.material_shaders.iter().filter(|(_, s)| **s == key).map(|(m, _)| m.clone()).collect();
+        for m in users {
+            if let Err(e) = self.reload_material(gfx, &m) {
+                goat_core::error!("{m}: {e}");
+            }
+        }
+        if let Some(id) = old {
+            gfx.destroy_shader(id);
+        }
+    }
+
+    fn material_desc_of(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<MaterialDesc, AssetError> {
         let desc = if key == "builtin:default" {
             MaterialDesc::default()
         } else if let Some((file, sub)) = key.split_once('#') {
@@ -223,11 +276,140 @@ impl AssetServer {
                 },
                 None => None,
             };
-            MaterialDesc { texture, emissive_texture, env_map, ..file.desc() }
+            match &file.shader {
+                Some(s) => {
+                    let sk = self.io.canonical(&rel(s));
+                    self.material_shaders.insert(key.to_string(), sk.clone());
+                    self.shader_material(gfx, key, &sk, &file, &rel)
+                }
+                None => {
+                    self.material_shaders.remove(key);
+                    MaterialDesc { texture, emissive_texture, env_map, ..file.desc() }
+                }
+            }
         };
-        let id = gfx.create_material(&desc).map_err(|e| AssetError::Gpu(key.into(), e))?;
-        self.register_material(key, id);
-        Ok(id)
+        Ok(desc)
+    }
+
+    /// A compiled `.shader` file (cached; the error text lists the problems with their lines).
+    pub fn shader(&mut self, key: &str) -> Result<std::sync::Arc<goat_shader::Shader>, AssetError> {
+        let key: &str = &self.io.canonical(key);
+        if let Some(r) = self.shaders.get(key) {
+            return r.clone().map_err(|e| AssetError::Format(key.into(), e));
+        }
+        let text = self.io.read_string(key)?;
+        let r = goat_shader::compile(&text).map(std::sync::Arc::new).map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "));
+        if let Ok(s) = &r {
+            for w in &s.warnings {
+                goat_core::warn!("{key}: {w}");
+            }
+        }
+        self.shaders.insert(key.to_string(), r.clone());
+        r.map_err(|e| AssetError::Format(key.into(), e))
+    }
+
+    /// Forgets compiled shaders and the materials using them (the editor: a `.shader` changed).
+    pub fn forget_shader(&mut self, key: &str) {
+        self.shaders.remove(key);
+        self.gpu_shaders.remove(key);
+    }
+
+    /// A material drawn with a Goat shader: its render state, parameters and textures; where the
+    /// backend can't run it (3DS) the shader's standard mapping (color, texture, emission, cutoff)
+    /// on the standard material. A shader that doesn't compile draws magenta (Unity's error shader).
+    fn shader_material(&mut self, gfx: &mut dyn GraphicsBackend, key: &str, shader_key: &str, file: &MaterialFile, rel: &dyn Fn(&str) -> String) -> MaterialDesc {
+        let error = |e: &dyn std::fmt::Display| {
+            goat_core::error!("{key}: {e}");
+            MaterialDesc { base_color: goat_core::Color::rgba(1.0, 0.0, 1.0, 1.0), lighting: goat_gfx::LightingModel::Unlit, ..MaterialDesc::default() }
+        };
+        let sh = match self.shader(shader_key) {
+            Ok(s) => s,
+            Err(e) => return error(&e),
+        };
+        let props = file.properties.clone().unwrap_or_default();
+        let value = |name: &str| -> Option<[f32; 4]> {
+            let v = props.get(name)?;
+            let mut a = [0.0f32; 4];
+            match v {
+                serde_json::Value::Number(n) => a[0] = n.as_f64()? as f32,
+                serde_json::Value::Bool(b) => a[0] = if *b { 1.0 } else { 0.0 },
+                serde_json::Value::Array(l) => {
+                    for (i, x) in l.iter().take(4).enumerate() {
+                        a[i] = x.as_f64()? as f32;
+                    }
+                }
+                serde_json::Value::String(s) => a = goat_core::parse_hex(s)?.to_array(),
+                _ => return None,
+            }
+            Some(a)
+        };
+        let params = sh.pack_params(&value);
+        let mut color_slots = 0u16;
+        for p in &sh.params {
+            if sh.properties.iter().any(|q| q.name == p.name && q.kind == goat_shader::PropertyKind::Color) {
+                color_slots |= 1 << p.slot;
+            }
+        }
+        let mut textures = [None; goat_gfx::SHADER_TEXTURES];
+        for t in &sh.textures {
+            let path = props.get(&t.name).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(rel).unwrap_or_else(|| format!("builtin:{}", t.default));
+            textures[t.unit] = match self.texture(gfx, &path) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    goat_core::warn!("{key}: {}: {e}", t.name);
+                    self.texture(gfx, "builtin:white").ok()
+                }
+            };
+        }
+        // the GPU program (once per shader file)
+        let gpu = match self.gpu_shaders.get(shader_key) {
+            Some(g) => *g,
+            None => {
+                let desc = goat_gfx::ShaderDesc { name: sh.name.clone(), wgsl: sh.wgsl_module(), custom_vertex: sh.custom_vertex };
+                let g = match gfx.create_shader(&desc) {
+                    Ok(id) => Some(id),
+                    Err(GfxError::Unsupported(_)) => None,
+                    Err(e) => {
+                        self.gpu_shaders.insert(shader_key.to_string(), None);
+                        return error(&e);
+                    }
+                };
+                self.gpu_shaders.insert(shader_key.to_string(), g);
+                g
+            }
+        };
+        let st = &sh.state;
+        let blend = match st.blend {
+            goat_shader::Blend::Opaque => goat_gfx::BlendMode::Opaque,
+            goat_shader::Blend::Alpha => goat_gfx::BlendMode::Alpha,
+            goat_shader::Blend::Additive => goat_gfx::BlendMode::Additive,
+        };
+        let m = &sh.standard;
+        let tex_of = |name: &Option<String>| name.as_ref().and_then(|n| sh.textures.iter().find(|t| &t.name == n)).and_then(|t| textures[t.unit]);
+        let color_of = |name: &Option<String>| name.as_ref().and_then(|n| value(n).or_else(|| sh.params.iter().find(|p| &p.name == n).map(|p| p.default))).map(|c| goat_core::Color::rgba(c[0], c[1], c[2], c[3]));
+        let d = MaterialDesc::default();
+        MaterialDesc {
+            base_color: color_of(&m.color).unwrap_or(d.base_color),
+            texture: tex_of(&m.texture),
+            lighting: if m.lighting == "unlit" { goat_gfx::LightingModel::Unlit } else { goat_gfx::LightingModel::Lit },
+            toon_steps: if m.lighting == "toon" { 3 } else { 0 },
+            emissive: color_of(&m.emission).unwrap_or(d.emissive),
+            alpha_cutoff: m.cutoff.as_ref().and_then(|c| value(c).or_else(|| sh.params.iter().find(|p| &p.name == c).map(|p| p.default))).map(|v| v[0].clamp(0.0, 1.0)).unwrap_or(0.0),
+            blend,
+            cull: match st.cull {
+                goat_shader::Cull::Back => goat_gfx::CullMode::Back,
+                goat_shader::Cull::Front => goat_gfx::CullMode::Front,
+                goat_shader::Cull::Off => goat_gfx::CullMode::None,
+            },
+            depth_write: st.zwrite.unwrap_or(blend == goat_gfx::BlendMode::Opaque),
+            depth_test: !st.ztest_always,
+            fog: st.fog,
+            shader: gpu,
+            shader_params: params,
+            shader_color_slots: color_slots,
+            shader_textures: textures,
+            ..d
+        }
     }
 
     /// `builtin:cube|sphere|plane`, or `<model>#mesh:<mesh>:<primitive>`.
