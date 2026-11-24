@@ -281,6 +281,28 @@ mod tests {
     }
 
     #[test]
+    fn pause_step_and_profiler() {
+        let (mut c, mut gfx) = core();
+        c.play();
+        for _ in 0..5 {
+            c.frame(&mut gfx, 1.0 / 60.0);
+        }
+        let t = |c: &EditorCore| c.play.as_ref().unwrap().time.frame;
+        let f0 = t(&c);
+        c.paused = true;
+        c.frame(&mut gfx, 1.0 / 60.0);
+        c.frame(&mut gfx, 1.0 / 60.0);
+        assert_eq!(t(&c), f0, "paused: no frame runs");
+        c.step_once = true;
+        c.frame(&mut gfx, 1.0 / 60.0);
+        assert_eq!(t(&c), f0 + 1, "step: exactly one");
+        let p = c.profiler_json();
+        assert!(p["sections"].as_array().unwrap().iter().any(|s| s[0] == "Behaviours" || s[0] == "Render"));
+        assert!(p["history"].as_array().unwrap().len() >= 5);
+        c.stop();
+        assert!(!c.paused);
+    }
+    #[test]
     fn every_component_can_be_added_from_its_defaults() {
         let (mut c, mut gfx) = core();
         let info = c.component_info();

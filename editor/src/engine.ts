@@ -81,6 +81,26 @@ export function stopPlay() {
   const e = engine;
   if (!e) return;
   e.stop();
-  setState({ playing: false, viewTab: 'scene' });
+  setState({ playing: false, paused: false, viewTab: 'scene' });
   log('stop');
+}
+
+/// Pauses / resumes Play mode (the Game view keeps drawing the paused frame).
+export function togglePause() {
+  const e = engine;
+  if (!e) return;
+  const p = !getState().paused;
+  e.set_paused(p);
+  setState({ paused: p });
+}
+
+/// One frame while paused (Unity's Step); pauses first when running.
+export function stepFrame() {
+  const e = engine;
+  if (!e || !e.is_playing()) return;
+  if (!getState().paused) {
+    e.set_paused(true);
+    setState({ paused: true });
+  }
+  e.step();
 }

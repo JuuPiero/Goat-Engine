@@ -14,8 +14,18 @@ pub fn now() -> f64 {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        0.0
+        CLOCK.get().map_or(0.0, |f| f())
     }
+}
+
+/// A clock for hosts without `std::time` (the editor's wasm engine: `performance.now() / 1000`).
+#[cfg(target_arch = "wasm32")]
+static CLOCK: std::sync::OnceLock<fn() -> f64> = std::sync::OnceLock::new();
+
+/// Gives the profiler a clock (seconds) where `std::time` has none (wasm).
+pub fn set_clock(_f: fn() -> f64) {
+    #[cfg(target_arch = "wasm32")]
+    let _ = CLOCK.set(_f);
 }
 
 #[derive(Default)]
@@ -26,6 +36,18 @@ pub struct Profiler {
     /// Draw calls / triangles of the last frame.
     pub draw_calls: u32,
     pub triangles: u32,
+    /// Frames kept in `history` (0 = none: no cost on consoles; the editor sets 300).
+    pub keep_history: usize,
+    /// Recent frames, oldest first: raw milliseconds per section (+ `draw_calls`).
+    pub history: std::collections::VecDeque<FrameSample>,
+}
+
+/// One frame of [`Profiler::history`].
+#[derive(Clone, Debug, Default)]
+pub struct FrameSample {
+    pub sections: Vec<(String, f32)>,
+    pub draw_calls: u32,
+    pub triangles: u32,
 }
 
 impl Profiler {
@@ -34,6 +56,13 @@ impl Profiler {
         *self.frame.entry(name.to_string()).or_default() += seconds;
     }
     pub(crate) fn end_frame(&mut self) {
+        if self.keep_history > 0 {
+            let sample = FrameSample { sections: self.frame.iter().map(|(k, v)| (k.clone(), (*v * 1000.0) as f32)).collect(), draw_calls: self.draw_calls, triangles: self.triangles };
+            self.history.push_back(sample);
+            while self.history.len() > self.keep_history {
+                self.history.pop_front();
+            }
+        }
         for (k, v) in std::mem::take(&mut self.frame) {
             let ms = (v * 1000.0) as f32;
             let s = self.sections.entry(k).or_insert(ms);

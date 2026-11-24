@@ -13,7 +13,8 @@ import { AssetPanel } from './panels/AssetPanel';
 import { Console, Hierarchy, Inspector } from './panels/Panels';
 import { Viewport } from './panels/Viewport';
 import { AnimatorWindow } from './panels/AnimatorWindow';
-import { getEngine, openScene, saveScene, startPlay, stopPlay } from './engine';
+import { getEngine, openScene, saveScene, startPlay, stepFrame, stopPlay, togglePause } from './engine';
+import { ProfilerPanel } from './panels/ProfilerPanel';
 import { ContextMenuHost, MenuBar, type MenuItem } from './ui/Menu';
 import * as commands from './commands';
 import { copy, cut, deleteSelection, duplicate, gameObjectMenu, hasClipboard, installShortcuts, mutate, paste, redo, selectAll, undo } from './commands';
@@ -29,6 +30,7 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
   project: () => <AssetPanel />,
   console: () => <div className="panel-scroll"><Console /></div>,
   animator: () => <AnimatorWindow />,
+  profiler: () => <ProfilerPanel />,
 };
 
 function defaultLayout(dv: DockviewApi) {
@@ -45,6 +47,7 @@ function defaultLayout(dv: DockviewApi) {
 export function App() {
   const project = useStore((s) => s.project);
   const playing = useStore((s) => s.playing);
+  const paused = useStore((s) => s.paused);
   const dv = useRef<DockviewApi | null>(null);
   const controller = useStore((s) => s.controller);
   const revision = useStore((s) => s.revision);
@@ -125,8 +128,14 @@ export function App() {
         <span className="project-name">{project?.name}</span>
         <div className="spacer" />
         <div className="play-group">
-          <button className={`play${playing ? ' on' : ''}`} onClick={() => (playing ? stopPlay() : void startPlay())} title="Play / Stop">
+          <button className={`play${playing ? ' on' : ''}`} onClick={() => (playing ? stopPlay() : void startPlay())} title="Play / Stop (Ctrl+P)">
             {playing ? '■' : '▶'}
+          </button>
+          <button className={`play${paused ? ' on' : ''}`} disabled={!playing} onClick={togglePause} title="Pause (Ctrl+Shift+P)">
+            ❚❚
+          </button>
+          <button className="play" disabled={!playing} onClick={stepFrame} title="Step (Ctrl+Alt+P)">
+            ▶❚
           </button>
         </div>
         <div className="spacer" />
@@ -153,6 +162,7 @@ const PANELS: { id: string; title: string; key?: string }[] = [
   { id: 'project', title: 'Project', key: 'Ctrl+5' },
   { id: 'console', title: 'Console', key: 'Ctrl+Shift+C' },
   { id: 'animator', title: 'Animator' },
+  { id: 'profiler', title: 'Profiler', key: 'Ctrl+7' },
 ];
 
 /// Opens (or focuses) a panel of the dock.
@@ -205,6 +215,8 @@ function menus(dv: React.RefObject<DockviewApi | null>, resetLayout: () => void,
         { label: 'Frame Selected', shortcut: 'F', disabled: !s().entities.length, action: frameSelected },
         '-',
         { label: s().playing ? 'Stop' : 'Play', shortcut: 'Ctrl+P', action: () => (s().playing ? stopPlay() : void startPlay()) },
+        { label: 'Pause', shortcut: 'Ctrl+Shift+P', checked: s().paused, disabled: !s().playing, action: togglePause },
+        { label: 'Step', shortcut: 'Ctrl+Alt+P', disabled: !s().playing, action: stepFrame },
       ],
     },
     {

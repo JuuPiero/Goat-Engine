@@ -206,6 +206,14 @@ impl Engine {
         prof.end_frame();
     }
 
+    /// Draws the current state without running anything (a paused game in the editor).
+    pub fn render_only(&mut self, gfx: &mut dyn GraphicsBackend) {
+        propagate_transforms(&mut self.world);
+        let mut views = extract_views(&self.world, &self.displays, &*gfx, self.view_camera);
+        views.iter_mut().for_each(|v| v.time = self.time.elapsed);
+        self.last_stats = gfx.render(&views);
+    }
+
     fn each_plugin(&mut self, gfx: &mut dyn GraphicsBackend, mut f: impl FnMut(&mut dyn Plugin, &mut Context)) {
         let mut plugins = std::mem::take(&mut self.plugins);
         let time = self.time;

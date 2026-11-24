@@ -19,6 +19,7 @@ export const editorengine_gizmo_drag: (a: number, b: number, c: number, d: numbe
 export const editorengine_gizmo_end: (a: number) => void;
 export const editorengine_hierarchy: (a: number) => [number, number];
 export const editorengine_instantiate: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const editorengine_is_paused: (a: number) => number;
 export const editorengine_is_playing: (a: number) => number;
 export const editorengine_key: (a: number, b: number, c: number, d: number) => void;
 export const editorengine_open_scene: (a: number, b: number, c: number) => [number, number];
@@ -27,6 +28,7 @@ export const editorengine_pan: (a: number, b: number, c: number) => void;
 export const editorengine_paste: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const editorengine_pick: (a: number, b: number, c: number) => [number, number];
 export const editorengine_play: (a: number, b: number) => void;
+export const editorengine_profiler: (a: number) => [number, number];
 export const editorengine_put_file: (a: number, b: number, c: number, d: number, e: number) => void;
 export const editorengine_record_undo: (a: number, b: number, c: number) => void;
 export const editorengine_redo: (a: number) => [number, number];
@@ -44,9 +46,11 @@ export const editorengine_set_active: (a: number, b: number, c: number, d: numbe
 export const editorengine_set_component: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
 export const editorengine_set_gizmo_mode: (a: number, b: number, c: number) => void;
 export const editorengine_set_parent: (a: number, b: number, c: number, d: number, e: number) => void;
+export const editorengine_set_paused: (a: number, b: number) => void;
 export const editorengine_set_tag: (a: number, b: number, c: number, d: number, e: number) => void;
 export const editorengine_set_transform: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const editorengine_stats: (a: number) => [number, number];
+export const editorengine_step: (a: number) => void;
 export const editorengine_stop: (a: number) => void;
 export const editorengine_take_logs: (a: number) => [number, number];
 export const editorengine_transform: (a: number, b: number, c: number) => [number, number];

@@ -55,6 +55,7 @@ export class EditorEngine {
      * Drops a model / prefab at a view point (0..1); returns the new entity.
      */
     instantiate(key: string, x: number, y: number): string;
+    is_paused(): boolean;
     is_playing(): boolean;
     key(code: string, down: boolean): void;
     open_scene(key: string): void;
@@ -72,6 +73,10 @@ export class EditorEngine {
      * Play mode; `dual_3ds` shows the game as the 3DS's two screens.
      */
     play(dual_3ds: boolean): void;
+    /**
+     * The profiler as JSON: `{ sections: [[name, ms]], draw_calls, triangles, history: [{ s, d, t }] }`.
+     */
+    profiler(): string;
     /**
      * Makes a project file available to the engine (the UI reads files through Tauri).
      */
@@ -108,6 +113,10 @@ export class EditorEngine {
     set_gizmo_mode(mode: string): void;
     set_parent(id: string, parent?: string | null): void;
     /**
+     * Pauses / resumes Play mode (the Game view keeps drawing).
+     */
+    set_paused(paused: boolean): void;
+    /**
      * Sets the tag ("Untagged" / empty removes it).
      */
     set_tag(id: string, tag: string): void;
@@ -116,6 +125,10 @@ export class EditorEngine {
      * Draw calls / triangles of the last frame.
      */
     stats(): string;
+    /**
+     * One frame while paused (Unity's Step).
+     */
+    step(): void;
     stop(): void;
     /**
      * Engine log lines since the last call: `[[level, text], ...]` (JSON).
@@ -152,6 +165,7 @@ export interface InitOutput {
     readonly editorengine_gizmo_end: (a: number) => void;
     readonly editorengine_hierarchy: (a: number) => [number, number];
     readonly editorengine_instantiate: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly editorengine_is_paused: (a: number) => number;
     readonly editorengine_is_playing: (a: number) => number;
     readonly editorengine_key: (a: number, b: number, c: number, d: number) => void;
     readonly editorengine_open_scene: (a: number, b: number, c: number) => [number, number];
@@ -160,6 +174,7 @@ export interface InitOutput {
     readonly editorengine_paste: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly editorengine_pick: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_play: (a: number, b: number) => void;
+    readonly editorengine_profiler: (a: number) => [number, number];
     readonly editorengine_put_file: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_record_undo: (a: number, b: number, c: number) => void;
     readonly editorengine_redo: (a: number) => [number, number];
@@ -177,9 +192,11 @@ export interface InitOutput {
     readonly editorengine_set_component: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly editorengine_set_gizmo_mode: (a: number, b: number, c: number) => void;
     readonly editorengine_set_parent: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly editorengine_set_paused: (a: number, b: number) => void;
     readonly editorengine_set_tag: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_set_transform: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly editorengine_stats: (a: number) => [number, number];
+    readonly editorengine_step: (a: number) => void;
     readonly editorengine_stop: (a: number) => void;
     readonly editorengine_take_logs: (a: number) => [number, number];
     readonly editorengine_transform: (a: number, b: number, c: number) => [number, number];

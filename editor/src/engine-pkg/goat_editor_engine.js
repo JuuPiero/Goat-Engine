@@ -284,6 +284,13 @@ export class EditorEngine {
     /**
      * @returns {boolean}
      */
+    is_paused() {
+        const ret = wasm.editorengine_is_paused(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * @returns {boolean}
+     */
     is_playing() {
         const ret = wasm.editorengine_is_playing(this.__wbg_ptr);
         return ret !== 0;
@@ -379,6 +386,22 @@ export class EditorEngine {
      */
     play(dual_3ds) {
         wasm.editorengine_play(this.__wbg_ptr, dual_3ds);
+    }
+    /**
+     * The profiler as JSON: `{ sections: [[name, ms]], draw_calls, triangles, history: [{ s, d, t }] }`.
+     * @returns {string}
+     */
+    profiler() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.editorengine_profiler(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * Makes a project file available to the engine (the UI reads files through Tauri).
@@ -617,6 +640,13 @@ export class EditorEngine {
         wasm.editorengine_set_parent(this.__wbg_ptr, ptr0, len0, ptr1, len1);
     }
     /**
+     * Pauses / resumes Play mode (the Game view keeps drawing).
+     * @param {boolean} paused
+     */
+    set_paused(paused) {
+        wasm.editorengine_set_paused(this.__wbg_ptr, paused);
+    }
+    /**
      * Sets the tag ("Untagged" / empty removes it).
      * @param {string} id
      * @param {string} tag
@@ -671,6 +701,12 @@ export class EditorEngine {
         } finally {
             wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
         }
+    }
+    /**
+     * One frame while paused (Unity's Step).
+     */
+    step() {
+        wasm.editorengine_step(this.__wbg_ptr);
     }
     stop() {
         wasm.editorengine_stop(this.__wbg_ptr);
@@ -1119,6 +1155,10 @@ function __wbg_get_imports() {
                 state0.a = 0;
             }
         },
+        __wbg_now_043d245551b22f9c: function(arg0) {
+            const ret = arg0.now();
+            return ret;
+        },
         __wbg_now_463ac581d2fc7ea3: function() {
             const ret = Date.now();
             return ret;
@@ -1126,6 +1166,10 @@ function __wbg_get_imports() {
         __wbg_now_e7c6795a7f81e10f: function(arg0) {
             const ret = arg0.now();
             return ret;
+        },
+        __wbg_performance_50e6a3f8dc80bbca: function(arg0) {
+            const ret = arg0.performance;
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
         },
         __wbg_performance_7e4e4494fdc9d07a: function(arg0) {
             const ret = arg0.performance;
@@ -1721,7 +1765,7 @@ function __wbg_get_imports() {
             arg0.writeTexture(arg1, arg2, arg3, arg4);
         }, arguments); },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2838, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2843, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_49c42322a91a8d99___convert__closures_____invoke___wasm_bindgen_49c42322a91a8d99___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_49c42322a91a8d99___JsError___true_);
             return ret;
         },

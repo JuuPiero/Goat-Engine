@@ -112,6 +112,9 @@ pub struct EditorCore {
     pub(crate) undo: Vec<crate::editing::UndoStep>,
     pub(crate) redo: Vec<crate::editing::UndoStep>,
     pub(crate) nav_preview: crate::navpreview::NavPreview,
+    /// Play mode paused (the game view keeps drawing) / one frame requested.
+    pub paused: bool,
+    pub step_once: bool,
     pub tools: crate::tools::Tools,
     /// Buttons held (Play mode input), by Button index.
     held: [bool; 14],
@@ -148,6 +151,8 @@ impl EditorCore {
             undo: Vec::new(),
             redo: Vec::new(),
             nav_preview: Default::default(),
+            paused: false,
+            step_once: false,
             tools: Default::default(),
             held: [false; 14],
             axes: [0.0; 4],
@@ -346,12 +351,15 @@ impl EditorCore {
     pub fn play(&mut self) {
         let mut engine = Engine::new(PlayGame { scene: self.scene.clone(), inner: game::HelloGame });
         engine.resources.insert(AssetServer::new(self.io.clone()));
+        engine.resources.get_or_default::<Profiler>().keep_history = 300;
         self.play = Some(engine);
+        self.step_once = false;
         self.held = [false; 14];
         self.axes = [0.0; 4];
     }
     pub fn stop(&mut self) {
         self.play = None;
+        self.paused = false;
     }
 
     /// Play-mode input (keyboard mapped like the desktop player).
@@ -389,6 +397,13 @@ impl EditorCore {
     // ------------------------------------------------------------------ frame
     pub fn frame(&mut self, gfx: &mut dyn GraphicsBackend, dt: f32) {
         if let Some(play) = self.play.as_mut() {
+            // Pause: draw only; Step: one 1/60 s frame
+            if self.paused && !self.step_once {
+                play.render_only(gfx);
+                return;
+            }
+            let dt = if self.step_once { 1.0 / 60.0 } else { dt };
+            self.step_once = false;
             play.input.begin_frame();
             for (i, b) in Button::ALL.iter().enumerate() {
                 play.input.set(*b, self.held[i]);
@@ -438,6 +453,22 @@ impl EditorCore {
                 *t = Transform::from_position(c).with_scale(Vec3::splat(r * if active { 2.0 } else { 1.9 }));
             }
         }
+    }
+
+    /// The profiler of the running game (or of the edit world): smoothed sections, the last
+    /// frames' history, draw calls.
+    pub fn profiler_json(&mut self) -> serde_json::Value {
+        let engine = self.play.as_mut().unwrap_or(&mut self.edit);
+        let p = engine.resources.get_or_default::<Profiler>();
+        if p.keep_history == 0 {
+            p.keep_history = 300;
+        }
+        serde_json::json!({
+            "sections": p.top(64).into_iter().map(|(k, v)| serde_json::json!([k, v])).collect::<Vec<_>>(),
+            "draw_calls": p.draw_calls,
+            "triangles": p.triangles,
+            "history": p.history.iter().map(|f| serde_json::json!({ "s": f.sections.iter().map(|(k, v)| serde_json::json!([k, v])).collect::<Vec<_>>(), "d": f.draw_calls, "t": f.triangles })).collect::<Vec<_>>(),
+        })
     }
 
     /// World matrix of the editor camera (gizmos in the UI).

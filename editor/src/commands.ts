@@ -1,7 +1,7 @@
 // Editor commands (menus, shortcuts, context menus share them): Undo / Redo, the clipboard,
 // creating GameObjects from Unity's GameObject menu, deleting, renaming, saving, playing.
 // Scene changes go through `mutate(label, f)`: an Undo step first, then the change.
-import { getEngine, saveScene, startPlay, stopPlay } from './engine';
+import { getEngine, saveScene, startPlay, stepFrame, stopPlay, togglePause } from './engine';
 import { frameSelected, selectEntities, syncSelection } from './selection';
 import { getState, log, setState } from './store';
 
@@ -228,6 +228,14 @@ export function installShortcuts() {
   const down = (ev: KeyboardEvent) => {
     const e = getEngine();
     const ctrl = ev.ctrlKey || ev.metaKey;
+    if (ctrl && ev.shiftKey && ev.code === 'KeyP') {
+      ev.preventDefault();
+      return togglePause();
+    }
+    if (ctrl && ev.altKey && ev.code === 'KeyP') {
+      ev.preventDefault();
+      return stepFrame();
+    }
     if (ctrl && ev.code === 'KeyP') {
       ev.preventDefault();
       return e?.is_playing() ? stopPlay() : void startPlay();

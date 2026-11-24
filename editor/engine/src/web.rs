@@ -39,6 +39,7 @@ impl EditorEngine {
     pub async fn create(canvas: web_sys::HtmlCanvasElement) -> Result<EditorEngine, JsValue> {
         console_error_panic_hook::set_once();
         goat_core::log::set_sink(log_sink);
+        goat_runtime::profiler::set_clock(|| web_sys::window().and_then(|w| w.performance()).map_or(0.0, |p| p.now() / 1000.0));
         let (w, h) = (canvas.width().max(1), canvas.height().max(1));
         let gfx = WgpuBackend::new_async(wgpu::SurfaceTarget::Canvas(canvas), w, h, DisplayLayout::Window).await.map_err(|e| JsValue::from_str(&e.to_string()))?;
         let mut core = EditorCore::new(AssetIo::new("assets"));
@@ -261,6 +262,21 @@ impl EditorEngine {
     pub fn stop(&mut self) {
         self.core.stop();
         self.gfx.set_layout(DisplayLayout::Window);
+    }
+    /// Pauses / resumes Play mode (the Game view keeps drawing).
+    pub fn set_paused(&mut self, paused: bool) {
+        self.core.paused = paused;
+    }
+    pub fn is_paused(&self) -> bool {
+        self.core.paused
+    }
+    /// One frame while paused (Unity's Step).
+    pub fn step(&mut self) {
+        self.core.step_once = true;
+    }
+    /// The profiler as JSON: `{ sections: [[name, ms]], draw_calls, triangles, history: [{ s, d, t }] }`.
+    pub fn profiler(&mut self) -> String {
+        self.core.profiler_json().to_string()
     }
     pub fn is_playing(&self) -> bool {
         self.core.is_playing()

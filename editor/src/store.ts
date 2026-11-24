@@ -37,13 +37,15 @@ export interface EditorState {
   /// Bumped when the scene's entities change (Hierarchy re-reads the engine).
   hierarchyRev: number;
   playing: boolean;
+  /// Play mode paused (Unity's Pause).
+  paused: boolean;
   dual3ds: boolean;
   viewTab: 'scene' | 'game';
   /// The controller open in the Animator window.
   controller: string | null;
 }
 
-let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, entities: [], renaming: null, undoLabel: null, redoLabel: null, contextMenu: null, hierarchyRev: 0, playing: false, dual3ds: true, viewTab: 'scene', controller: null };
+let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, entities: [], renaming: null, undoLabel: null, redoLabel: null, contextMenu: null, hierarchyRev: 0, playing: false, paused: false, dual3ds: true, viewTab: 'scene', controller: null };
 const listeners = new Set<() => void>();
 
 export function getState(): EditorState {

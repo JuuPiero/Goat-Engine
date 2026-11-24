@@ -617,6 +617,8 @@ Editor dùng Tauri 2 + React; engine chạy bên trong editor dưới dạng Web
 - Kéo model (.glb) hoặc prefab từ Project vào Scene view / Hierarchy để thêm vào scene.
 - **Animator**: double-click file `.controller.json` để mở. Chuột phải nền: *Create State*; chuột phải state: *Make Transition* / *Set as Layer Default State* / *Delete*; click mũi tên để sửa transition; Alt + kéo hoặc chuột giữa để kéo khung nhìn; Ctrl+S lưu.
 - **Script**: file `.cs` được tự dịch khi lưu, lỗi biên dịch và lỗi script lúc Play hiện ở Console.
+- **Pause / Step** (❚❚ / ▶❚ cạnh nút Play, Ctrl+Shift+P / Ctrl+Alt+P): dừng game giữa chừng (Game view vẫn hiện khung hình), chạy từng frame một.
+- **Profiler** (Window ▸ Profiler): biểu đồ CPU 300 frame gần nhất (ms của từng plugin, behaviour, transform, culling, render; vạch 60 / 30 FPS), click một cột để xem frame đó, bảng ms / %, số draw call và tam giác. Đo cả Play mode lẫn Edit mode.
 - **Play (▶)**: chạy game thật (behaviour, script, physics, animation, sprite, text) trong Game view, có thể bật layout 2 màn hình 3DS. Phím điều khiển giống bản desktop. Esc hoặc ■ để dừng; scene đang edit không bị thay đổi.
 
 ```sh
