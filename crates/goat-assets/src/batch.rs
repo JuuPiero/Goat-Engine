@@ -227,7 +227,7 @@ mod bake_tests {
             ctx.resources.insert(AssetServer::new(AssetIo::new("/nonexistent")));
             let mesh = crate::mesh(ctx, "builtin:cube").unwrap();
             let mat = crate::material(ctx, "builtin:default").unwrap();
-            ctx.world.spawn((RenderSettings { ambient: goat_core::Color::rgb(0.2, 0.2, 0.2), ambient_ground: None, fog: None },));
+            ctx.world.spawn((RenderSettings { ambient: goat_core::Color::rgb(0.2, 0.2, 0.2), ambient_ground: None, fog: None, post: None },));
             // sun straight down
             ctx.world.spawn((Transform::default().with_rotation(goat_core::math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)), DirectionalLight { color: goat_core::Color::WHITE, intensity: 0.5, shadows: false }));
             let root = ctx.world.spawn((Transform::default(), StaticBatching { bake_lighting: true }));

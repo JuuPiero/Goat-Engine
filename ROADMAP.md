@@ -33,7 +33,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ Procedural texture (`procedural`: water / fire / noise; 3DS: đơn vị proctex của PICA, desktop: noise trong shader)
 - ⬜ Fog gas cho khói
 - ✅ Shadow map trên desktop (đèn directional `shadows`, 2048², PCF 3×3, đi theo camera); 3DS dùng blob shadow
-- ⬜ Post-process trên desktop; trên 3DS chỉ màn hình phẳng (pha màu bằng texenv)
+- ✅ Post-process (`RenderSettings.post`): desktop có exposure / contrast / saturation / tint / vignette / bloom; 3DS pha màu exposure × tint trong texenv stage 4
 - ✅ Sprite / 2D (crate `goat-sprites`): Sprite + sprite sheet, SpriteRenderer (tint, flip, layer, sorting order), gom lô theo texture → 1 draw call mỗi lô
 - ✅ Plugin (cách subsystem gắn vào frame: build / fixed_update / update / late_update), fixed timestep, `Behaviour::fixed_update` / `late_update`
 - ✅ Layer + culling mask, sorting order, camera clear "depth only", mesh động (`update_mesh`, double-buffer trên 3DS), fog tắt được theo material

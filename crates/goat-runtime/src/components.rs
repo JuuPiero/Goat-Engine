@@ -228,11 +228,13 @@ pub struct RenderSettings {
     /// Hemisphere ambient: the color from below (Unity's Gradient ambient source).
     pub ambient_ground: Option<Color>,
     pub fog: Option<goat_gfx::Fog>,
+    /// Screen effects (exposure, contrast, saturation, tint, vignette, bloom).
+    pub post: Option<goat_gfx::PostFx>,
 }
 
 impl Default for RenderSettings {
     fn default() -> Self {
-        RenderSettings { ambient: Color::rgb(0.22, 0.24, 0.3), ambient_ground: None, fog: None }
+        RenderSettings { ambient: Color::rgb(0.22, 0.24, 0.3), ambient_ground: None, fog: None, post: None }
     }
 }
 

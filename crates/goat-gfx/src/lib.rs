@@ -452,6 +452,34 @@ pub struct RenderView {
     pub depth: i32,
     /// Seconds since start (animated procedural materials).
     pub time: f32,
+    /// Color grading / screen effects (desktop: a post pass over the frame; the 3DS applies the
+    /// color part per draw).
+    pub post: Option<PostFx>,
+}
+
+/// Screen effects (Unity's post-processing volume, the essentials).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct PostFx {
+    /// Brightness multiplier (1 = unchanged).
+    pub exposure: f32,
+    /// 1 = unchanged, > 1 more contrast.
+    pub contrast: f32,
+    /// 0 = gray, 1 = unchanged, > 1 more vivid.
+    pub saturation: f32,
+    /// Multiplies the image (color filter).
+    pub tint: Color,
+    /// Darkened corners 0..1 (desktop).
+    pub vignette: f32,
+    /// Glow around bright areas (desktop): strength and the brightness it starts at.
+    pub bloom: f32,
+    pub bloom_threshold: f32,
+}
+
+impl Default for PostFx {
+    fn default() -> Self {
+        PostFx { exposure: 1.0, contrast: 1.0, saturation: 1.0, tint: Color::WHITE, vignette: 0.0, bloom: 0.0, bloom_threshold: 0.8 }
+    }
 }
 
 impl RenderView {
@@ -573,6 +601,7 @@ mod tests {
             items: vec![item(alpha, -2.0), item(opaque, -9.0), item(alpha, -8.0), item(opaque, -1.0)],
             depth: 0,
             time: 0.0,
+            post: None,
         };
         let order = view.draw_order(|m| materials.get(m).map(|m| m.blend));
         assert_eq!(order, vec![3, 1, 2, 0]);

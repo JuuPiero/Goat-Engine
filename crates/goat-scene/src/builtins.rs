@@ -296,21 +296,24 @@ struct RenderSettingsJson {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ambient_ground: Option<FileColor>,
     fog: Option<FogJson>,
+    /// Screen effects: { "exposure", "contrast", "saturation", "tint", "vignette", "bloom", "bloom_threshold" }
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    post: Option<goat_gfx::PostFx>,
 }
 
 impl Default for RenderSettingsJson {
     fn default() -> Self {
-        RenderSettingsJson { ambient: FileColor(RenderSettings::default().ambient), ambient_ground: None, fog: None }
+        RenderSettingsJson { ambient: FileColor(RenderSettings::default().ambient), ambient_ground: None, fog: None, post: None }
     }
 }
 
 fn save_settings(ctx: &SaveContext, e: Entity) -> Option<Value> {
     let s = *ctx.world.get::<&RenderSettings>(e).ok()?;
-    to_value(RenderSettingsJson { ambient: FileColor(s.ambient), ambient_ground: s.ambient_ground.map(FileColor), fog: s.fog.map(|f| FogJson { color: FileColor(f.color), start: f.start, end: f.end }) })
+    to_value(RenderSettingsJson { ambient: FileColor(s.ambient), ambient_ground: s.ambient_ground.map(FileColor), post: s.post, fog: s.fog.map(|f| FogJson { color: FileColor(f.color), start: f.start, end: f.end }) })
 }
 fn load_settings(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
     let j: RenderSettingsJson = from_value(v)?;
-    insert(ctx, e, RenderSettings { ambient: j.ambient.0, ambient_ground: j.ambient_ground.map(|c| c.0), fog: j.fog.map(|f| Fog { color: f.color.0, start: f.start, end: f.end }) })
+    insert(ctx, e, RenderSettings { ambient: j.ambient.0, ambient_ground: j.ambient_ground.map(|c| c.0), post: j.post, fog: j.fog.map(|f| Fog { color: f.color.0, start: f.start, end: f.end }) })
 }
 
 pub(crate) fn register(r: &mut SceneRegistry) {

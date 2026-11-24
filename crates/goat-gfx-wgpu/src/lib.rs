@@ -102,6 +102,84 @@ struct FrameUniform {
     shadow: [f32; 4],
 }
 
+/// Offscreen targets of the post effects (sized like the window).
+struct PostTargets {
+    size: (u32, u32),
+    scene: wgpu::TextureView,
+    bloom_a: wgpu::TextureView,
+    bloom_b: wgpu::TextureView,
+}
+
+const BLOOM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+fn color_target(device: &wgpu::Device, w: u32, h: u32, format: wgpu::TextureFormat, label: &str) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&Default::default())
+}
+
+/// The post-effect pipelines (built once).
+struct PostPipelines {
+    layout: wgpu::BindGroupLayout,
+    bright: wgpu::RenderPipeline,
+    blur: wgpu::RenderPipeline,
+    composite: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
+    uniforms: wgpu::Buffer,
+}
+
+impl PostPipelines {
+    fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("post"), source: wgpu::ShaderSource::Wgsl(include_str!("post.wgsl").into()) });
+        let tex = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+            count: None,
+        };
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("post"),
+            entries: &[
+                tex(0),
+                tex(1),
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("post"), bind_group_layouts: &[&layout], push_constant_ranges: &[] });
+        let pipe = |entry: &str, format| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&pl),
+                vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_full"), compilation_options: Default::default(), buffers: &[] },
+                fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some(entry), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        PostPipelines {
+            bright: pipe("fs_bright", BLOOM_FORMAT),
+            blur: pipe("fs_blur", BLOOM_FORMAT),
+            composite: pipe("fs_composite", surface_format),
+            layout,
+            sampler: device.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() }),
+            uniforms: device.create_buffer(&wgpu::BufferDescriptor { label: Some("post uniforms"), size: 4 * 256, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }),
+        }
+    }
+}
+
 const SHADOW_SIZE: u32 = 2048;
 /// Half-size of the area the shadow map covers around the camera's focus (world units).
 const SHADOW_EXTENT: f32 = 14.0;
@@ -168,6 +246,8 @@ pub struct WgpuBackend {
     clear_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     shadow_view: wgpu::TextureView,
+    post_targets: Option<PostTargets>,
+    post_pipes: Option<PostPipelines>,
     shadow_bind: wgpu::BindGroup,
     shadow_pipeline: wgpu::RenderPipeline,
     pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
@@ -400,6 +480,8 @@ impl WgpuBackend {
             clear_layout,
             pipeline_layout,
             shadow_view,
+            post_targets: None,
+            post_pipes: None,
             shadow_bind,
             shadow_pipeline,
             pipelines: HashMap::new(),
@@ -960,6 +1042,27 @@ impl GraphicsBackend for WgpuBackend {
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &self.uniforms, offset: 0, size: wgpu::BufferSize::new(16) }) }],
         });
 
+        // post effects: the frame goes to an offscreen texture first
+        let post = views.iter().find_map(|v| v.post);
+        if post.is_some() {
+            let (w, h) = (self.config.width, self.config.height);
+            if self.post_targets.as_ref().is_none_or(|t| t.size != (w, h)) {
+                let (qw, qh) = ((w / 4).max(1), (h / 4).max(1));
+                self.post_targets = Some(PostTargets {
+                    size: (w, h),
+                    scene: color_target(&self.device, w, h, self.config.format, "scene"),
+                    bloom_a: color_target(&self.device, qw, qh, BLOOM_FORMAT, "bloom a"),
+                    bloom_b: color_target(&self.device, qw, qh, BLOOM_FORMAT, "bloom b"),
+                });
+            }
+            if self.post_pipes.is_none() {
+                self.post_pipes = Some(PostPipelines::new(&self.device, self.config.format));
+            }
+        }
+        let scene_target = match (&post, &self.post_targets) {
+            (Some(_), Some(t)) => &t.scene,
+            _ => &target,
+        };
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
         // shadow pass: the opaque objects of the view the map follows, depth only
         {
@@ -997,7 +1100,7 @@ impl GraphicsBackend for WgpuBackend {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target,
+                    view: scene_target,
                     resolve_target: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.02, g: 0.02, b: 0.025, a: 1.0 }), store: wgpu::StoreOp::Store },
                 })],
@@ -1053,6 +1156,48 @@ impl GraphicsBackend for WgpuBackend {
                         }
                     }
                 }
+            }
+        }
+        // post effects: bright pass (¼ size) → horizontal + vertical blur → composite to the window
+        if let (Some(fx), Some(t), Some(pp)) = (post, &self.post_targets, &self.post_pipes) {
+            let (w, h) = t.size;
+            let (qw, qh) = ((w / 4).max(1) as f32, (h / 4).max(1) as f32);
+            let c = c4(fx.tint, true);
+            let base = [[fx.exposure, fx.contrast, fx.saturation, fx.vignette], [fx.bloom, fx.bloom_threshold, 1.0 / w as f32, 1.0 / h as f32], [c[0], c[1], c[2], 1.0]];
+            let dirs = [[0.0, 0.0], [1.0 / qw, 0.0], [0.0, 1.0 / qh], [0.0, 0.0]];
+            for (k, d) in dirs.iter().enumerate() {
+                let u: [[f32; 4]; 4] = [base[0], base[1], base[2], [d[0], d[1], 0.0, 0.0]];
+                self.queue.write_buffer(&pp.uniforms, (k * 256) as u64, bytemuck::cast_slice(&u));
+            }
+            let bind = |k: usize, a: &wgpu::TextureView, b: &wgpu::TextureView| {
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("post"),
+                    layout: &pp.layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(a) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(b) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&pp.sampler) },
+                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &pp.uniforms, offset: (k * 256) as u64, size: wgpu::BufferSize::new(64) }) },
+                    ],
+                })
+            };
+            let steps = [
+                (&pp.bright, bind(0, &t.scene, &t.scene), &t.bloom_a),
+                (&pp.blur, bind(1, &t.bloom_a, &t.bloom_a), &t.bloom_b),
+                (&pp.blur, bind(2, &t.bloom_b, &t.bloom_b), &t.bloom_a),
+                (&pp.composite, bind(3, &t.scene, &t.bloom_a), &target),
+            ];
+            for (pipe, group, out) in steps.iter() {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("post"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: out, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(pipe);
+                pass.set_bind_group(0, group, &[]);
+                pass.draw(0..3, 0..1);
             }
         }
         self.queue.submit([enc.finish()]);

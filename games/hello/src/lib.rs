@@ -285,7 +285,10 @@ impl Game for HelloGame {
         world.spawn((
             Name("Render Settings".into()),
             // hemisphere ambient: cool sky light from above, warm bounce from the ground
-            RenderSettings { ambient: Color::rgb(0.26, 0.3, 0.4), ambient_ground: Some(Color::rgb(0.2, 0.15, 0.1)), fog: Some(Fog { color: sky, start: 9.0, end: 24.0 }) },
+            RenderSettings { ambient: Color::rgb(0.26, 0.3, 0.4), ambient_ground: Some(Color::rgb(0.2, 0.15, 0.1)),
+                // a little grading + glow (desktop: bloom / vignette too)
+                post: Some(goat_runtime::gfx::PostFx { saturation: 1.15, contrast: 1.05, vignette: 0.35, bloom: 0.6, bloom_threshold: 0.75, ..Default::default() }),
+                fog: Some(Fog { color: sky, start: 9.0, end: 24.0 }) },
         ));
         world.spawn((
             Name("Sun".into()),

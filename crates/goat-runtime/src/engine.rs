@@ -424,6 +424,7 @@ pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn Graphics
                 items,
                 depth: c.depth,
                 time: 0.0,
+                post: settings.post,
             }
         })
         .collect();

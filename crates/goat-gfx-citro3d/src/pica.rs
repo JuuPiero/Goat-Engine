@@ -155,6 +155,8 @@ pub struct Citro3dBackend {
     view_fog: bool,
     /// Seconds of the view being drawn (procedural animation).
     view_time: f32,
+    /// Color grading of the view (exposure × tint, texenv stage 4).
+    view_grade: Option<Color>,
     stereo: bool,
 }
 
@@ -360,6 +362,7 @@ impl Citro3dBackend {
                 current_rim: u32::MAX,
                 view_fog: false,
                 view_time: 0.0,
+                view_grade: None,
                 stereo: false,
             })
         }
@@ -745,6 +748,14 @@ impl Citro3dBackend {
                 c3d::C3D_TexEnvFunc(env3, c3d::C3D_RGB, ctru::GPU_MULTIPLY_ADD);
                 c3d::C3D_TexEnvColor(env3, abgr_u32(m.emissive));
             }
+            // stage 4: the view's color grading (exposure × tint; the rest of PostFx is desktop-only)
+            let env4 = c3d::C3D_GetTexEnv(4);
+            c3d::C3D_TexEnvInit(env4);
+            if let Some(g) = self.view_grade {
+                c3d::C3D_TexEnvSrc(env4, c3d::C3D_RGB, ctru::GPU_PREVIOUS, ctru::GPU_CONSTANT, 0);
+                c3d::C3D_TexEnvFunc(env4, c3d::C3D_RGB, ctru::GPU_MODULATE);
+                c3d::C3D_TexEnvColor(env4, abgr_u32(g));
+            }
             c3d::C3D_CullFace(match m.cull {
                 CullMode::None => ctru::GPU_CULL_NONE,
                 CullMode::Back => ctru::GPU_CULL_BACK_CCW,
@@ -788,6 +799,7 @@ impl Citro3dBackend {
             c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(1));
             c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(2));
             c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(3));
+            c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(4));
             c3d::C3D_AlphaTest(false, ctru::GPU_ALWAYS, 0);
             c3d::C3D_CullFace(ctru::GPU_CULL_NONE);
             c3d::C3D_DepthTest(true, ctru::GPU_ALWAYS, if color.is_some() { ctru::GPU_WRITE_ALL } else { ctru::GPU_WRITE_DEPTH });
@@ -855,6 +867,7 @@ impl Citro3dBackend {
         self.set_lights(v);
         self.set_fog(v);
         self.view_time = v.time;
+        self.view_grade = v.post.map(|p| Color::rgba((p.tint.r * p.exposure).min(1.0), (p.tint.g * p.exposure).min(1.0), (p.tint.b * p.exposure).min(1.0), 1.0));
 
         let order = v.draw_order(|m| self.materials.get(m).map(|m| m.blend));
         let mut last_material = None;
@@ -898,7 +911,7 @@ impl Citro3dBackend {
                     c3d::C3D_TexEnvSrc(env0, c3d::C3D_Both, ctru::GPU_CONSTANT, 0, 0);
                     c3d::C3D_TexEnvFunc(env0, c3d::C3D_Both, ctru::GPU_REPLACE);
                     c3d::C3D_TexEnvColor(env0, abgr_u32(Color::rgba(color.r, color.g, color.b, 1.0)));
-                    for k in 1..4 {
+                    for k in 1..5 {
                         c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(k));
                     }
                     c3d::C3D_AlphaTest(false, ctru::GPU_ALWAYS, 0);
