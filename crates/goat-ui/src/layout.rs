@@ -1,9 +1,8 @@
 //! Auto layout (Unity's Horizontal / Vertical / Grid Layout Group, Content Size Fitter, Layout
 //! Element) and RectMask2D-style clipping.
 
-use goat_core::math::{Vec2, Vec3};
+use goat_core::math::Vec2;
 use goat_runtime::{Entity, World};
-use goat_sprites::Quad;
 use serde::{Deserialize, Serialize};
 
 use crate::RectTransform;
@@ -221,34 +220,13 @@ pub(crate) fn arrange(g: &UiLayoutGroup, items: &[Item], a: Vec2, b: Vec2) -> Ve
 
 /// Clips an axis-aligned quad (world space, corners bottom-left / bottom-right / top-right /
 /// top-left) to [min, max] in x / y. Returns false when nothing is left.
-pub(crate) fn clip_quad(q: &mut Quad, min: Vec2, max: Vec2) -> bool {
-    let (x0, y0) = (q.corners[0].x, q.corners[0].y);
-    let (x1, y1) = (q.corners[2].x, q.corners[2].y);
-    if x1 <= min.x || x0 >= max.x || y1 <= min.y || y0 >= max.y || x1 <= x0 || y1 <= y0 {
-        return false;
-    }
-    let (nx0, nx1, ny0, ny1) = (x0.max(min.x), x1.min(max.x), y0.max(min.y), y1.min(max.y));
-    if (nx0, nx1, ny0, ny1) == (x0, x1, y0, y1) {
-        return true;
-    }
-    // uv interpolated along the quad's edges (uv[0] = bottom-left ... uv[3] = top-left)
-    let fx = |x: f32| (x - x0) / (x1 - x0);
-    let fy = |y: f32| (y - y0) / (y1 - y0);
-    let uv = q.uv;
-    let at = |u: f32, v: f32| -> [f32; 2] {
-        let bottom = [uv[0][0] + (uv[1][0] - uv[0][0]) * u, uv[0][1] + (uv[1][1] - uv[0][1]) * u];
-        let top = [uv[3][0] + (uv[2][0] - uv[3][0]) * u, uv[3][1] + (uv[2][1] - uv[3][1]) * u];
-        [bottom[0] + (top[0] - bottom[0]) * v, bottom[1] + (top[1] - bottom[1]) * v]
-    };
-    let z = q.corners[0].z;
-    q.corners = [Vec3::new(nx0, ny0, z), Vec3::new(nx1, ny0, z), Vec3::new(nx1, ny1, z), Vec3::new(nx0, ny1, z)];
-    q.uv = [at(fx(nx0), fy(ny0)), at(fx(nx1), fy(ny0)), at(fx(nx1), fy(ny1)), at(fx(nx0), fy(ny1))];
-    true
-}
+pub(crate) use goat_sprites::clip_quad;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use goat_core::math::Vec3;
+    use goat_sprites::Quad;
 
     fn it(e: u32, w: f32, h: f32) -> Item {
         Item { entity: Entity::from_bits((1u64 << 32) | e as u64).unwrap(), preferred: Vec2::new(w, h), flexible: Vec2::ONE }

@@ -40,6 +40,12 @@ struct SpriteJson {
     sorting_order: i32,
     #[serde(default = "alpha")]
     blend: String,
+    #[serde(default, skip_serializing_if = "is_none_mask")]
+    mask_interaction: crate::MaskInteraction,
+}
+
+fn is_none_mask(m: &crate::MaskInteraction) -> bool {
+    *m == crate::MaskInteraction::None
 }
 
 fn center() -> [f32; 2] {
@@ -78,6 +84,7 @@ fn save(ctx: &SaveContext, e: Entity) -> Option<Value> {
         layer: r.layer,
         sorting_order: r.sorting_order,
         blend: if r.blend == BlendMode::Additive { "additive" } else { "alpha" }.into(),
+        mask_interaction: r.mask_interaction,
     })
     .ok()
 }
@@ -99,6 +106,7 @@ fn load(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
         layer: j.layer.min(31),
         sorting_order: j.sorting_order,
         blend: if j.blend == "additive" { BlendMode::Additive } else { BlendMode::Alpha },
+        mask_interaction: j.mask_interaction,
     };
     ctx.world.insert_one(e, r).map_err(|_| "entity vanished".to_string())
 }

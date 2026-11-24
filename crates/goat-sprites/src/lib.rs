@@ -96,11 +96,37 @@ pub struct SpriteRenderer {
     pub sorting_order: i32,
     /// Alpha (default) or Additive (glows, particles).
     pub blend: BlendMode,
+    /// Shown only inside / outside the SpriteMasks (Unity's Mask Interaction).
+    pub mask_interaction: MaskInteraction,
+}
+
+/// How a SpriteRenderer reacts to [`SpriteMask`]s.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "scene", derive(serde::Serialize, serde::Deserialize))]
+pub enum MaskInteraction {
+    #[default]
+    None,
+    VisibleInsideMask,
+    VisibleOutsideMask,
+}
+
+/// A mask for sprites (Unity's SpriteMask): its rectangle (`size` world units around the
+/// object, scaled by it; zero = its own SpriteRenderer's sprite) shows / hides the sprites whose
+/// `mask_interaction` asks for it. Rectangular masks, sprites clipped exactly (uv included);
+/// rotated sprites are shown / hidden whole by their center.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "scene", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "scene", serde(default))]
+pub struct SpriteMask {
+    pub size: Vec2,
+    pub center: Vec2,
+    /// Masks only sprites with a sorting order in this range (Unity's custom range); None = all.
+    pub sorting_range: Option<(i32, i32)>,
 }
 
 impl SpriteRenderer {
     pub fn new(sprite: Sprite) -> Self {
-        SpriteRenderer { sprite, color: Color::WHITE, flip_x: false, flip_y: false, visible: true, layer: 0, sorting_order: 0, blend: BlendMode::Alpha }
+        SpriteRenderer { sprite, color: Color::WHITE, flip_x: false, flip_y: false, visible: true, layer: 0, sorting_order: 0, blend: BlendMode::Alpha, mask_interaction: MaskInteraction::None }
     }
     pub fn with_color(mut self, color: Color) -> Self {
         self.color = color;
@@ -230,6 +256,76 @@ impl Batcher {
     }
 }
 
+/// Clips an axis-aligned quad (corners 0 = bottom-left, 2 = top-right) to a rectangle in its XY
+/// plane, uv interpolated; false when nothing is left. (UI masks use it too.)
+pub fn clip_quad(q: &mut Quad, min: Vec2, max: Vec2) -> bool {
+    let (x0, y0) = (q.corners[0].x, q.corners[0].y);
+    let (x1, y1) = (q.corners[2].x, q.corners[2].y);
+    if x1 <= min.x || x0 >= max.x || y1 <= min.y || y0 >= max.y || x1 <= x0 || y1 <= y0 {
+        return false;
+    }
+    let (nx0, nx1, ny0, ny1) = (x0.max(min.x), x1.min(max.x), y0.max(min.y), y1.min(max.y));
+    if (nx0, nx1, ny0, ny1) == (x0, x1, y0, y1) {
+        return true;
+    }
+    let fx = |x: f32| (x - x0) / (x1 - x0);
+    let fy = |y: f32| (y - y0) / (y1 - y0);
+    let uv = q.uv;
+    let at = |u: f32, v: f32| -> [f32; 2] {
+        let bottom = [uv[0][0] + (uv[1][0] - uv[0][0]) * u, uv[0][1] + (uv[1][1] - uv[0][1]) * u];
+        let top = [uv[3][0] + (uv[2][0] - uv[3][0]) * u, uv[3][1] + (uv[2][1] - uv[3][1]) * u];
+        [bottom[0] + (top[0] - bottom[0]) * v, bottom[1] + (top[1] - bottom[1]) * v]
+    };
+    let z = q.corners[0].z;
+    q.corners = [Vec3::new(nx0, ny0, z), Vec3::new(nx1, ny0, z), Vec3::new(nx1, ny1, z), Vec3::new(nx0, ny1, z)];
+    q.uv = [at(fx(nx0), fy(ny0)), at(fx(nx1), fy(ny0)), at(fx(nx1), fy(ny1)), at(fx(nx0), fy(ny1))];
+    true
+}
+
+/// Is a quad axis-aligned in XY (no rotation)?
+fn axis_aligned(q: &Quad) -> bool {
+    let c = &q.corners;
+    (c[0].y - c[1].y).abs() < 1e-5 && (c[0].x - c[3].x).abs() < 1e-5 && c[1].x > c[0].x && c[3].y > c[0].y
+}
+
+/// Mask interaction: inside = the parts within any mask rect; outside = what no rect covers.
+fn apply_masks(q: Quad, rects: &[(Vec2, Vec2)], inside: bool, out: &mut Vec<Quad>) {
+    if !axis_aligned(&q) {
+        // rotated sprites: whole, by their center
+        let c = (q.corners[0] + q.corners[2]) * 0.5;
+        let within = rects.iter().any(|(a, b)| c.x >= a.x && c.x <= b.x && c.y >= a.y && c.y <= b.y);
+        if within == inside {
+            out.push(q);
+        }
+        return;
+    }
+    if inside {
+        for &(a, b) in rects {
+            let mut piece = q;
+            if clip_quad(&mut piece, a, b) {
+                out.push(piece);
+            }
+        }
+        return;
+    }
+    // outside: subtract every rect (up to 4 strips per rect)
+    let mut pieces = vec![q];
+    let big = 1e9;
+    for &(a, b) in rects {
+        let mut next = Vec::new();
+        for p in pieces {
+            for (lo, hi) in [(Vec2::new(-big, -big), Vec2::new(a.x, big)), (Vec2::new(b.x, -big), Vec2::new(big, big)), (Vec2::new(a.x, -big), Vec2::new(b.x, a.y)), (Vec2::new(a.x, b.y), Vec2::new(b.x, big))] {
+                let mut s = p;
+                if clip_quad(&mut s, lo, hi) {
+                    next.push(s);
+                }
+            }
+        }
+        pieces = next;
+    }
+    out.extend(pieces);
+}
+
 fn quad_of(r: &SpriteRenderer, m: &Mat4) -> Quad {
     let s = &r.sprite;
     let size = s.size();
@@ -286,7 +382,11 @@ impl Plugin for SpritePlugin {
     }
     fn build(&mut self, _ctx: &mut Context) {
         #[cfg(feature = "scene")]
-        goat_scene::registry(_ctx).component(scene::CODEC).component(goat_scene::serde_codec::<SpriteAnimator>("SpriteAnimator"));
+        {
+            let r = goat_scene::registry(_ctx);
+            r.component(scene::CODEC).component(goat_scene::serde_codec::<SpriteAnimator>("SpriteAnimator")).component(goat_scene::serde_codec::<SpriteMask>("SpriteMask"));
+            r.describe("SpriteMask", goat_scene::ComponentInfo::new("Rendering/Sprite Mask").tip("size", "World units (scaled by the object); zero = its own sprite"));
+        }
         #[cfg(feature = "script")]
         script::register(goat_script::extensions(_ctx));
     }
@@ -297,14 +397,33 @@ impl Plugin for SpritePlugin {
     }
 
     fn late_update(&mut self, ctx: &mut Context) {
-        let quads: Vec<Quad> = ctx
+        // world rectangles of the masks
+        let masks: Vec<(Vec2, Vec2, Option<(i32, i32)>)> = ctx
             .world
-            .query::<(&SpriteRenderer, &GlobalTransform)>()
+            .query::<(&SpriteMask, &GlobalTransform, Option<&SpriteRenderer>)>()
             .without::<&goat_runtime::InactiveInHierarchy>()
             .iter()
-            .filter(|(_, (r, _))| r.visible && r.color.a > 0.0)
-            .map(|(_, (r, g))| quad_of(r, &g.0))
+            .map(|(_, (m, g, r))| {
+                let size = if m.size == Vec2::ZERO { r.map(|r| r.sprite.size()).unwrap_or(Vec2::ONE) } else { m.size };
+                let (s, _, t) = g.0.to_scale_rotation_translation();
+                let c = Vec2::new(t.x, t.y) + m.center * s.truncate();
+                let h = size * s.truncate().abs() * 0.5;
+                (c - h, c + h, m.sorting_range)
+            })
             .collect();
+        let mut quads: Vec<Quad> = Vec::new();
+        for (_, (r, g)) in ctx.world.query::<(&SpriteRenderer, &GlobalTransform)>().without::<&goat_runtime::InactiveInHierarchy>().iter() {
+            if !r.visible || r.color.a <= 0.0 {
+                continue;
+            }
+            let q = quad_of(r, &g.0);
+            if r.mask_interaction == MaskInteraction::None {
+                quads.push(q);
+                continue;
+            }
+            let rects: Vec<(Vec2, Vec2)> = masks.iter().filter(|(_, _, range)| range.is_none_or(|(lo, hi)| (lo..=hi).contains(&r.sorting_order))).map(|(a, b, _)| (*a, *b)).collect();
+            apply_masks(q, &rects, r.mask_interaction == MaskInteraction::VisibleInsideMask, &mut quads);
+        }
         self.batcher.submit(ctx, quads);
     }
 }
@@ -314,6 +433,30 @@ mod tests {
     use super::*;
     use goat_core::handle::Pool;
 
+    #[test]
+    fn sprite_masks_clip_inside_and_outside() {
+        let mut pool: Pool<goat_gfx::TextureData> = Pool::new();
+        let tex = pool.insert(goat_gfx::TextureData::solid(Color::WHITE));
+        // a 2×2 sprite at the origin (100 px per unit, 200×200 texture), a mask over its right half
+        let q = quad_of(&SpriteRenderer::new(Sprite::new(tex, 200, 200)), &Mat4::IDENTITY);
+        let rect = [(Vec2::new(0.0, -5.0), Vec2::new(5.0, 5.0))];
+        let mut inside = Vec::new();
+        apply_masks(q, &rect, true, &mut inside);
+        assert_eq!(inside.len(), 1);
+        assert_eq!((inside[0].corners[0].x, inside[0].corners[2].x), (0.0, 1.0));
+        assert!((inside[0].uv[0][0] - 0.5).abs() < 1e-5, "uv follows the cut");
+        let mut outside = Vec::new();
+        apply_masks(q, &rect, false, &mut outside);
+        assert_eq!(outside.len(), 1);
+        assert_eq!((outside[0].corners[0].x, outside[0].corners[2].x), (-1.0, 0.0));
+        // a hole in the middle leaves 4 strips around it
+        let hole = [(Vec2::new(-0.5, -0.5), Vec2::new(0.5, 0.5))];
+        let mut ring = Vec::new();
+        apply_masks(q, &hole, false, &mut ring);
+        let area: f32 = ring.iter().map(|q| (q.corners[2].x - q.corners[0].x) * (q.corners[2].y - q.corners[0].y)).sum();
+        assert_eq!(ring.len(), 4);
+        assert!((area - 3.0).abs() < 1e-4);
+    }
     #[test]
     fn grid_cells_and_quad_uvs() {
         let mut pool: Pool<goat_gfx::TextureData> = Pool::new();

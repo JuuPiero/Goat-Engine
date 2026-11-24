@@ -202,6 +202,7 @@ world.spawn((Transform::from_position(pos), SpriteRenderer::new(coin).with_layer
 
 Camera có `culling_mask` (layer), `clear` (màu) và `clear_depth` (giống "Depth only" của Unity: dùng cho HUD vẽ đè lên camera trước).
 
+- `SpriteMask` (như Unity): hình chữ nhật `size` (đơn vị thế giới, nhân theo scale; 0 = theo sprite của chính nó) + `center`, tuỳ chọn `sorting_range`. SpriteRenderer có `mask_interaction`: `VisibleInsideMask` (chỉ hiện phần trong mask) / `VisibleOutsideMask` (khoét phần trong mask). Cắt chính xác cả UV, chạy trên mọi backend kể cả 3DS; sprite bị xoay thì ẩn / hiện cả cái theo tâm.
 ## Asset, scene, prefab
 
 Thư mục `assets/` của game:
