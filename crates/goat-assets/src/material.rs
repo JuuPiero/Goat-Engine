@@ -95,6 +95,9 @@ pub struct MaterialFile {
     pub outline_width: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_color: Option<FileColor>,
+    /// `{ "kind": "water" | "fire" | "noise", "color_a": "#...", "color_b": "#...", "scale": 4, "speed": 1 }`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub procedural: Option<goat_gfx::Procedural>,
 }
 
 impl MaterialFile {
@@ -123,6 +126,7 @@ impl MaterialFile {
             rim_power: self.rim_power.unwrap_or(d.rim_power),
             outline_width: self.outline_width.unwrap_or(0.0).max(0.0),
             outline_color: self.outline_color.map(|c| c.0).unwrap_or(d.outline_color),
+            procedural: self.procedural,
             blend,
             cull: match self.cull.as_deref() {
                 Some("none") | Some("off") => CullMode::None,

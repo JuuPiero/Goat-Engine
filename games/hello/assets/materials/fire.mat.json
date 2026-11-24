@@ -1,0 +1,1 @@
+{ "procedural": { "kind": "fire", "color_a": "#ff2a00", "color_b": "#ffe680", "scale": 6, "speed": 2.5 }, "lighting": "unlit", "blend": "additive", "cull": "none", "fog": false }

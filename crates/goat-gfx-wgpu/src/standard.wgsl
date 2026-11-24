@@ -31,6 +31,9 @@ struct Object {
     toon: vec4<f32>,        // x = steps (0 = smooth), y = rim power, z = outline width
     rim: vec4<f32>,
     outline: vec4<f32>,
+    procedural: vec4<f32>,  // x = kind + 1 (1 water, 2 fire, 3 noise; 0 none), y = scale, z = speed, w = time
+    proc_a: vec4<f32>,
+    proc_b: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -75,6 +78,41 @@ fn attenuation(d: f32, range: f32) -> f32 {
     return w * w;
 }
 
+fn hash2(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
+}
+fn vnoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = hash2(i);
+    let b = hash2(i + vec2<f32>(1.0, 0.0));
+    let c = hash2(i + vec2<f32>(0.0, 1.0));
+    let d = hash2(i + vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+/// The procedural texture (rgba) at uv: same looks as the 3DS proctex setups.
+fn procedural(uv: vec2<f32>) -> vec4<f32> {
+    let kind = object.procedural.x;
+    let s = object.procedural.y;
+    let t = object.procedural.w * object.procedural.z;
+    let n = vnoise(uv * s + vec2<f32>(t * 0.6, t * 0.4)) * 0.6 + vnoise(uv * s * 2.0 - vec2<f32>(t * 0.3, t)) * 0.4;
+    if (kind < 1.5) {
+        // water: mirrored bands of (u + v) bent by the noise
+        let x = fract((uv.x + uv.y) * 2.0 + n * 0.8 + t * 0.15) * 2.0;
+        let band = select(x, 2.0 - x, x > 1.0);
+        return vec4<f32>(mix(object.proc_a.rgb, object.proc_b.rgb, band), 1.0);
+    }
+    if (kind < 2.5) {
+        // fire: strong at the base (v = 1), torn by the noise, fading up
+        let h = clamp((1.0 - uv.y) * 1.2 + (n - 0.5) * 0.8, 0.0, 1.0);
+        let c = mix(object.proc_a.rgb, object.proc_b.rgb, h);
+        return vec4<f32>(c, clamp(1.0 - h * h, 0.0, 1.0));
+    }
+    return vec4<f32>(mix(object.proc_a.rgb, object.proc_b.rgb, n), 1.0);
+}
+
 // 4×4 Bayer thresholds (0..1)
 fn bayer(p: vec2<f32>) -> f32 {
     let m = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
@@ -85,7 +123,11 @@ fn bayer(p: vec2<f32>) -> f32 {
 
 @fragment
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
-    let albedo = textureSample(base_tex, base_sampler, i.uv) * i.color * object.base_color;
+    var tex = textureSample(base_tex, base_sampler, i.uv);
+    if (object.procedural.x > 0.5) {
+        tex = procedural(i.uv);
+    }
+    let albedo = tex * i.color * object.base_color;
     // alpha test (dithered: the cutoff spreads over ±0.25 with a screen pattern)
     let cutoff = abs(object.flags.w);
     if (cutoff > 0.0) {

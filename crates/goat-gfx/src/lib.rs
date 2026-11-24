@@ -186,6 +186,9 @@ pub struct MaterialDesc {
     /// world units, in `outline_color` (0 = off).
     pub outline_width: f32,
     pub outline_color: Color,
+    /// A procedural texture instead of `texture` (animated water / fire / noise): the 3DS
+    /// generates it in its proctex unit, desktops in the shader.
+    pub procedural: Option<Procedural>,
     pub blend: BlendMode,
     pub cull: CullMode,
     pub depth_write: bool,
@@ -214,12 +217,44 @@ impl Default for MaterialDesc {
             rim_power: 3.0,
             outline_width: 0.0,
             outline_color: Color::BLACK,
+            procedural: None,
             blend: BlendMode::Opaque,
             cull: CullMode::Back,
             depth_write: true,
             fog: true,
             depth_test: true,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProceduralKind {
+    /// Rippling bands between the two colors (water, lava).
+    #[default]
+    Water,
+    /// Flames rising along v: `color_a` at the base, `color_b` at the tips, alpha fading.
+    Fire,
+    /// Plain animated noise between the two colors (clouds, magic, static).
+    Noise,
+}
+
+/// An animated texture computed on the GPU.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Procedural {
+    pub kind: ProceduralKind,
+    pub color_a: Color,
+    pub color_b: Color,
+    /// Detail (noise frequency).
+    pub scale: f32,
+    /// Animation speed.
+    pub speed: f32,
+}
+
+impl Default for Procedural {
+    fn default() -> Self {
+        Procedural { kind: ProceduralKind::Water, color_a: Color::hex(0x1b4f8a), color_b: Color::hex(0x7fd0ff), scale: 4.0, speed: 1.0 }
     }
 }
 
@@ -413,6 +448,8 @@ pub struct RenderView {
     pub items: Vec<DrawItem>,
     /// Higher draws later (several cameras on one display).
     pub depth: i32,
+    /// Seconds since start (animated procedural materials).
+    pub time: f32,
 }
 
 impl RenderView {
@@ -533,6 +570,7 @@ mod tests {
             // camera looks down -Z: z = -1 is near, -9 far
             items: vec![item(alpha, -2.0), item(opaque, -9.0), item(alpha, -8.0), item(opaque, -1.0)],
             depth: 0,
+            time: 0.0,
         };
         let order = view.draw_order(|m| materials.get(m).map(|m| m.blend));
         assert_eq!(order, vec![3, 1, 2, 0]);

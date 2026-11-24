@@ -114,6 +114,12 @@ struct Fixed {
     attenuation_luts: HashMap<u32, Box<c3d::C3D_LightLutDA>>,
     spot_luts: HashMap<(i32, i32), Box<c3d::C3D_LightLut>>,
     fog_luts: HashMap<(u32, u32, u32, u32, bool), Box<c3d::C3D_FogLut>>,
+    /// Procedural texture unit (unit 3) state and its tables.
+    proctex: c3d::C3D_ProcTex,
+    pt_noise: c3d::C3D_ProcTexLut,
+    pt_rgb: c3d::C3D_ProcTexLut,
+    pt_alpha: c3d::C3D_ProcTexLut,
+    pt_color: c3d::C3D_ProcTexColorLut,
 }
 
 pub struct Citro3dBackend {
@@ -147,6 +153,8 @@ pub struct Citro3dBackend {
     current_rim: u32,
     /// The current view has fog (materials with `fog: false` turn it off for their draws).
     view_fog: bool,
+    /// Seconds of the view being drawn (procedural animation).
+    view_time: f32,
     stereo: bool,
 }
 
@@ -278,6 +286,11 @@ impl Citro3dBackend {
                 attenuation_luts: HashMap::new(),
                 spot_luts: HashMap::new(),
                 fog_luts: HashMap::new(),
+                proctex: std::mem::zeroed(),
+                pt_noise: std::mem::zeroed(),
+                pt_rgb: std::mem::zeroed(),
+                pt_alpha: std::mem::zeroed(),
+                pt_color: std::mem::zeroed(),
             });
             // ctru-sys and citro3d-sys generate the same struct twice: same layout, cast.
             let mut locs = [[-1i32; 4]; PROGRAMS];
@@ -346,8 +359,57 @@ impl Citro3dBackend {
                 current_lut: u32::MAX,
                 current_rim: u32::MAX,
                 view_fog: false,
+                view_time: 0.0,
                 stereo: false,
             })
+        }
+    }
+
+    /// Sets up the procedural texture unit for a material (None = off).
+    fn set_procedural(&mut self, p: Option<&Procedural>) {
+        let fixed = &mut *self.fixed;
+        // SAFETY: the proctex state / tables live in `fixed` (boxed, never move while bound).
+        unsafe {
+            let Some(p) = p else {
+                c3d::C3D_ProcTexBind(0, std::ptr::null_mut());
+                return;
+            };
+            let pt: *mut c3d::C3D_ProcTex = &mut fixed.proctex;
+            // the color table width is an 8-bit field: 256 would wrap to 0 (one flat color)
+            c3d::C3D_ProcTexInit(pt, 0, 128);
+            c3d::C3D_ProcTexNoiseEnable(pt, true);
+            let t = self.view_time * p.speed;
+            c3d::C3D_ProcTexNoiseCoefs(pt, c3d::C3D_ProcTex_UV as i32, 0.25, p.scale * 0.08, t * 0.12);
+            c3d::C3D_ProcTexFilter(pt, ctru::GPU_PT_LINEAR);
+            let lut = |f: &dyn Fn(f32) -> f32| -> [f32; 129] { std::array::from_fn(|i| f(i as f32 / 128.0).clamp(0.0, 1.0)) };
+            c3d::ProcTexLut_FromArray(&mut fixed.pt_noise, lut(&|x| x * x * (3.0 - 2.0 * x)).as_ptr());
+            let (a, b) = (p.color_a, p.color_b);
+            let mix = |k: f32| Color::rgba(a.r + (b.r - a.r) * k, a.g + (b.g - a.g) * k, a.b + (b.b - a.b) * k, 1.0);
+            let colors: [u32; 128] = std::array::from_fn(|i| abgr_u32(mix(i as f32 / 127.0)));
+            match p.kind {
+                ProceduralKind::Water => {
+                    c3d::C3D_ProcTexClamp(pt, ctru::GPU_PT_MIRRORED_REPEAT, ctru::GPU_PT_MIRRORED_REPEAT);
+                    c3d::C3D_ProcTexCombiner(pt, false, ctru::GPU_PT_ADD, ctru::GPU_PT_ADD);
+                    c3d::ProcTexLut_FromArray(&mut fixed.pt_rgb, lut(&|x| x).as_ptr());
+                }
+                ProceduralKind::Fire => {
+                    c3d::C3D_ProcTexClamp(pt, ctru::GPU_PT_CLAMP_TO_EDGE, ctru::GPU_PT_CLAMP_TO_EDGE);
+                    c3d::C3D_ProcTexCombiner(pt, true, ctru::GPU_PT_V, ctru::GPU_PT_V);
+                    c3d::ProcTexLut_FromArray(&mut fixed.pt_rgb, lut(&|x| 1.0 - x).as_ptr());
+                    c3d::ProcTexLut_FromArray(&mut fixed.pt_alpha, lut(&|x| 1.0 - (1.0 - x) * (1.0 - x)).as_ptr());
+                }
+                ProceduralKind::Noise => {
+                    c3d::C3D_ProcTexClamp(pt, ctru::GPU_PT_MIRRORED_REPEAT, ctru::GPU_PT_MIRRORED_REPEAT);
+                    c3d::C3D_ProcTexCombiner(pt, false, ctru::GPU_PT_SQRT2, ctru::GPU_PT_SQRT2);
+                    c3d::ProcTexLut_FromArray(&mut fixed.pt_rgb, lut(&|x| (x * 3.0).fract()).as_ptr());
+                }
+            }
+            c3d::ProcTexColorLut_Write(&mut fixed.pt_color, colors.as_ptr(), 0, 128);
+            c3d::C3D_ProcTexLutBind(ctru::GPU_LUT_NOISE, &mut fixed.pt_noise);
+            c3d::C3D_ProcTexLutBind(ctru::GPU_LUT_RGBMAP, &mut fixed.pt_rgb);
+            c3d::C3D_ProcTexLutBind(ctru::GPU_LUT_ALPHAMAP, &mut fixed.pt_alpha);
+            c3d::C3D_ProcTexColorLutBind(&mut fixed.pt_color);
+            c3d::C3D_ProcTexBind(0, pt);
         }
     }
 
@@ -593,6 +655,7 @@ impl Citro3dBackend {
         let env_map = if m.reflectivity > 0.0 { gpu(m.env_map, true, self) } else { None };
         let emissive_map = if env_map.is_none() { gpu(m.emissive_texture, false, self) } else { None };
         self.use_program(if env_map.is_some() { 1 } else { 0 });
+        self.set_procedural(m.procedural.as_ref());
         // SAFETY: texenv / light env / blend calls with valid pointers owned by the backend.
         unsafe {
             let tex = if debug("notex") { None } else { tex };
@@ -611,7 +674,11 @@ impl Citro3dBackend {
             }
             let env0 = c3d::C3D_GetTexEnv(0);
             c3d::C3D_TexEnvInit(env0);
-            if tex.is_some() {
+            if m.procedural.is_some() {
+                // the procedural texture replaces the base texture
+                c3d::C3D_TexEnvSrc(env0, c3d::C3D_Both, ctru::GPU_TEXTURE3, ctru::GPU_PRIMARY_COLOR, 0);
+                c3d::C3D_TexEnvFunc(env0, c3d::C3D_Both, ctru::GPU_MODULATE);
+            } else if tex.is_some() {
                 c3d::C3D_TexEnvSrc(env0, c3d::C3D_Both, base_src, ctru::GPU_PRIMARY_COLOR, 0);
                 c3d::C3D_TexEnvFunc(env0, c3d::C3D_Both, ctru::GPU_MODULATE);
             } else {
@@ -705,6 +772,7 @@ impl Citro3dBackend {
     /// (partial-viewport and depth-only clears; full color clears use C3D_RenderTargetClear).
     fn clear_viewport(&mut self, color: Option<Color>) {
         self.use_program(0);
+        self.set_procedural(None);
         let Some(quad) = &self.clear_quad else { return };
         let (vbo, ibo, count) = (quad.vertices(), quad.indices(), quad.index_count);
         let identity = to_c3d(Mat4::IDENTITY);
@@ -786,6 +854,7 @@ impl Citro3dBackend {
         self.use_program(k);
         self.set_lights(v);
         self.set_fog(v);
+        self.view_time = v.time;
 
         let order = v.draw_order(|m| self.materials.get(m).map(|m| m.blend));
         let mut last_material = None;

@@ -249,6 +249,7 @@ Các trường dưới đây ghi được trong `*.mat.json`, chạy được tr
 | `toon_steps` | Cel shading (ánh sáng chia bậc) |
 | `rim_color` + `rim_power` | Viền sáng ở mép (fresnel) |
 | `outline_width` + `outline_color` | Viền đen kiểu hoạt hình |
+| `procedural`: `{ "kind": "water" \| "fire" \| "noise", "color_a", "color_b", "scale", "speed" }` | Texture tự sinh có chuyển động (nước, lửa) |
 
 Thêm vào đó:
 - `RenderSettings.ambient_ground`: ambient bán cầu (trên là màu trời, dưới là màu đất).

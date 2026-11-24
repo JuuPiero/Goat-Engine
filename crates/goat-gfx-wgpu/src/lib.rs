@@ -111,6 +111,10 @@ struct ObjectUniform {
     toon: [f32; 4],
     rim: [f32; 4],
     outline: [f32; 4],
+    /// x = kind + 1 (0 = none), y = scale, z = speed, w = time
+    procedural: [f32; 4],
+    proc_a: [f32; 4],
+    proc_b: [f32; 4],
 }
 
 const UNIFORM_ALIGN: u64 = 256;
@@ -749,7 +753,8 @@ impl GraphicsBackend for WgpuBackend {
         // uniforms: [clear colors and frames per view][objects]
         let draws: usize = views.iter().map(|v| v.items.len()).sum();
         let frame_slots = (std::mem::size_of::<FrameUniform>() as u64).div_ceil(UNIFORM_ALIGN);
-        let needed = ((views.len() as u64) * (1 + frame_slots) + draws as u64 + 1) * UNIFORM_ALIGN;
+        let object_slots = (std::mem::size_of::<ObjectUniform>() as u64).div_ceil(UNIFORM_ALIGN);
+        let needed = ((views.len() as u64) * (1 + frame_slots) + draws as u64 * object_slots + 1) * UNIFORM_ALIGN;
         if needed > self.uniform_capacity {
             self.uniform_capacity = needed.next_power_of_two();
             self.uniforms = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -824,6 +829,9 @@ impl GraphicsBackend for WgpuBackend {
                     toon: [d.toon_steps as f32, d.rim_power.max(0.01), d.outline_width, 0.0],
                     rim: c4(d.rim_color, lin),
                     outline: c4(d.outline_color, lin),
+                    procedural: d.procedural.map(|p| [p.kind as u8 as f32 + 1.0, p.scale, p.speed, v.time]).unwrap_or([0.0; 4]),
+                    proc_a: d.procedural.map(|p| c4(p.color_a, lin)).unwrap_or([0.0; 4]),
+                    proc_b: d.procedural.map(|p| c4(p.color_b, lin)).unwrap_or([0.0; 4]),
                     flags: [if d.lighting == LightingModel::Lit { 1.0 } else { 0.0 }, if d.fog { 1.0 } else { 0.0 }, if d.env_map.is_some() { d.reflectivity } else { 0.0 }, if d.alpha_dither { -d.alpha_cutoff } else { d.alpha_cutoff }],
                 };
                 objects.push((it.mesh, it.material, put(bytemuck::bytes_of(&ou))));

@@ -425,6 +425,11 @@ impl Game for HelloGame {
         if let (Ok(sphere), Ok(mat)) = (goat_assets::mesh(ctx, "builtin:sphere"), goat_assets::material(ctx, "materials/toon.mat.json")) {
             ctx.world.spawn((Name("Toon Ball".into()), Transform::from_position(Vec3::new(0.9, 0.55, 2.2)).with_scale(Vec3::splat(1.1)), MeshRenderer::new(sphere, mat)));
         }
+        // procedural materials (3DS: the proctex unit): a pond and a flame
+        if let (Ok(plane), Ok(cube), Ok(water), Ok(fire)) = (goat_assets::mesh(ctx, "builtin:plane"), goat_assets::mesh(ctx, "builtin:cube"), goat_assets::material(ctx, "materials/water.mat.json"), goat_assets::material(ctx, "materials/fire.mat.json")) {
+            ctx.world.spawn((Name("Pond".into()), Transform::from_position(Vec3::new(-2.6, 0.01, 3.4)).with_scale(Vec3::new(0.22, 1.0, 0.16)), MeshRenderer::new(plane, water)));
+            ctx.world.spawn((Name("Flame".into()), Transform::from_position(Vec3::new(-2.6, 0.55, 3.4)).with_scale(Vec3::new(0.7, 1.1, 0.01)), MeshRenderer::new(cube, fire)));
+        }
         // a firework made in Unity, exported by tools/unity-goat-exporter
         match goat_scene::instantiate(ctx, "fx/Firework.prefab.json", None) {
             Ok(fw) => {

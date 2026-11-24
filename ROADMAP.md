@@ -30,7 +30,8 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ⬜ Shadow map bằng tính năng shadow của PICA cho 1 đèn
 - ✅ Toon: viền (`outline_width` / `outline_color`, vẽ lại mặt sau đẩy theo normal; 3DS: shader PICA thứ ba), cel shading (`toon_steps`; 3DS: specular0 × LUT D0 theo L·N)
 - ✅ Rim light (`rim_color` / `rim_power`; 3DS: specular1 × LUT D1 theo N·V), phản chiếu cubemap
-- ⬜ Procedural texture (proctex) cho nước / lửa, fog gas cho khói
+- ✅ Procedural texture (`procedural`: water / fire / noise; 3DS: đơn vị proctex của PICA, desktop: noise trong shader)
+- ⬜ Fog gas cho khói
 - ⬜ Shadow: blob / projected trên 3DS, shadow map trên desktop
 - ⬜ Post-process trên desktop; trên 3DS chỉ màn hình phẳng (pha màu bằng texenv)
 - ✅ Sprite / 2D (crate `goat-sprites`): Sprite + sprite sheet, SpriteRenderer (tint, flip, layer, sorting order), gom lô theo texture → 1 draw call mỗi lô

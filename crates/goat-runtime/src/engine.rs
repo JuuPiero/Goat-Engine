@@ -142,7 +142,8 @@ impl Engine {
                     p.late_update(ctx)
                 }
             });
-            let views = extract_views(&self.world, &self.displays, &*gfx, self.view_camera);
+            let mut views = extract_views(&self.world, &self.displays, &*gfx, self.view_camera);
+            views.iter_mut().for_each(|v| v.time = self.time.unscaled_elapsed);
             self.last_stats = gfx.render(&views);
             return;
         }
@@ -191,7 +192,8 @@ impl Engine {
         let t1 = crate::profiler::now();
         self.each_plugin(gfx, |p, ctx| p.late_update(ctx));
         let t2 = crate::profiler::now();
-        let views = extract_views(&self.world, &self.displays, &*gfx, self.view_camera);
+        let mut views = extract_views(&self.world, &self.displays, &*gfx, self.view_camera);
+        views.iter_mut().for_each(|v| v.time = self.time.elapsed);
         let t3 = crate::profiler::now();
         self.last_stats = gfx.render(&views);
         let t4 = crate::profiler::now();
@@ -417,6 +419,7 @@ pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn Graphics
                 fog: settings.fog,
                 items,
                 depth: c.depth,
+                time: 0.0,
             }
         })
         .collect();
