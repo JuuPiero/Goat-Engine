@@ -3,7 +3,8 @@
 // dockable panels (dockview: drag tabs to rearrange, split, stack; the layout is remembered) and
 // a status bar. Default layout: Hierarchy | Scene + Game | Inspector over Project + Console.
 import { useEffect, useRef } from 'react';
-import { DockviewReact, themeDark, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelProps } from 'dockview-react';
+import { DockviewDefaultTab, DockviewReact, themeDark, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview-react';
+import { dockBack, float, installPopouts, locationOf, popOut, popoutUrl } from './ui/popouts';
 import 'dockview-react/dist/styles/dockview.css';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { listen } from '@tauri-apps/api/event';
@@ -18,7 +19,7 @@ import { AnimatorWindow } from './panels/AnimatorWindow';
 import { getEngine, openScene, saveScene, startPlay, stepFrame, stopPlay, syncFiles, togglePause } from './engine';
 import { ProfilerPanel } from './panels/ProfilerPanel';
 import { BuildSettingsWindow, ProjectSettingsWindow } from './panels/SettingsWindows';
-import { ContextMenuHost, MenuBar, type MenuItem } from './ui/Menu';
+import { ContextMenuHost, MenuBar, openContextMenu, type MenuItem } from './ui/Menu';
 import * as commands from './commands';
 import { copy, cut, deleteSelection, duplicate, gameObjectMenu, hasClipboard, installShortcuts, mutate, paste, redo, selectAll, undo } from './commands';
 import { frameSelected } from './selection';
@@ -242,6 +243,7 @@ export function App() {
 
   const onReady = (e: DockviewReadyEvent) => {
     dv.current = e.api;
+    installPopouts(e.api);
     let restored = false;
     try {
       const saved = localStorage.getItem(LAYOUT_KEY);
@@ -289,12 +291,46 @@ export function App() {
       />
       <Toolbar dv={dv} />
       <div className="g-dock">
-        <DockviewReact className="dockview-theme-dark" theme={themeDark} components={components} onReady={onReady} />
+        <DockviewReact
+          className="dockview-theme-dark"
+          theme={themeDark}
+          components={components}
+          defaultTabComponent={PanelTab}
+          onReady={onReady}
+          popoutUrl={popoutUrl()}
+          // pointer events drive tab drags: HTML5 drag-and-drop is off in the Tauri webview (its
+          // native file drops are on, see dnd.ts)
+          dndStrategy="pointer"
+          floatingGroupDragHandle="titlebar"
+        />
       </div>
       <StatusBar dv={dv} />
       <ContextMenuHost />
     </div>
   );
+}
+
+/// Panels the editor needs (never closed from the tab menu).
+const CORE_PANELS = ['scene', 'game', 'hierarchy', 'inspector'];
+
+/// A dock tab with PiaEngine's tab menu: Pop Out to New Window / Float / Dock, Maximize, Close.
+/// Tabs are dragged onto another group, its edges or the dock's edges to move a panel.
+function PanelTab(props: IDockviewPanelHeaderProps) {
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const api = props.containerApi;
+    const panel = api.getPanel(props.api.id);
+    if (!panel) return;
+    const where = locationOf(panel);
+    openContextMenu(e, [
+      where === 'grid' || where === 'edge' ? { label: 'Pop Out to New Window', action: () => popOut(api, panel) } : { label: where === 'popout' ? 'Dock to Main Window' : 'Dock', action: () => dockBack(api, panel) },
+      { label: 'Float', disabled: where !== 'grid', action: () => float(api, panel) },
+      '-',
+      { label: panel.api.isMaximized() ? 'Restore' : 'Maximize', disabled: where !== 'grid', action: () => (panel.api.isMaximized() ? panel.api.exitMaximized() : panel.api.maximize()) },
+      { label: 'Close Tab', disabled: CORE_PANELS.includes(panel.id), action: () => panel.api.close() },
+    ]);
+  };
+  return <DockviewDefaultTab {...props} onContextMenu={onContextMenu} />;
 }
 
 /// Scene files of the project (File ▸ Open Scene), refreshed when files change.

@@ -340,6 +340,12 @@ fn main() {
         .setup(move |app| {
             let watcher = watch(app.handle().clone(), assets.clone());
             app.manage(AppState { project: Mutex::new(Project::new(assets.clone())), _watcher: Mutex::new(watcher) });
+            // the main window (tauri.conf.json, "create": false): built here so `window.open` is
+            // allowed — panels popped out of the dock (tab menu ▸ Pop Out) are popup windows
+            // sharing the page's JavaScript (WebView2's default new-window handling)
+            if let Some(cfg) = app.config().app.windows.iter().find(|w| w.label == "main").cloned() {
+                tauri::WebviewWindowBuilder::from_config(app, &cfg)?.on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow).build()?;
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

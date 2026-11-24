@@ -16,7 +16,8 @@
         "title": "GoatEngine Editor",
         "width": 1440,
         "height": 900,
-        "dragDropEnabled": true
+        "dragDropEnabled": true,
+        "create": false
       }
     ],
     "security": {
