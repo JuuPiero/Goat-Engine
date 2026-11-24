@@ -1,0 +1,15 @@
+[package]
+name = "goat-gfx-citro3d"
+description = "GoatEngine graphics backend for the Nintendo 3DS (PICA200 through citro3d): fragment lighting, stereoscopic 3D, supersampled top screen."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+
+[target.'cfg(target_os = "horizon")'.dependencies]
+ctru-sys = { git = "https://github.com/rust3ds/ctru-rs" }
+citro3d-sys = { git = "https://github.com/rust3ds/citro3d-rs" }

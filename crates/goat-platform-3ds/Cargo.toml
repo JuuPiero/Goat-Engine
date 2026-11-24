@@ -1,0 +1,16 @@
+[package]
+name = "goat-platform-3ds"
+description = "GoatEngine Nintendo 3DS platform: libctru main loop (APT), buttons / circle pad / touch input, graphics through goat-gfx-citro3d."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+goat-runtime.workspace = true
+goat-gfx-citro3d.workspace = true
+
+[target.'cfg(target_os = "horizon")'.dependencies]
+ctru-rs = { git = "https://github.com/rust3ds/ctru-rs" }
+ctru-sys = { git = "https://github.com/rust3ds/ctru-rs" }

@@ -1,0 +1,13 @@
+[package]
+name = "goat-input"
+description = "GoatEngine input actions (Unity's Input System): .inputactions.json assets with action maps, bindings, 2D / 1D composites, interactions (press / hold / tap), processors, rebinding overrides."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-runtime.workspace = true
+goat-assets.workspace = true
+serde.workspace = true
+serde_json.workspace = true

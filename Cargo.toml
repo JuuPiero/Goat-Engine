@@ -1,0 +1,109 @@
+[workspace]
+resolver = "2"
+# vendored third-party workspaces keep their own manifests
+exclude = ["third_party"]
+members = [
+    "crates/goat-core",
+    "crates/goat-gfx",
+    "crates/goat-runtime",
+    "crates/goat-gfx-wgpu",
+    "crates/goat-gfx-citro3d",
+    "crates/goat-sprites",
+    "crates/goat-assets",
+    "crates/goat-scene",
+    "crates/goat-text",
+    "crates/goat-physics",
+    "crates/goat-physics2d",
+    "crates/goat-input",
+    "crates/goat-script",
+    "crates/goat-script-js",
+    "crates/goat-audio",
+    "crates/goat-animation",
+    "crates/goat-particles",
+    "crates/goat-ui",
+    "crates/goat-platform-desktop",
+    "crates/goat-platform-3ds",
+    "games/hello",
+    "players/desktop",
+    "players/3ds",
+    "tools/goat",
+    "editor/src-tauri",
+    "editor/engine",
+]
+# `cargo build` / `cargo test` on the host: everything except the 3DS player
+# (players/3ds is built by `goat build 3ds`, i.e. `cargo +nightly 3ds build`).
+default-members = [
+    "crates/goat-core",
+    "crates/goat-gfx",
+    "crates/goat-runtime",
+    "crates/goat-gfx-wgpu",
+    "crates/goat-sprites",
+    "crates/goat-assets",
+    "crates/goat-scene",
+    "crates/goat-text",
+    "crates/goat-physics",
+    "crates/goat-physics2d",
+    "crates/goat-input",
+    "crates/goat-script",
+    "crates/goat-script-js",
+    "crates/goat-audio",
+    "crates/goat-animation",
+    "crates/goat-particles",
+    "crates/goat-ui",
+    "crates/goat-gfx-citro3d", # host build = only the portable parts (texture tiling + its test)
+    "crates/goat-platform-desktop",
+    "games/hello",
+    "players/desktop",
+    "tools/goat",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "MIT"
+
+[workspace.dependencies]
+goat-core = { path = "crates/goat-core" }
+goat-gfx = { path = "crates/goat-gfx" }
+goat-runtime = { path = "crates/goat-runtime" }
+goat-gfx-wgpu = { path = "crates/goat-gfx-wgpu" }
+goat-gfx-citro3d = { path = "crates/goat-gfx-citro3d" }
+goat-platform-desktop = { path = "crates/goat-platform-desktop" }
+goat-platform-3ds = { path = "crates/goat-platform-3ds" }
+goat-sprites = { path = "crates/goat-sprites" }
+goat-assets = { path = "crates/goat-assets" }
+goat-scene = { path = "crates/goat-scene" }
+goat-text = { path = "crates/goat-text" }
+goat-physics = { path = "crates/goat-physics" }
+goat-physics2d = { path = "crates/goat-physics2d" }
+goat-input = { path = "crates/goat-input" }
+goat-script = { path = "crates/goat-script" }
+goat-audio = { path = "crates/goat-audio" }
+goat-animation = { path = "crates/goat-animation" }
+goat-particles = { path = "crates/goat-particles" }
+goat-ui = { path = "crates/goat-ui" }
+hello-game = { path = "games/hello" }
+
+glam = { version = "0.30", default-features = false, features = ["std", "serde"] }
+hecs = "0.10"
+bytemuck = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = "thin"
+
+# The 3DS has 128 MB and a 268 MHz ARM11: optimise dependencies even in dev builds.
+[profile.dev.package."*"]
+opt-level = 2
+
+# rust3ds crates, vendored with a fix for Windows hosts (bindgen allowlists built from `\` paths).
+[patch."https://github.com/rust3ds/ctru-rs"]
+ctru-rs = { path = "third_party/ctru-rs/ctru-rs" }
+ctru-sys = { path = "third_party/ctru-rs/ctru-sys" }
+
+[patch."https://github.com/rust3ds/citro3d-rs"]
+citro3d-sys = { path = "third_party/citro3d-rs/citro3d-sys" }

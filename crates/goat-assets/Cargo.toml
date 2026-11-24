@@ -1,0 +1,16 @@
+[package]
+name = "goat-assets"
+description = "GoatEngine assets: files from the game's assets folder (romfs on the 3DS), PNG textures, glTF / GLB models, material files, an AssetServer that caches them by path."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+goat-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+png = "0.17"
+base64 = "0.22"
+gltf = { version = "1", default-features = false, features = ["utils", "names"] }

@@ -1,0 +1,24 @@
+[package]
+name = "hello-game"
+description = "GoatEngine sample game: one source, every platform."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "hello_game"
+
+[dependencies]
+goat-runtime.workspace = true
+goat-sprites = { workspace = true, features = ["scene"] }
+goat-assets.workspace = true
+goat-scene.workspace = true
+serde.workspace = true
+goat-text = { workspace = true, features = ["scene"] }
+goat-physics = { workspace = true, features = ["scene"] }
+goat-physics2d = { workspace = true, features = ["scene"] }
+goat-input.workspace = true
+goat-audio = { workspace = true, features = ["scene"] }
+goat-animation = { workspace = true, features = ["scene"] }
+goat-particles = { workspace = true, features = ["scene"] }
+goat-ui = { workspace = true, features = ["scene"] }

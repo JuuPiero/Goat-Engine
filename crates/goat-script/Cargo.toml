@@ -1,0 +1,18 @@
+[package]
+name = "goat-script"
+description = "GoatEngine scripting core: the Script component, the host interface every language implements (TypeScript / JavaScript, C / C++ through the C ABI, C#), and one engine API shared by all of them."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-runtime.workspace = true
+goat-assets.workspace = true
+goat-scene.workspace = true
+goat-input.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+goat-gfx.workspace = true

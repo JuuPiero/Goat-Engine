@@ -1,0 +1,11 @@
+[package]
+name = "goat-runtime"
+description = "GoatEngine runtime: the Engine (ECS world, components, scripts, input, time) and its render extraction. Platform-free."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+hecs.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "goat-particles"
+description = "GoatEngine particles (Shuriken-like core): emission rate / bursts, shapes, lifetime, speed, size, rotation, color / size over lifetime, gravity, drag; camera-facing billboards batched per texture."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+goat-runtime.workspace = true
+goat-assets.workspace = true
+goat-sprites.workspace = true
+hecs.workspace = true
+serde.workspace = true
+goat-scene = { workspace = true, optional = true }
+
+[features]
+# ParticleSystem in scene files
+scene = ["dep:goat-scene"]

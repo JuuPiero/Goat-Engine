@@ -1,0 +1,27 @@
+{
+  "maps": [
+    {
+      "name": "Player",
+      "actions": [
+        {
+          "name": "Orbit",
+          "type": "value",
+          "processors": "stickDeadzone(min=0.12,max=0.95)",
+          "bindings": [
+            { "path": "<Gamepad>/leftStick" },
+            { "composite": "2DVector", "up": "<Gamepad>/dpad/up", "down": "<Gamepad>/dpad/down", "left": "<Gamepad>/dpad/left", "right": "<Gamepad>/dpad/right" }
+          ]
+        },
+        {
+          "name": "Zoom",
+          "type": "value",
+          "bindings": [ { "composite": "1DAxis", "negative": "<Gamepad>/rightShoulder", "positive": "<Gamepad>/leftShoulder" } ]
+        },
+        { "name": "AutoOrbit", "type": "button", "bindings": [ { "path": "<Gamepad>/buttonEast" } ] },
+        { "name": "Poke", "type": "button", "bindings": [ { "path": "<Gamepad>/buttonNorth" } ] },
+        { "name": "Sleep", "type": "button", "interactions": "hold(duration=0.4)", "bindings": [ { "path": "<Gamepad>/buttonWest" } ] },
+        { "name": "Quit", "type": "button", "bindings": [ { "path": "<Gamepad>/start" } ] }
+      ]
+    }
+  ]
+}

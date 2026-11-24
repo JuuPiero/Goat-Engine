@@ -1,0 +1,449 @@
+//! Animation (Unity's legacy `Animation` component, glTF clips) + CPU skinning.
+//!
+//! - [`Animator`] on a model instance root (an entity spawned with `spawn_model` / a scene
+//!   `model` entry) plays the model's clips by name. Several states can play at once with
+//!   weights (layers on different nodes, crossfades on the same nodes); [`Animator::crossfade`]
+//!   ramps weights over a duration.
+//! - With an Animator Controller ([`controller`], `.controller.json`), the Animator runs a state
+//!   machine instead: parameters (`set_float` / `set_bool` / `set_integer` / `set_trigger`),
+//!   transitions, 1D blend trees, override layers â€” Unity's Mecanim workflow.
+//! - [`AnimationPlugin::update`] samples the clips (step / linear; rotations nlerp'd with sign
+//!   alignment) into the node entities' Transforms, before transform propagation.
+//! - [`AnimationPlugin::late_update`] deforms skinned meshes on the CPU (linear blend skinning,
+//!   4 joints per vertex) into a per-instance mesh: portable — the 3DS's vertex shader has too
+//!   few uniforms for real skeletons.
+
+pub mod controller;
+#[cfg(feature = "scene")]
+pub mod scene;
+
+pub use controller::{ControllerData, ControllerState};
+use std::sync::Arc;
+
+use std::collections::HashMap;
+
+use goat_assets::{AnimPath, AssetServer, Interpolation, ModelAnimation, ModelNodes, SkinnedMesh};
+use goat_core::math::{Mat4, Quat, Vec3, Vec4};
+use goat_gfx::{MeshData, Vertex};
+use goat_runtime::{Context, Entity, GlobalTransform, MeshRenderer, Plugin, Transform, World};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnimState {
+    pub clip: String,
+    pub time: f32,
+    pub speed: f32,
+    pub weight: f32,
+    pub looping: bool,
+    /// Weight change per second (crossfades); the state is dropped when it fades to 0.
+    pub fade: f32,
+}
+
+/// Plays a model's clips on its node entities â€” directly (`states`) or through an Animator
+/// Controller state machine (`controller`).
+#[derive(Clone, Debug)]
+pub struct Animator {
+    pub states: Vec<AnimState>,
+    /// Pauses every state.
+    pub paused: bool,
+    /// The state machine driving this animator (replaces `states` when set).
+    pub controller: Option<ControllerState>,
+    /// Asset key of the controller (saved in scenes).
+    pub controller_key: Option<String>,
+    /// Playback speed multiplier (controller mode).
+    pub speed: f32,
+}
+
+impl Default for Animator {
+    fn default() -> Self {
+        Animator { states: Vec::new(), paused: false, controller: None, controller_key: None, speed: 1.0 }
+    }
+}
+
+/// Reads a `.controller.json` asset.
+pub fn load_controller(assets: &AssetServer, key: &str) -> Result<Arc<ControllerData>, String> {
+    let text = assets.io.read_string(key).map_err(|e| e.to_string())?;
+    ControllerData::parse(&text).map(Arc::new).map_err(|e| format!("{key}: {e}"))
+}
+
+impl Animator {
+    /// An animator driven by a controller.
+    pub fn with_controller(data: Arc<ControllerData>) -> Self {
+        Animator { controller: Some(ControllerState::new(data)), speed: 1.0, ..Default::default() }
+    }
+    /// Loads `key` (a `.controller.json`) and drives the animator with it.
+    pub fn from_controller_asset(assets: &AssetServer, key: &str) -> Result<Self, String> {
+        let mut a = Animator::with_controller(load_controller(assets, key)?);
+        a.controller_key = Some(key.into());
+        Ok(a)
+    }
+    pub fn set_float(&mut self, name: &str, v: f32) {
+        if let Some(c) = &mut self.controller {
+            c.set(name, v);
+        }
+    }
+    pub fn set_integer(&mut self, name: &str, v: i32) {
+        self.set_float(name, v as f32);
+    }
+    pub fn set_bool(&mut self, name: &str, v: bool) {
+        self.set_float(name, v as u8 as f32);
+    }
+    pub fn set_trigger(&mut self, name: &str) {
+        self.set_float(name, 1.0);
+    }
+    pub fn reset_trigger(&mut self, name: &str) {
+        self.set_float(name, 0.0);
+    }
+    pub fn get_float(&self, name: &str) -> f32 {
+        self.controller.as_ref().and_then(|c| c.get(name)).unwrap_or(0.0)
+    }
+    pub fn get_integer(&self, name: &str) -> i32 {
+        self.get_float(name) as i32
+    }
+    pub fn get_bool(&self, name: &str) -> bool {
+        self.get_float(name) != 0.0
+    }
+    /// The current state of a controller layer.
+    pub fn current_state(&self, layer: usize) -> Option<&str> {
+        self.controller.as_ref()?.current_state(layer)
+    }
+    pub fn is_in_transition(&self, layer: usize) -> bool {
+        self.controller.as_ref().is_some_and(|c| c.is_in_transition(layer))
+    }
+    /// Playing `clip` (looping) from the start.
+    pub fn playing(clip: &str) -> Self {
+        let mut a = Animator::default();
+        a.play(clip);
+        a
+    }
+    /// Plays `clip` alone, from the start (controller: jumps to the state named `clip`).
+    pub fn play(&mut self, clip: &str) {
+        if let Some(c) = &mut self.controller {
+            c.play(clip, 0, 0.0);
+            return;
+        }
+        self.states = vec![AnimState { clip: clip.into(), time: 0.0, speed: 1.0, weight: 1.0, looping: true, fade: 0.0 }];
+    }
+    /// Adds a clip on top (other nodes animate together; same nodes blend by weight).
+    pub fn add(&mut self, clip: &str, weight: f32) {
+        self.states.retain(|s| s.clip != clip);
+        self.states.push(AnimState { clip: clip.into(), time: 0.0, speed: 1.0, weight, looping: true, fade: 0.0 });
+    }
+    /// Fades `clip` in and every other state out over `seconds`.
+    pub fn crossfade(&mut self, clip: &str, seconds: f32) {
+        if let Some(c) = &mut self.controller {
+            c.play(clip, 0, seconds);
+            return;
+        }
+        let rate = 1.0 / seconds.max(1e-3);
+        for s in &mut self.states {
+            s.fade = -rate;
+        }
+        match self.states.iter_mut().find(|s| s.clip == clip) {
+            Some(s) => s.fade = rate,
+            None => self.states.push(AnimState { clip: clip.into(), time: 0.0, speed: 1.0, weight: 0.0, looping: true, fade: rate }),
+        }
+    }
+    pub fn stop(&mut self) {
+        self.states.clear();
+    }
+    pub fn is_playing(&self, clip: &str) -> bool {
+        self.states.iter().any(|s| s.clip == clip && s.weight > 0.0)
+    }
+}
+
+/// Value of one channel at `t` (xyz(w)).
+fn sample(times: &[f32], values: &[Vec4], interpolation: Interpolation, rotation: bool, t: f32) -> Vec4 {
+    let i = times.partition_point(|&k| k <= t);
+    if i == 0 {
+        return values[0];
+    }
+    if i >= times.len() {
+        return values[times.len() - 1];
+    }
+    let (a, b) = (values[i - 1], values[i]);
+    if interpolation == Interpolation::Step {
+        return a;
+    }
+    let span = (times[i] - times[i - 1]).max(1e-6);
+    let f = (t - times[i - 1]) / span;
+    if rotation {
+        let b = if a.dot(b) < 0.0 { -b } else { b };
+        a.lerp(b, f).normalize()
+    } else {
+        a.lerp(b, f)
+    }
+}
+
+/// Weighted accumulation of the animated values of a node.
+#[derive(Default, Clone, Copy)]
+struct Acc {
+    t: Vec4,
+    tw: f32,
+    r: Vec4,
+    rw: f32,
+    s: Vec4,
+    sw: f32,
+}
+
+/// Samples the states into node transforms (`node index → entity`).
+pub fn apply(world: &mut World, nodes: &[Option<Entity>], clips: &[(&ModelAnimation, f32, f32)]) {
+    let mut acc: HashMap<usize, Acc> = HashMap::new();
+    for (anim, time, weight) in clips {
+        if *weight <= 0.0 {
+            continue;
+        }
+        for ch in &anim.channels {
+            let rot = ch.path == AnimPath::Rotation;
+            let v = sample(&ch.times, &ch.values, ch.interpolation, rot, *time);
+            let a = acc.entry(ch.node).or_default();
+            match ch.path {
+                AnimPath::Translation => {
+                    a.t += v * *weight;
+                    a.tw += weight;
+                }
+                AnimPath::Rotation => {
+                    // keep quaternions in one hemisphere before summing
+                    let v = if a.rw > 0.0 && a.r.dot(v) < 0.0 { -v } else { v };
+                    a.r += v * *weight;
+                    a.rw += weight;
+                }
+                AnimPath::Scale => {
+                    a.s += v * *weight;
+                    a.sw += weight;
+                }
+            }
+        }
+    }
+    for (node, a) in acc {
+        let Some(Some(e)) = nodes.get(node) else { continue };
+        let Ok(mut t) = world.get::<&mut Transform>(*e) else { continue };
+        // partial weights blend with the current (rest) pose
+        if a.tw > 0.0 {
+            let v = (a.t / a.tw).truncate();
+            t.position = t.position.lerp(v, a.tw.min(1.0));
+        }
+        if a.rw > 0.0 {
+            let q = a.r / a.rw;
+            let q = Quat::from_xyzw(q.x, q.y, q.z, q.w).normalize();
+            t.rotation = t.rotation.slerp(q, a.rw.min(1.0));
+        }
+        if a.sw > 0.0 {
+            let v = (a.s / a.sw).truncate();
+            t.scale = t.scale.lerp(v, a.sw.min(1.0));
+        }
+    }
+}
+
+/// Linear blend skinning of a bind-pose mesh by joint matrices (`joint world * inverse bind`,
+/// already in the mesh's space).
+pub fn skin(base: &MeshData, joints: &[[u16; 4]], weights: &[[f32; 4]], palette: &[Mat4], out: &mut MeshData) {
+    out.indices.clone_from(&base.indices);
+    out.vertices.resize(base.vertices.len(), Vertex::default());
+    for (i, v) in base.vertices.iter().enumerate() {
+        let (j, w) = (joints[i], weights[i]);
+        let mut m = Mat4::ZERO;
+        let mut total = 0.0;
+        for k in 0..4 {
+            if w[k] > 0.0 {
+                if let Some(p) = palette.get(j[k] as usize) {
+                    m += *p * w[k];
+                    total += w[k];
+                }
+            }
+        }
+        let m = if total > 0.0 { m * (1.0 / total) } else { Mat4::IDENTITY };
+        let mut o = *v;
+        o.position = m.transform_point3(Vec3::from(v.position)).into();
+        o.normal = m.transform_vector3(Vec3::from(v.normal)).normalize_or(Vec3::Y).into();
+        out.vertices[i] = o;
+    }
+}
+
+/// Advances animators, poses node transforms, skins meshes.
+#[derive(Default)]
+pub struct AnimationPlugin {
+    scratch: MeshData,
+}
+
+impl Plugin for AnimationPlugin {
+    fn build(&mut self, _ctx: &mut Context) {
+        #[cfg(feature = "scene")]
+        goat_scene::registry(_ctx).component(scene::CODEC);
+    }
+
+    fn update(&mut self, ctx: &mut Context) {
+        let dt = ctx.time.delta;
+        let Some(assets) = ctx.resources.get::<AssetServer>() else { return };
+        let roots: Vec<Entity> = ctx.world.query::<&Animator>().iter().map(|(e, _)| e).collect();
+        for root in roots {
+            let Ok(key) = ctx.world.get::<&goat_assets::ModelInstance>(root).map(|m| m.key.clone()) else { continue };
+            let Some(model) = assets.loaded_model(&key) else { continue };
+            let Ok(nodes) = ctx.world.get::<&ModelNodes>(root).map(|n| n.0.clone()) else { continue };
+            let mut sampled = Vec::new();
+            // controller mode: (layer weight, clips) per layer
+            let mut layers = None;
+            if let Ok(mut anim) = ctx.world.get::<&mut Animator>(root) {
+                let paused = anim.paused;
+                let step = if paused { 0.0 } else { dt * anim.speed };
+                if let Some(c) = anim.controller.as_mut() {
+                    let durations = |name: &str| model.data.animation(name).map(|a| a.duration);
+                    layers = Some(c.update(step, &durations));
+                }
+                for s in anim.states.iter_mut().filter(|_| layers.is_none()) {
+                    let Some(clip) = model.data.animation(&s.clip) else { continue };
+                    if !paused {
+                        s.time += dt * s.speed;
+                        s.weight = (s.weight + s.fade * dt).clamp(0.0, 1.0);
+                        if s.fade > 0.0 && s.weight >= 1.0 {
+                            s.fade = 0.0;
+                        }
+                    }
+                    let d = clip.duration.max(1e-4);
+                    let t = if s.looping { s.time.rem_euclid(d) } else { s.time.min(d) };
+                    sampled.push((s.clip.clone(), t, s.weight));
+                }
+                anim.states.retain(|s| !(s.fade < 0.0 && s.weight <= 0.0));
+            }
+            if let Some(layers) = layers {
+                // layer 0 poses the model; the next ones override it by their weight
+                for (weight, clips) in layers {
+                    let clips: Vec<(&ModelAnimation, f32, f32)> = clips.iter().filter_map(|(n, t, w)| model.data.animation(n).map(|a| (a, *t, *w * weight))).collect();
+                    apply(ctx.world, &nodes, &clips);
+                }
+                continue;
+            }
+            let clips: Vec<(&ModelAnimation, f32, f32)> = sampled.iter().filter_map(|(c, t, w)| model.data.animation(c).map(|a| (a, *t, *w))).collect();
+            apply(ctx.world, &nodes, &clips);
+        }
+    }
+
+    fn late_update(&mut self, ctx: &mut Context) {
+        let Some(assets) = ctx.resources.get::<AssetServer>() else { return };
+        let skinned: Vec<Entity> = ctx.world.query::<&SkinnedMesh>().iter().map(|(e, _)| e).collect();
+        for e in skinned {
+            let Ok(sm) = ctx.world.get::<&SkinnedMesh>(e).map(|s| (*s).clone()) else { continue };
+            let Some(model) = assets.loaded_model(&sm.model) else { continue };
+            let Some(prim) = model.data.meshes.get(sm.mesh).and_then(|m| m.get(sm.primitive)) else { continue };
+            let (Some(sv), Some(model_skin)) = (&prim.skin_vertices, model.data.skins.get(sm.skin)) else { continue };
+            let Ok(nodes) = ctx.world.get::<&ModelNodes>(sm.root).map(|n| n.0.clone()) else { continue };
+            let mesh_world = ctx.world.get::<&GlobalTransform>(e).map(|g| g.0).unwrap_or(Mat4::IDENTITY);
+            let to_mesh = mesh_world.inverse();
+            let palette: Vec<Mat4> = model_skin
+                .joints
+                .iter()
+                .zip(&model_skin.inverse_bind)
+                .map(|(&j, ibm)| {
+                    let jw = nodes.get(j).copied().flatten().and_then(|je| ctx.world.get::<&GlobalTransform>(je).ok().map(|g| g.0)).unwrap_or(Mat4::IDENTITY);
+                    to_mesh * jw * *ibm
+                })
+                .collect();
+            skin(&prim.mesh, &sv.joints, &sv.weights, &palette, &mut self.scratch);
+            // a mesh of this instance's own (the shared one stays in bind pose)
+            let instance = match sm.instance {
+                Some(m) => m,
+                None => match ctx.gfx.create_mesh(&self.scratch) {
+                    Ok(m) => {
+                        if let Ok(mut s) = ctx.world.get::<&mut SkinnedMesh>(e) {
+                            s.instance = Some(m);
+                        }
+                        if let Ok(mut r) = ctx.world.get::<&mut MeshRenderer>(e) {
+                            r.mesh = m;
+                        }
+                        continue;
+                    }
+                    Err(_) => continue,
+                },
+            };
+            let _ = ctx.gfx.update_mesh(instance, &self.scratch);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use goat_assets::{AssetIo, AssetServer};
+    use goat_gfx::NullBackend;
+
+    #[test]
+    fn sampling_interpolates_and_clamps() {
+        let times = [0.0, 1.0, 2.0];
+        let values = [Vec4::ZERO, Vec4::new(2.0, 0.0, 0.0, 0.0), Vec4::new(2.0, 4.0, 0.0, 0.0)];
+        assert_eq!(sample(&times, &values, Interpolation::Linear, false, 0.5).x, 1.0);
+        assert_eq!(sample(&times, &values, Interpolation::Step, false, 1.5).y, 0.0);
+        assert_eq!(sample(&times, &values, Interpolation::Linear, false, 9.0).y, 4.0);
+        assert_eq!(sample(&times, &values, Interpolation::Linear, false, -1.0), Vec4::ZERO);
+    }
+
+    #[test]
+    fn the_sample_tentacle_sways_and_skins() {
+        let mut gfx = NullBackend::new();
+        let mut assets = AssetServer::new(AssetIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/hello/assets")));
+        let mut world = World::new();
+        let root = assets.spawn_model(&mut world, &mut gfx, "models/tentacle.glb", None).unwrap();
+        let nodes = world.get::<&ModelNodes>(root).unwrap().0.clone();
+        let model = assets.loaded_model("models/tentacle.glb").unwrap();
+        let sway = model.data.animation("Sway").unwrap();
+        // pose at 0.5 s vs rest: some bone rotated
+        let bone = sway.channels.iter().find(|c| c.path == AnimPath::Rotation).unwrap().node;
+        let rest = world.get::<&Transform>(nodes[bone].unwrap()).unwrap().rotation;
+        apply(&mut world, &nodes, &[(sway, 0.5, 1.0)]);
+        let posed = world.get::<&Transform>(nodes[bone].unwrap()).unwrap().rotation;
+        assert!(rest.angle_between(posed) > 0.05, "bone moved");
+        // skinning with an identity palette returns the bind pose
+        let prim = model.data.meshes.iter().flatten().find(|p| p.skin_vertices.is_some()).unwrap();
+        let sv = prim.skin_vertices.as_ref().unwrap();
+        let mut out = MeshData::default();
+        skin(&prim.mesh, &sv.joints, &sv.weights, &vec![Mat4::IDENTITY; 4], &mut out);
+        assert_eq!(out.vertices.len(), prim.mesh.vertices.len());
+        assert!((Vec3::from(out.vertices[7].position) - Vec3::from(prim.mesh.vertices[7].position)).length() < 1e-5);
+        // and moving every joint up moves the mesh up
+        skin(&prim.mesh, &sv.joints, &sv.weights, &vec![Mat4::from_translation(Vec3::Y); 4], &mut out);
+        assert!((out.vertices[7].position[1] - prim.mesh.vertices[7].position[1] - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_sample_controller_drives_the_tentacle() {
+        struct G;
+        impl goat_runtime::Game for G {
+            fn start(&mut self, ctx: &mut Context) {
+                let mut assets = AssetServer::new(AssetIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/hello/assets")));
+                let root = assets.spawn_model(ctx.world, ctx.gfx, "models/tentacle.glb", None).unwrap();
+                let anim = Animator::from_controller_asset(&assets, "animators/tentacle.controller.json").unwrap();
+                ctx.world.insert(root, (anim, goat_runtime::Name("T".into()))).unwrap();
+                ctx.resources.insert(assets);
+            }
+            fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+                vec![Box::new(AnimationPlugin::default())]
+            }
+        }
+        let mut gfx = NullBackend::new();
+        let mut e = goat_runtime::Engine::new(G);
+        e.frame(0.0, &mut gfx);
+        let root = e.world.query::<&goat_runtime::Name>().iter().find(|(_, n)| n.0 == "T").unwrap().0;
+        let nodes = e.world.get::<&ModelNodes>(root).unwrap().0.clone();
+        let bone = e.resources.get::<AssetServer>().unwrap().loaded_model("models/tentacle.glb").unwrap().data.animation("Sway").unwrap().channels.iter().find(|c| c.path == AnimPath::Rotation).unwrap().node;
+        let rest = e.world.get::<&Transform>(nodes[bone].unwrap()).unwrap().rotation;
+        for _ in 0..30 {
+            e.frame(1.0 / 60.0, &mut gfx);
+        }
+        let posed = e.world.get::<&Transform>(nodes[bone].unwrap()).unwrap().rotation;
+        assert!(rest.angle_between(posed) > 0.01, "the Idle blend tree posed the bone");
+        e.world.get::<&mut Animator>(root).unwrap().set_trigger("poke");
+        e.frame(1.0 / 60.0, &mut gfx);
+        e.frame(0.2, &mut gfx);
+        assert_eq!(e.world.get::<&Animator>(root).unwrap().current_state(0), Some("Poke"));
+        for _ in 0..120 {
+            e.frame(1.0 / 60.0, &mut gfx);
+        }
+        assert_eq!(e.world.get::<&Animator>(root).unwrap().current_state(0), Some("Idle"), "back after the exit time");
+    }
+
+    #[test]
+    fn crossfade_moves_weight_over_time() {
+        let mut a = Animator::playing("A");
+        a.crossfade("B", 0.5);
+        assert_eq!(a.states.len(), 2);
+        assert!(a.states.iter().all(|s| s.fade != 0.0));
+    }
+}

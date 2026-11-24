@@ -1,0 +1,6 @@
+target/
+*.3dsx
+*.smdh
+*.elf
+/out/
+goat.local.toml

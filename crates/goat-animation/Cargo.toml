@@ -1,0 +1,20 @@
+[package]
+name = "goat-animation"
+description = "GoatEngine animation: Animator playing glTF clips on model instances (weighted states, crossfades, Animator Controller state machines with parameters / transitions / blend trees / layers) and CPU skinning of skinned meshes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+goat-runtime.workspace = true
+goat-assets.workspace = true
+hecs.workspace = true
+goat-scene = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+# Animator in scene / prefab files
+scene = ["dep:goat-scene"]

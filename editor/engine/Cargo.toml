@@ -1,0 +1,30 @@
+[package]
+name = "goat-editor-engine"
+description = "The engine inside the editor (WebAssembly): Scene view (edit world, editor camera, picking, transform edits, saving) and Play mode (the game running in the Game view), rendered by goat-gfx-wgpu on a canvas (WebGPU / WebGL2)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+goat-runtime.workspace = true
+goat-assets.workspace = true
+goat-scene.workspace = true
+goat-gfx-wgpu.workspace = true
+hello-game.workspace = true
+goat-particles.workspace = true
+goat-physics2d.workspace = true
+hecs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.100"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "console"] }
+wgpu = "25"
+console_error_panic_hook = "0.1"

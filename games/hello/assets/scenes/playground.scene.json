@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "entities": [
+    { "id": 1, "name": "Render Settings", "components": { "RenderSettings": { "ambient": "#3a4152" } } },
+    { "id": 2, "name": "Sun", "components": { "Transform": { "euler": [-55, 30, 0] }, "DirectionalLight": { "color": "#fff4e0", "intensity": 0.9 } } },
+    { "id": 3, "name": "Main Camera", "components": {
+        "Transform": { "position": [0, 4.5, 9], "euler": [-25, 0, 0] },
+        "Camera": { "projection": { "perspective": { "fov": 55, "near": 0.1, "far": 100 } }, "clear": "#1d2330", "culling_mask": 1073741823 },
+        "AudioListener": null } },
+    { "id": 4, "name": "Ground", "components": {
+        "Transform": { "position": [0, -0.5, 0], "scale": [12, 1, 12] },
+        "MeshRenderer": { "mesh": "builtin:cube", "material": "materials/ground.mat.json" },
+        "Collider": { "shape": { "box": [0.5, 0.5, 0.5] }, "friction": 0.7 } } },
+    { "id": 5, "name": "Ball A", "components": {
+        "Transform": { "position": [-1, 4, 0] },
+        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/blue.mat.json" },
+        "RigidBody": {}, "Collider": { "shape": { "sphere": 0.5 }, "restitution": 0.7 } } },
+    { "id": 6, "name": "Ball B", "components": {
+        "Transform": { "position": [0.2, 6, 0.3] },
+        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/blue.mat.json" },
+        "RigidBody": {}, "Collider": { "shape": { "sphere": 0.5 }, "restitution": 0.7 } } },
+    { "id": 7, "name": "Crate", "components": {
+        "Transform": { "position": [1.2, 3, -0.5], "euler": [20, 30, 0] },
+        "MeshRenderer": { "mesh": "builtin:cube", "material": "materials/logo.mat.json" },
+        "RigidBody": { "mass": 2 }, "Collider": {} } },
+    { "id": 8, "name": "Fire", "components": {
+        "Transform": { "position": [-3, 0, -2] },
+        "ParticleSystem": { "rate": 40, "shape": { "cone": { "angle": 12, "radius": 0.1 } }, "lifetime": [0.5, 0.9], "speed": [0.6, 1.2],
+          "size": [0.25, 0.4], "color_start": "#ff9e38e6", "color_end": "#e61f0500", "size_over_life": [1, 0.25], "gravity": -0.15 },
+        "AudioSource": { "clip": "sfx/coin.wav", "volume": 0.4, "looping": true, "play_on_start": true, "spatial": true, "min_distance": 1.5, "max_distance": 15 } } },
+    { "id": 9, "name": "Touch Canvas", "components": { "Canvas": { "display": "Secondary" } } },
+    { "id": 10, "name": "Panel", "parent": 9, "components": {
+        "RectTransform": { "anchor_min": [0, 0], "anchor_max": [1, 1], "pivot": [0.5, 0.5], "offset": [0, 0], "size": [-16, -16] },
+        "UiImage": { "color": "#14171fd0" } } },
+    { "id": 11, "name": "Title", "parent": 10, "components": {
+        "RectTransform": { "anchor_min": [0, 1], "anchor_max": [1, 1], "pivot": [0.5, 1], "offset": [0, -6], "size": [-12, 24] },
+        "UiText": { "text": "Sân chơi vật lý", "font": "fonts/BeVietnamPro-Regular.ttf", "size": 16, "color": "#fff2c0" } } },
+    { "id": 12, "name": "Sound", "parent": 10, "components": {
+        "RectTransform": { "anchor_min": [0.5, 0.5], "anchor_max": [0.5, 0.5], "pivot": [0.5, 0.5], "offset": [0, 0], "size": [150, 22] },
+        "UiToggle": { "is_on": true } } },
+    { "id": 13, "name": "Check", "parent": 12, "components": {
+        "RectTransform": { "anchor_min": [0, 0.5], "anchor_max": [0, 0.5], "pivot": [0, 0.5], "offset": [2, 0], "size": [16, 16] },
+        "UiImage": { "color": "#f2b53c" } } },
+    { "id": 14, "name": "Sound Label", "parent": 12, "components": {
+        "RectTransform": { "anchor_min": [0, 0], "anchor_max": [1, 1], "pivot": [0, 0.5], "offset": [24, 0], "size": [-24, 0] },
+        "UiText": { "text": "Âm thanh", "font": "fonts/BeVietnamPro-Regular.ttf", "size": 12, "align": "left" } } }
+  ]
+}

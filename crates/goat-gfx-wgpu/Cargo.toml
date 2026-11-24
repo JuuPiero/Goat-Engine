@@ -1,0 +1,20 @@
+[package]
+name = "goat-gfx-wgpu"
+description = "GoatEngine graphics backend for desktop / mobile / web on wgpu (Vulkan on Windows & Linux, Metal on Apple, DX12, WebGPU)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+bytemuck.workspace = true
+wgpu = "25"
+png = { version = "0.17", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "0.4"
+
+[features]
+# `request_screenshot` saves PNGs (tests, docs). Off = no PNG encoder in shipped games.
+screenshot = ["dep:png"]

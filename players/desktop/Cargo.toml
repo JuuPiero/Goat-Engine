@@ -1,0 +1,14 @@
+[package]
+name = "goat-player-desktop"
+description = "Desktop player: the sample game in a window (Vulkan)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "goat-hello"
+path = "src/main.rs"
+
+[dependencies]
+goat-platform-desktop = { workspace = true, features = ["screenshot"] }
+hello-game.workspace = true

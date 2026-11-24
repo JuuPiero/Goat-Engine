@@ -1,0 +1,21 @@
+[package]
+name = "goat-ui"
+description = "GoatEngine UI (Unity UGUI-like): Canvas per display, RectTransform anchors / pivots, Image, Text, Button, Toggle, Slider; touch / mouse pointer input; drawn in one batched pass per canvas."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+goat-runtime.workspace = true
+goat-assets.workspace = true
+goat-sprites.workspace = true
+goat-text.workspace = true
+hecs.workspace = true
+serde.workspace = true
+goat-scene = { workspace = true, optional = true }
+
+[features]
+# UI components in scene / prefab files
+scene = ["dep:goat-scene"]

@@ -1,0 +1,18 @@
+[package]
+name = "goat-scene"
+description = "GoatEngine scenes and prefabs: JSON files of entities + components (asset references by key), a registry of component / behaviour codecs, load / instantiate / save."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+goat-runtime.workspace = true
+goat-assets.workspace = true
+hecs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+png = "0.17"

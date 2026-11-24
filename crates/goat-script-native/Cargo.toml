@@ -1,0 +1,25 @@
+[package]
+name = "goat-script-native"
+description = "GoatEngine native scripts through a C ABI (include/goat.h): behaviours written in C, C++ or anything that calls C, registered as classes of callbacks, statically linked (consoles have no dynamic loading)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+links = "goat_script_native"
+
+[dependencies]
+goat-core.workspace = true
+goat-runtime.workspace = true
+goat-script.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+cc = { version = "1", optional = true }
+
+[features]
+# compiles examples/wobble.c + examples/orbit.cpp into the crate (tests)
+examples = ["dep:cc"]
+
+[dev-dependencies]
+goat-gfx.workspace = true
+goat-scene.workspace = true
+goat-assets.workspace = true

@@ -1,0 +1,11 @@
+{ "version": 1, "entities": [
+  { "id": 1, "name": "Pedestal", "components": {
+      "Transform": { "position": [0, 0.3, 0], "scale": [1.3, 0.6, 1.3] },
+      "MeshRenderer": { "mesh": "builtin:cube", "material": "materials/logo.mat.json" } } },
+  { "id": 2, "name": "Idol", "model": "models/suzanne.glb", "components": {
+      "Transform": { "position": [0, 1.15, 0], "scale": [0.55, 0.55, 0.55] } },
+    "scripts": [ { "type": "Spinner", "axis": [0, 1, 0], "speed": 0.8 } ] },
+  { "id": 3, "name": "Idol Light", "components": {
+      "Transform": { "position": [0.8, 2.2, 1.2] },
+      "PointLight": { "color": "#ffe2a8", "intensity": 1.2, "range": 4 } } }
+] }

@@ -1,0 +1,23 @@
+[package]
+name = "goat-editor"
+description = "GoatEngine editor (Tauri 2 shell + React UI): project files, asset panel with native drag & drop, scene editing."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "goat-editor"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-drag = "2"
+serde.workspace = true
+serde_json.workspace = true
+notify = "6"
+trash = "5"
+goat-assets.workspace = true
+goat-scene.workspace = true

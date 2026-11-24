@@ -1,0 +1,29 @@
+{
+  "parameters": [
+    { "name": "energy", "type": "float", "default": 0.3 },
+    { "name": "poke", "type": "trigger" },
+    { "name": "asleep", "type": "bool" }
+  ],
+  "layers": [
+    {
+      "name": "Base Layer",
+      "any_state_position": [0, 30],
+      "default_state": "Idle",
+      "states": [
+        {
+          "name": "Idle",
+          "blend_tree": { "parameter": "energy", "children": [ { "clip": "Sway", "threshold": 0 }, { "clip": "Hop", "threshold": 1 } ] },
+          "position": [200, 130]
+        },
+        { "name": "Poke", "clip": "Hop", "speed": 1.6, "loop": false, "position": [400, 30] },
+        { "name": "Sleep", "clip": "Sway", "speed": 0.3, "position": [400, 230] }
+      ],
+      "transitions": [
+        { "from": "Any State", "to": "Poke", "conditions": [ { "parameter": "poke", "mode": "if" } ], "duration": 0.1 },
+        { "from": "Poke", "to": "Idle", "has_exit_time": true, "exit_time": 1.0, "duration": 0.25 },
+        { "from": "Idle", "to": "Sleep", "conditions": [ { "parameter": "asleep", "mode": "if" } ], "duration": 0.6 },
+        { "from": "Sleep", "to": "Idle", "conditions": [ { "parameter": "asleep", "mode": "ifnot" } ], "duration": 0.4 }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+[package]
+name = "goat-sprites"
+description = "GoatEngine 2D sprites: Sprite / SpriteRenderer, sprite sheets, batched into one draw per texture (SpritePlugin)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+goat-runtime.workspace = true
+hecs.workspace = true
+goat-assets = { workspace = true, optional = true }
+goat-scene = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[features]
+# SpriteRenderer in scene / prefab files
+scene = ["dep:goat-assets", "dep:goat-scene", "dep:serde", "dep:serde_json"]

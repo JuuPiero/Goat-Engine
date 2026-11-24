@@ -1,0 +1,16 @@
+[package]
+name = "goat-platform-desktop"
+description = "GoatEngine desktop platform: window, main loop and input (winit), graphics through goat-gfx-wgpu (Vulkan)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+goat-runtime.workspace = true
+goat-gfx-wgpu.workspace = true
+winit = "0.30"
+
+[features]
+screenshot = ["goat-gfx-wgpu/screenshot"]

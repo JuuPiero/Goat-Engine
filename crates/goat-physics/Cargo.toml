@@ -1,0 +1,21 @@
+[package]
+name = "goat-physics"
+description = "GoatEngine 3D physics on Rapier: RigidBody / Collider components (Unity-like), fixed-step simulation, collision / trigger events, raycasts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-runtime.workspace = true
+hecs.workspace = true
+rapier3d = "0.22"
+serde.workspace = true
+goat-scene = { workspace = true, optional = true }
+
+[features]
+# RigidBody / Collider in scene files
+scene = ["dep:goat-scene"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rapier3d = { version = "0.22", features = ["wasm-bindgen"] }

@@ -1,0 +1,21 @@
+[package]
+name = "goat-text"
+description = "GoatEngine text: TrueType fonts rasterized at run time into a dynamic glyph atlas (any language, Vietnamese included), Text component, layout (alignment, wrapping, kerning), batched quads."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-gfx.workspace = true
+goat-runtime.workspace = true
+goat-assets.workspace = true
+goat-sprites.workspace = true
+fontdue = "0.9"
+goat-scene = { workspace = true, optional = true }
+serde.workspace = true
+serde_json = { workspace = true, optional = true }
+
+[features]
+# Text in scene / prefab files
+scene = ["dep:goat-scene", "dep:serde_json"]

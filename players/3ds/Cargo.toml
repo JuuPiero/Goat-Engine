@@ -1,0 +1,19 @@
+[package]
+name = "goat-player-3ds"
+description = "Nintendo 3DS player: the sample game as a .3dsx (build: `goat build 3ds`)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "goat-hello"
+path = "src/main.rs"
+
+
+[dependencies]
+goat-platform-3ds.workspace = true
+hello-game.workspace = true
+
+# assets packed into the .3dsx (read at run time from romfs:/)
+[package.metadata.cargo-3ds]
+romfs_dir = "../../games/hello/assets"

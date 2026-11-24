@@ -1,0 +1,24 @@
+[package]
+name = "goat-audio"
+description = "GoatEngine audio: WAV / OGG clips, a software mixer (voices, volume, pitch, pan, loops, 3D attenuation), AudioSource / AudioListener components; output through cpal (desktop) or the 3DS DSP (ndsp)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-runtime.workspace = true
+goat-assets.workspace = true
+lewton = "0.10"
+serde.workspace = true
+goat-scene = { workspace = true, optional = true }
+
+[features]
+# AudioSource / AudioListener in scene files
+scene = ["dep:goat-scene"]
+
+[target.'cfg(not(any(target_os = "horizon", target_arch = "wasm32")))'.dependencies]
+cpal = "0.15"
+
+[target.'cfg(target_os = "horizon")'.dependencies]
+ctru-sys = { git = "https://github.com/rust3ds/ctru-rs" }
