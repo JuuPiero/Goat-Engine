@@ -1,0 +1,17 @@
+[package]
+name = "goat-save"
+description = "GoatEngine save data: PlayerPrefs and JSON / binary save slots in the platform's user-data folder (SD card on the 3DS)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+goat-script = { workspace = true, optional = true }
+
+[features]
+# PlayerPrefs.* / Save.* calls for scripts
+script = ["dep:goat-script"]

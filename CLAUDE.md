@@ -26,10 +26,23 @@ crates/goat-assets        AssetIo (romfs:/ on 3DS, assets/ next to exe), PNG, gl
 crates/goat-scene         scene / prefab JSON, SceneRegistry (component codecs, serde behaviours), load / instantiate / save
 crates/goat-text          TTF fonts (fontdue) → dynamic glyph atlas, Text component + layout, batched through goat_sprites::Batcher
 crates/goat-physics       Rapier 3D: RigidBody / Collider, fixed-step sync, collision events, raycast (Physics resource)
+crates/goat-physics2d     Rapier 2D (separate crate = separate build cost): Rigidbody2D / Collider2D in the XY plane (rotation about Z)
+crates/goat-input         input actions (Unity Input System): .inputactions.json, composites, interactions, processors, overrides
 crates/goat-audio         WAV/OGG clips, software Mixer, AudioSource / AudioListener, outputs: cpal / ndsp (3DS) / WAV dump
-crates/goat-animation     Animator (weighted glTF clips, crossfade) + CPU skinning into per-instance meshes
+crates/goat-animation     Animator (weighted glTF clips, crossfade) + Animator Controller (controller.rs: .controller.json state machine,
+                          parameters, transitions, 1D blend trees, override layers) + CPU skinning; feature `script` = Animator.* script calls
+crates/goat-script        scripting core: Script component (scene "Script"), ScriptHost trait, Api (the ONE engine API every language uses),
+                          Extensions (named calls subsystems add), ScriptPlugin (start / update / lateUpdate / fixedUpdate / onDestroy)
+crates/goat-script-js     TS / JS / C# host on Boa (pure Rust JS engine): ES modules, "goat" module = src/goat.js, natives = __goat;
+                          TS → JS with oxc (feature typescript; consoles ship JS compiled by `goat build`); .cs → loads X.cs.js
+crates/goat-script-native C ABI (include/goat.h): GoatBehaviourClass vtables registered by C / C++, statically linked; examples/*.c|cpp (feature examples)
+tools/unity-goat-exporter Unity Editor C#: ParticleSystem → GoatEngine prefab JSON (test: Tests~/MakeFx.cs in batch mode, Unity 6 at D:\App\unity\6000.0.24f1)
+tools/goat-cs             C# → ES module translator (Roslyn, net9.0): Api/GoatEngine.cs = the C# API (Unity names), JsWriter.cs = translation
 crates/goat-particles     ParticleSystem (rate / bursts / shapes / over-lifetime) → camera-facing quads via Batcher
-crates/goat-ui            Canvas + RectTransform (Unity anchors) + Image / Text / Button / Toggle / Slider, pointer input, own camera per canvas
+crates/goat-ui            Canvas + RectTransform (Unity anchors) + Image (sliced / filled) / Text / Button / Toggle / Slider / InputField /
+                          Dropdown / ScrollRect; layout.rs = layout groups, fitter, mask clipping; widgets.rs; pointer + D-pad navigation
+crates/goat-tween         DOTween-like tweens (Tweens resource, Sequence, TweenAnimation component, Tween.* script calls)
+crates/goat-save          PlayerPrefs + JSON save slots (platform user-data dir; /3ds/<game>/save on the SD card)
 games/hello/assets        the sample's assets (Suzanne GLB exported by Blender, logo PNG, materials, prefabs)
 crates/goat-platform-*    main loop + input mapping (winit / libctru)
 players/*                 one-line binaries: platform::run(game)
@@ -76,6 +89,24 @@ third_party               ctru-rs / citro3d-rs vendored (+ Windows bindgen fix),
 - Audio checks without ears: `GOAT_AUDIO_DUMP=x.wav` makes `AudioPlugin` mix on the main thread into a WAV file (rewritten each second) — read its RMS per window to see loops / one-shots / pan. A normal desktop run really plays through the speakers (cpal): keep test runs short.
 - Text and sprites share `goat_sprites::{Quad, Batcher}`; dynamic textures use `GraphicsBackend::update_texture` (same size only). Font in the sample: Be Vietnam Pro (OFL, `games/hello/assets/fonts/OFL.txt`).
 - Physics bodies are created from the Transform chain on the first fixed step after a Collider appears; the sample's `GOAT_HELLO_FREEZE` doesn't stop physics (screenshots with falling balls differ between runs).
+- The 3DS (ARMv6K) has **no 64-bit atomics**: `AtomicU64` doesn't exist there (goat-scene's load counter is an `AtomicU32`). Check new dependencies too (`goat build 3ds` is the test).
+- `Time::max_delta` = 0.1: `Engine::frame(0.5, ..)` advances 0.1 s (the first frame advances 0). Tests that compute expected motion must use dt ≤ 0.1.
+- Toolchain is rustc 1.97 (don't upgrade the owner's toolchain): oxc ≥ 0.160 needs 1.98, so goat-script-js allows `>=0.100, <0.161` and Cargo.lock holds 0.158 — re-resolve with `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo update -p oxc_transformer` (workspace `rust-version = "1.97"`).
+- Scripts: every language goes through `goat_script::Api`; add engine features for scripts there (or as an `Extensions` call from the subsystem's crate behind a `script` feature, like goat-animation), then expose them in goat.js (+ a native in goat-script-js/src/lib.rs), goat.h (+ goat-script-native) and tools/goat-cs/Api/GoatEngine.cs. Entities cross to scripts as small handles (f64 / u32 index tables), never as 64-bit ids.
+- goat-cs naming: GoatEngine methods → camelCase JS (Debug.LogWarning/LogError are renamed in `JsWriter.Renames`), properties keep their (Unity) names, lifecycle Start/Update/... → start/update...; vector operators need the semantic model (`IsVector`). Rebuild: `cd tools/goat-cs; dotnet build -c Release -o bin` (goat build does it when sources are newer). Generated `X.cs.js` live next to the .cs (the editor regenerates them on change).
+- Builds stage assets (`stage_assets` in tools/goat builders/mod.rs): C# → JS, TS → JS, sources dropped. The 3DS romfs is `target/3ds-romfs` (players/3ds/Cargo.toml), and the 3DS player uses hello-game **without** the `typescript` feature (no oxc on the console).
+- Plugins get `early_update` (before fixed steps and behaviours): input actions update there.
+- Coroutines (goat-runtime coroutine.rs) run once per frame after the Rust behaviours' `update`, before plugins' `update`. `Time::time_scale` is set through the `TimeScale` resource (applied at the next frame start); `unscaled_delta` ignores it.
+- Script hosts get `ScriptHost::tick` once per frame between Update and LateUpdate: goat.js `__tick` runs JS coroutines (generators), `Awaitable` promises, UI listeners and tween callbacks. Tween / UI events reach scripts by polling engine calls (`Tween.events`, `UI.clicked`), never by Rust calling into JS.
+- Numbers coming from JS arrive in serde_json as f64 (`1.0`, not `1`): extension calls must read ids / counts with `as_f64`, never `as_u64` / `as_i64`.
+- Tweens: callbacks run while the `Tweens` resource is taken out; a stand-in resource continues the ids and is merged back (tweens created in callbacks keep their ids). A tween whose target entity is gone is killed.
+- goat-ui hit tests use last frame's rects (`UiLayout.rects` + `clips` for masks). Layout groups place children directly in the layout pass (they don't write RectTransforms); Content Size Fitters do write `size`. Quads are clipped on the CPU (axis-aligned) — UI has no rotation.
+- Entities in script-call JSON: `goat_script::entity_json(e)` = `{"$entity": bits}`, `entity_arg(v)` reads it. The JS host maps GameObjects (`{_h}`) in arguments to that and `{"$entity"}` results to GameObjects (`fromNative` in goat.js); C callers pass the bits.
+- Physics joints / connected bodies are referenced by entity **name** (scenes have no entity references). Joints are (re)built in `sync_joints` each step once both bodies are simulated; removing a body removes its Rapier joints, the map notices (`impulse_joints.get(h)`).
+- Mesh colliders: `Shape::Mesh` triangles come from `AssetServer::mesh_geometry` (re-reads the model file: GPU meshes keep no CPU copy), loaded by the plugin before the step into `Physics::meshes`; an empty source = the entity's MeshRenderer mesh key. CharacterController entities get a kinematic capsule body (their Collider component is ignored).
+- Unity → GoatEngine coordinates (unity-goat-exporter): flip Z of positions / vectors, (-x, -y, z, w) for quaternions; Unity shapes emit along +Z, GoatEngine's along +Y, so each system's rotation gets ×R_x(-90°). Systems are exported flat (sub-emitters link by entity name). Unity batch runs print licensing errors in the log that don't matter; check for `[goat] exported`.
+- Particles: collisions are tested on world-space segments (local systems convert through the emitter matrix); sub-emitter events (`state.events`) are world positions; trails are stored per particle (keep `max_points` small on the 3DS).
+- Text input: `Input::text` = characters typed this frame (desktop winit `event.text`); platforms without a keyboard insert `SoftwareKeyboard` (goat-runtime) and serve `request` after the frame (3DS: swkbd applet, blocking).
 
 ## Editor (editor/)
 - Tauri 2 shell (`editor/src-tauri`, crate `goat-editor`: file ops in `fsops.rs` with tests, commands in `main.rs`, watcher → `assets-changed`) + React UI (`editor/src`, Vite, dockview-react docking, layout saved in localStorage) + the engine as wasm (`editor/engine`, crate `goat-editor-engine`: `core.rs` portable + tested with NullBackend, `web.rs` wasm-bindgen API).
@@ -86,3 +117,7 @@ third_party               ctru-rs / citro3d-rs vendored (+ Windows bindgen fix),
 - hecs `Ref<T>` implements Clone: `world.get::<&T>(e).map(|r| r.clone())` clones the *borrow* (a later `get::<&mut T>` panics "already borrowed") — write `(*r).clone()`.
 - `Resources::take::<T>()` returns `Box<T>`: give that Box back to `put_back` as is (wrapping it again stores a `Box<Box<T>>` under another TypeId and the resource silently disappears — the frozen "-- FPS" bug).
 - Vertex colors are sRGB-authored: the wgpu shader linearizes them when the target is sRGB (`camera_forward.w` flag); sprites / UI / particles tint through vertex colors.
+- Editor tools (editor/engine/src/tools.rs): grid + Move / Rotate / Scale gizmo handles are DontSave entities on EDITOR_LAYER; component editing goes through the scene codecs as JSON (`components` / `set_component`). Hierarchy re-parenting resolves the drop target with `elementFromPoint` on pointerup (HTML5 DnD is off under Tauri's native drag-drop).
+- dockview hides inactive panels with `visibility: hidden` on the panel: children must not set `visibility: visible` themselves (the Scene canvas did and covered the Animator tab) — leave it inherited.
+- Engine logs in the editor: the wasm log sink buffers lines, `take_logs()` is drained every frame into the Console. C# files are translated by the Tauri backend (watcher → `csharp_worker` → `script-log` events).
+- PowerShell 5 `Get-Content -Raw` reads UTF-8 files without BOM as ANSI: a read-modify-write with it double-encodes every non-ASCII character. Use `[IO.File]::ReadAllText` / node scripts for edits.

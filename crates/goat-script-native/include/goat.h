@@ -72,6 +72,10 @@ GoatVec3 goat_get_world_position(GoatApi* g, GoatEntity e);
 /* time, input */
 float goat_delta_time(GoatApi* g);
 float goat_time(GoatApi* g);
+float goat_unscaled_delta_time(GoatApi* g);
+/* Time.timeScale: 0 = paused (applies from the next frame) */
+float goat_time_scale(GoatApi* g);
+void goat_set_time_scale(GoatApi* g, float scale);
 /* "A", "B", "X", "Y", "L", "R", "start", "dpad/up"... → GOAT_HELD | GOAT_PRESSED | GOAT_RELEASED bits */
 int goat_button(GoatApi* g, const char* name);
 GoatVec2 goat_stick(GoatApi* g);

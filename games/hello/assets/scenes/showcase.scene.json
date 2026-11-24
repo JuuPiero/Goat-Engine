@@ -10,17 +10,20 @@
         "Transform": { "scale": [3, 1, 3] },
         "MeshRenderer": { "mesh": "builtin:plane", "material": "materials/ground.mat.json" } } },
     { "id": 5, "name": "Shrine", "prefab": "prefabs/shrine.prefab.json", "components": { "Transform": { "position": [-3, 0, 0] } } },
-    { "id": 6, "name": "Tentacle", "model": "models/tentacle.glb", "components": { "Transform": { "position": [2.5, 0, -1] }, "Animator": { "play": ["Sway", "Hop"] } } },
+    { "id": 6, "name": "Tentacle", "model": "models/tentacle.glb", "components": { "Transform": { "position": [2.5, 0, -1] }, "Animator": { "controller": "animators/tentacle.controller.json" } } },
     { "id": 7, "name": "Spinning Crate", "components": {
         "Transform": { "position": [0, 0.8, 0.5] },
-        "MeshRenderer": { "mesh": "builtin:cube", "material": "materials/logo.mat.json" } },
+        "MeshRenderer": { "mesh": "builtin:cube", "material": "materials/logo.mat.json" },
+        "TweenAnimation": { "animation": "Move", "end": [0, 0.4, 0], "relative": true, "duration": 1.2, "ease": "InOutSine", "loops": -1, "loopType": "Yoyo" } },
       "scripts": [ { "type": "Spinner", "axis": [0.3, 1, 0.2], "speed": 0.9 } ] },
     { "id": 8, "name": "Ball", "components": {
         "Transform": { "position": [1, 0.6, 2], "scale": [1.2, 1.2, 1.2] },
-        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/blue.mat.json" } },
+        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/blue.mat.json" },
+        "Script": { "src": "scripts/Pulse.cs", "props": { "amount": 0.1 } } },
       "scripts": [ { "type": "Bob", "base": 0.6, "phase": 0 } ] },
     { "id": 9, "name": "Lamp", "components": {
         "Transform": { "position": [-1, 1.5, 2] },
-        "PointLight": { "color": "#ff8a2a", "intensity": 1.4, "range": 5 } } }
+        "PointLight": { "color": "#ff8a2a", "intensity": 1.4, "range": 5 },
+        "Script": { "src": "scripts/Hover.ts", "props": { "height": 0.3, "turn": 0 } } } }
   ]
 }

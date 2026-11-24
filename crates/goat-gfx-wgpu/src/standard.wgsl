@@ -15,6 +15,7 @@ struct Frame {
     camera_pos: vec4<f32>,       // w = light count
     camera_forward: vec4<f32>,
     ambient: vec4<f32>,
+    ambient_ground: vec4<f32>,   // hemisphere ambient from below, w = 1 when on
     fog_color: vec4<f32>,        // w = 1 when fog is on
     fog_range: vec4<f32>,        // x start, y end
     lights: array<Light, 8>,
@@ -26,13 +27,16 @@ struct Object {
     base_color: vec4<f32>,
     specular: vec4<f32>,    // rgb, w = shininess
     emissive: vec4<f32>,
-    flags: vec4<f32>,       // x = lit (1/0), y = fogged (1/0)
+    flags: vec4<f32>,       // x = lit (1/0), y = fogged (1/0), z = reflectivity
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(1) @binding(0) var<uniform> object: Object;
 @group(2) @binding(0) var base_tex: texture_2d<f32>;
 @group(2) @binding(1) var base_sampler: sampler;
+@group(2) @binding(2) var emissive_tex: texture_2d<f32>;
+@group(2) @binding(3) var env_cube: texture_cube<f32>;
+@group(2) @binding(4) var env_sampler: sampler;
 
 struct VsIn {
     @location(0) position: vec3<f32>,
@@ -76,6 +80,10 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         let n = normalize(i.normal);
         let v = normalize(frame.camera_pos.xyz - i.world_pos);
         var diffuse = frame.ambient.rgb;
+        if (frame.ambient_ground.w > 0.5) {
+            // hemisphere: ground color from below to sky (ambient) from above
+            diffuse = mix(frame.ambient_ground.rgb, frame.ambient.rgb, 0.5 + 0.5 * n.y);
+        }
         var specular = vec3<f32>(0.0);
         let count = u32(frame.camera_pos.w);
         for (var k = 0u; k < count; k++) {
@@ -101,7 +109,12 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         }
         rgb = albedo.rgb * diffuse + object.specular.rgb * specular;
     }
-    rgb = rgb + object.emissive.rgb;
+    // cube map reflection (sampled always: uniform control flow)
+    let nr = normalize(i.normal);
+    let r = reflect(-normalize(frame.camera_pos.xyz - i.world_pos), nr);
+    let env = textureSample(env_cube, env_sampler, r).rgb;
+    rgb = mix(rgb, env, object.flags.z);
+    rgb = rgb + object.emissive.rgb * textureSample(emissive_tex, base_sampler, i.uv).rgb;
     if (frame.fog_color.w > 0.5 && object.flags.y > 0.5) {
         let depth = dot(i.world_pos - frame.camera_pos.xyz, frame.camera_forward.xyz);
         let visibility = clamp((frame.fog_range.y - depth) / (frame.fog_range.y - frame.fog_range.x), 0.0, 1.0);

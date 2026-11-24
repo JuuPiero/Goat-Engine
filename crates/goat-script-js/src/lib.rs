@@ -6,6 +6,7 @@
 //!   and each other with relative paths (`import { clamp } from "./util"`).
 //! - `.ts` is compiled by oxc when loaded (feature `typescript`); console builds ship the `.js`
 //!   produced at build time ([`compile_typescript`]), the loader prefers it when present.
+//! - C# (`.cs`) runs here too: `tools/goat-cs` (Roslyn) translates each script to `X.cs.js`.
 //! - Every engine call goes through [`goat_script::Api`] (shared with the other languages).
 
 use std::cell::{Cell, RefCell};
@@ -109,6 +110,27 @@ fn json(v: &Value, ctx: &mut Context) -> JsResult<JsValue> {
 }
 
 type Native = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
+
+/// Replaces JSON objects for which `f` returns a value (depth-first, objects and arrays).
+fn map_objects(v: &mut Value, f: &mut dyn FnMut(&serde_json::Map<String, Value>) -> Option<Value>) {
+    match v {
+        Value::Object(o) => {
+            if let Some(new) = f(o) {
+                *v = new;
+                return;
+            }
+            for x in o.values_mut() {
+                map_objects(x, f);
+            }
+        }
+        Value::Array(a) => {
+            for x in a.iter_mut() {
+                map_objects(x, f);
+            }
+        }
+        _ => {}
+    }
+}
 
 /// The natives behind goat.js (`globalThis.__goat`).
 fn natives() -> Vec<(&'static str, usize, Native)> {
@@ -240,6 +262,14 @@ fn natives() -> Vec<(&'static str, usize, Native)> {
         ("dt", 0, |_, _, _| with_api(|api, _| Ok(api.delta_time() as f64)).map(JsValue::from)),
         ("time", 0, |_, _, _| with_api(|api, _| Ok(api.time() as f64)).map(JsValue::from)),
         ("fixedDt", 0, |_, _, _| with_api(|api, _| Ok(api.fixed_delta_time() as f64)).map(JsValue::from)),
+        ("unscaledDt", 0, |_, _, _| with_api(|api, _| Ok(api.unscaled_delta_time() as f64)).map(JsValue::from)),
+        ("unscaledTime", 0, |_, _, _| with_api(|api, _| Ok(api.unscaled_time() as f64)).map(JsValue::from)),
+        ("frameCount", 0, |_, _, _| with_api(|api, _| Ok(api.frame_count() as f64)).map(JsValue::from)),
+        ("timeScale", 0, |_, _, _| with_api(|api, _| Ok(api.time_scale() as f64)).map(JsValue::from)),
+        ("setTimeScale", 1, |_, a, c| {
+            let s = f(a, 0, c)?;
+            with_api(|api, _| Ok(api.set_time_scale(s))).map(|_| JsValue::undefined())
+        }),
         ("button", 1, |_, a, c| {
             let n = string(a, 0, c)?;
             with_api(|api, _| {
@@ -301,12 +331,28 @@ fn natives() -> Vec<(&'static str, usize, Native)> {
         }),
         ("call", 3, |_, a, c| {
             let n = string(a, 0, c)?;
-            let e = entity(a, 1, c)?;
+            // -1: a call without an object (Tween.value, Tween.events...)
+            let e = if num(a, 1, c)? < 0.0 { Entity::DANGLING } else { entity(a, 1, c)? };
             let args = match a.get(2).cloned().unwrap_or_default().to_json(c)? {
                 Some(Value::Array(v)) => v,
                 _ => Vec::new(),
             };
-            let r = with_api(|api, _| api.call(&n, e, &args))?;
+            let r = with_api(|api, hs| {
+                // GameObjects / Transforms ({ _h }) → {"$entity"}; results the other way ({"$go": handle})
+                let mut args = args;
+                for a in args.iter_mut() {
+                    map_objects(a, &mut |o| {
+                        let h = o.get("_h")?.as_f64()?;
+                        hs.borrow().entity(h).map(goat_script::entity_json)
+                    });
+                }
+                let mut r = api.call(&n, e, &args)?;
+                map_objects(&mut r, &mut |o| {
+                    let e = goat_script::entity_arg(&Value::Object(o.clone()))?;
+                    Some(serde_json::json!({ "$go": hs.borrow_mut().of(e) }))
+                });
+                Ok(r)
+            })?;
             json(&r, c)
         }),
         ("quit", 0, |_, _, _| with_api(|api, _| Ok(api.quit())).map(|_| JsValue::undefined())),
@@ -317,13 +363,19 @@ fn natives() -> Vec<(&'static str, usize, Native)> {
 
 /// Resolves `"goat"` and relative imports between scripts (asset keys).
 struct Loader {
-    io: AssetIo,
+    /// The game's asset root (given, or taken from the AssetServer on first use).
+    io: RefCell<Option<AssetIo>>,
     goat: RefCell<Option<Module>>,
     modules: RefCell<HashMap<String, Module>>,
 }
 
 /// The JavaScript of a script key: a built `.js` next to a `.ts` wins, else the `.ts` is compiled.
 fn script_source(io: &AssetIo, key: &str) -> Result<String, String> {
+    if key.ends_with(".cs") {
+        // C#: goat-cs (tools/goat-cs) writes the module next to the source
+        let built = format!("{key}.js");
+        return io.read_string(&built).map_err(|_| format!("{key} isn't translated yet: run goat-cs (the editor does it when C# files change; `goat build` before packaging)"));
+    }
     if let Some(stem) = key.strip_suffix(".ts") {
         let built = format!("{stem}.js");
         if io.exists(&built) {
@@ -351,7 +403,8 @@ impl Loader {
         if let Some(m) = self.modules.borrow().get(key).cloned() {
             return Ok(m);
         }
-        let code = script_source(&self.io, key).map_err(|e| err(format!("{key}: {e}")))?;
+        let io = self.io.borrow().clone().ok_or_else(|| err("no asset root yet"))?;
+        let code = script_source(&io, key).map_err(|e| err(format!("{key}: {e}")))?;
         let m = Module::parse(Source::from_bytes(&code).with_path(Path::new(key)), None, ctx)?;
         self.modules.borrow_mut().insert(key.to_string(), m.clone());
         Ok(m)
@@ -364,12 +417,13 @@ impl Loader {
         }
         let base = referrer.map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
         let key = if spec.starts_with('.') { goat_assets::resolve_relative(&base, spec) } else { spec.to_string() };
-        if self.io.exists(&key) {
+        let Some(io) = self.io.borrow().clone() else { return key };
+        if io.exists(&key) {
             return key;
         }
         for ext in [".ts", ".js"] {
             let k = format!("{key}{ext}");
-            if self.io.exists(&k) {
+            if io.exists(&k) {
                 return k;
             }
         }
@@ -407,12 +461,22 @@ pub struct JsHost {
     instances: HashMap<u32, Instance>,
     next: u32,
     apply_props: Option<JsObject>,
+    /// goat.js `__tick` (coroutines, awaitables, tween callbacks), once the module is loaded.
+    tick: Option<JsObject>,
 }
 
 impl JsHost {
-    /// A host reading scripts through `io` (the game's asset root).
-    pub fn new(io: AssetIo) -> Self {
-        let loader = Rc::new(Loader { io, goat: RefCell::new(None), modules: RefCell::new(HashMap::new()) });
+    /// A host reading scripts from the game's asset root (the AssetServer's).
+    pub fn new() -> Self {
+        Self::build(None)
+    }
+    /// A host reading scripts through `io`.
+    pub fn with_io(io: AssetIo) -> Self {
+        Self::build(Some(io))
+    }
+
+    fn build(io: Option<AssetIo>) -> Self {
+        let loader = Rc::new(Loader { io: RefCell::new(io), goat: RefCell::new(None), modules: RefCell::new(HashMap::new()) });
         let mut ctx = Context::builder().module_loader(loader.clone()).build().expect("a JavaScript context");
         let mut natives = ObjectInitializer::new(&mut ctx);
         for (name, len, f) in natives_list() {
@@ -420,7 +484,7 @@ impl JsHost {
         }
         let natives = natives.build();
         ctx.register_global_property(js_string!("__goat"), natives, Attribute::all()).expect("__goat");
-        JsHost { ctx, loader, handles: Rc::new(RefCell::new(Handles::default())), classes: HashMap::new(), instances: HashMap::new(), next: 0, apply_props: None }
+        JsHost { ctx, loader, handles: Rc::new(RefCell::new(Handles::default())), classes: HashMap::new(), instances: HashMap::new(), next: 0, apply_props: None, tick: None }
     }
 
     /// Runs `f` with the bridge to `api` installed.
@@ -469,6 +533,7 @@ impl JsHost {
         if self.apply_props.is_none() {
             let goat = self.evaluate("goat")?;
             self.apply_props = goat.get(js_string!("__applyProps"), &mut self.ctx).ok().and_then(|v| v.as_object());
+            self.tick = goat.get(js_string!("__tick"), &mut self.ctx).ok().and_then(|v| v.as_object());
         }
         self.classes.insert(src.to_string(), class.clone());
         Ok(class)
@@ -483,19 +548,29 @@ impl JsHost {
     }
 }
 
+impl Default for JsHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn natives_list() -> Vec<(&'static str, usize, Native)> {
     natives()
 }
 
 impl ScriptHost for JsHost {
     fn name(&self) -> &str {
-        "TypeScript / JavaScript"
+        "TypeScript / JavaScript / C#"
     }
     fn handles(&self, src: &str) -> bool {
-        src.ends_with(".ts") || src.ends_with(".js") || src.ends_with(".mjs")
+        src.ends_with(".ts") || src.ends_with(".js") || src.ends_with(".mjs") || src.ends_with(".cs")
     }
 
     fn instantiate(&mut self, api: &mut Api, entity: Entity, src: &str, props: &Value) -> Result<u32, String> {
+        if self.loader.io.borrow().is_none() {
+            let io = api.ctx.resources.get::<goat_assets::AssetServer>().map(|a| a.io.clone()).ok_or("no AssetServer: add AssetsPlugin before ScriptPlugin")?;
+            *self.loader.io.borrow_mut() = Some(io);
+        }
         self.enter(api, |h| {
             let class = h.class_of(src)?;
             let object = class.construct(&[], None, &mut h.ctx).map_err(|e| h.describe(e))?;
@@ -528,6 +603,15 @@ impl ScriptHost for JsHost {
 
     fn destroy(&mut self, instance: u32) {
         self.instances.remove(&instance);
+    }
+
+    fn tick(&mut self, api: &mut Api) -> Result<(), String> {
+        let Some(tick) = self.tick.clone() else { return Ok(()) };
+        self.enter(api, |h| {
+            tick.call(&JsValue::undefined(), &[], &mut h.ctx).map_err(|e| h.describe(e))?;
+            h.ctx.run_jobs().map_err(|e| h.describe(e))?;
+            Ok(())
+        })
     }
 
     fn invalidate(&mut self, src: &str) {

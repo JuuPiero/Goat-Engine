@@ -10,15 +10,25 @@ name = "hello_game"
 
 [dependencies]
 goat-runtime.workspace = true
-goat-sprites = { workspace = true, features = ["scene"] }
+goat-sprites = { workspace = true, features = ["scene", "script"] }
 goat-assets.workspace = true
 goat-scene.workspace = true
 serde.workspace = true
 goat-text = { workspace = true, features = ["scene"] }
-goat-physics = { workspace = true, features = ["scene"] }
-goat-physics2d = { workspace = true, features = ["scene"] }
+goat-physics = { workspace = true, features = ["scene", "script"] }
+goat-physics2d = { workspace = true, features = ["scene", "script"] }
 goat-input.workspace = true
-goat-audio = { workspace = true, features = ["scene"] }
-goat-animation = { workspace = true, features = ["scene"] }
-goat-particles = { workspace = true, features = ["scene"] }
-goat-ui = { workspace = true, features = ["scene"] }
+goat-script.workspace = true
+goat-script-js = { workspace = true, default-features = false }
+goat-script-native.workspace = true
+goat-audio = { workspace = true, features = ["scene", "script"] }
+goat-animation = { workspace = true, features = ["scene", "script"] }
+goat-particles = { workspace = true, features = ["scene", "physics"] }
+goat-ui = { workspace = true, features = ["scene", "script"] }
+goat-tween = { workspace = true, features = ["scene", "script"] }
+goat-save = { workspace = true, features = ["script"] }
+
+[features]
+default = ["typescript"]
+# compile .ts when loaded (desktop, editor); console builds load the .js `goat build` produces
+typescript = ["goat-script-js/typescript"]

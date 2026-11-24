@@ -5,6 +5,8 @@ const COLORS: Record<string, string> = {
   prefab: '#5ad1e6',
   material: '#e07ad1',
   controller: '#ffa94d',
+  script: '#7fd1ae',
+  input: '#ff7bb0',
   image: '#8bd36b',
   model: '#f09a4a',
   audio: '#c9a2ff',
@@ -49,6 +51,22 @@ export function AssetIcon({ kind, size }: { kind: string; size: number }) {
             </radialGradient>
           </defs>
           <circle cx="12" cy="12" r="9" fill="url(#mg)" />
+        </svg>
+      );
+    case 'script':
+      return (
+        <svg viewBox="0 0 24 24" style={s}>
+          <path d="M6 2h8l5 5v15H6z" fill="none" stroke={c} strokeWidth="2" strokeLinejoin="round" />
+          <path d="M10 11l-2.5 2.5L10 16M14 11l2.5 2.5L14 16" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'input':
+      return (
+        <svg viewBox="0 0 24 24" style={s}>
+          <rect x="2" y="7" width="20" height="11" rx="5" fill="none" stroke={c} strokeWidth="2" />
+          <path d="M7 10.5v4M5 12.5h4" stroke={c} strokeWidth="1.8" strokeLinecap="round" />
+          <circle cx="16" cy="11" r="1.3" fill={c} />
+          <circle cx="18" cy="14" r="1.3" fill={c} />
         </svg>
       );
     case 'controller':

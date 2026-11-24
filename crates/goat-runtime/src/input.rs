@@ -62,6 +62,8 @@ pub struct Input {
     pub pointer: Option<Vec2>,
     pub pointer_down: bool,
     pointer_prev: bool,
+    /// Characters typed this frame (physical keyboards): `\u{8}` = backspace, `\r` = enter.
+    pub text: String,
     /// The platform asked the game to quit (window closed, HOME → close).
     pub quit_requested: bool,
 }
@@ -71,6 +73,7 @@ impl Input {
     pub fn begin_frame(&mut self) {
         self.prev = self.held;
         self.pointer_prev = self.pointer_down;
+        self.text.clear();
     }
     /// Platforms: sets a button's state for this frame.
     pub fn set(&mut self, b: Button, down: bool) {
@@ -104,4 +107,23 @@ impl Input {
     pub fn pointer_pressed(&self) -> bool {
         self.pointer_down && !self.pointer_prev
     }
+}
+
+/// The system keyboard of platforms without a physical one (3DS swkbd). The UI asks with
+/// `request`; the platform shows it after the frame and puts the outcome in `result`
+/// (`Some(None)` = cancelled). Platforms that have one insert this resource.
+#[derive(Clone, Debug, Default)]
+pub struct SoftwareKeyboard {
+    pub request: Option<KeyboardRequest>,
+    pub result: Option<Option<String>>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct KeyboardRequest {
+    pub hint: String,
+    pub initial: String,
+    pub max_length: u32,
+    pub multi_line: bool,
+    pub numeric: bool,
+    pub password: bool,
 }

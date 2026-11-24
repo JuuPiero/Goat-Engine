@@ -16,11 +16,13 @@
 pub mod controller;
 #[cfg(feature = "scene")]
 pub mod scene;
+#[cfg(feature = "script")]
+pub mod script;
 
-pub use controller::{ControllerData, ControllerState};
+pub use controller::{ClipEvent, ControllerData, ControllerState, LayerBlending};
 use std::sync::Arc;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use goat_assets::{AnimPath, AssetServer, Interpolation, ModelAnimation, ModelNodes, SkinnedMesh};
 use goat_core::math::{Mat4, Quat, Vec3, Vec4};
@@ -51,12 +53,50 @@ pub struct Animator {
     pub controller_key: Option<String>,
     /// Playback speed multiplier (controller mode).
     pub speed: f32,
+    /// Clip events without a controller (a controller brings its own `events`).
+    pub events: BTreeMap<String, Vec<ClipEvent>>,
+    /// Events crossed by the last update (read them in behaviours / scripts; replaced next frame).
+    pub fired: Vec<FiredEvent>,
+    last_times: HashMap<String, f32>,
+    /// Node indices of each controller layer's mask (None = every node), built on first use.
+    masks: Option<Vec<Option<HashSet<usize>>>>,
+}
+
+/// An animation event that happened (Unity calls a method named `name` on the object).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FiredEvent {
+    pub name: String,
+    pub parameter: String,
+    pub clip: String,
 }
 
 impl Default for Animator {
     fn default() -> Self {
-        Animator { states: Vec::new(), paused: false, controller: None, controller_key: None, speed: 1.0 }
+        Animator { states: Vec::new(), paused: false, controller: None, controller_key: None, speed: 1.0, events: BTreeMap::new(), fired: Vec::new(), last_times: HashMap::new(), masks: None }
     }
+}
+
+/// Events of `list` crossed going from `last` to `t` (seconds; `t < last` = looped past `dur`).
+fn crossed(list: &[ClipEvent], last: Option<f32>, t: f32, dur: f32, out: &mut Vec<FiredEvent>, clip: &str) {
+    let last = last.unwrap_or(-1e-6);
+    let mut push = |e: &ClipEvent| out.push(FiredEvent { name: e.name.clone(), parameter: e.parameter.clone(), clip: clip.into() });
+    if t >= last {
+        list.iter().filter(|e| e.time > last && e.time <= t).for_each(&mut push);
+    } else {
+        list.iter().filter(|e| (e.time > last && e.time <= dur) || e.time <= t).for_each(&mut push);
+    }
+}
+
+/// Node indices named in `mask` and all their descendants.
+fn mask_nodes(model: &goat_assets::ModelData, mask: &[String]) -> HashSet<usize> {
+    let mut set = HashSet::new();
+    let mut stack: Vec<usize> = model.nodes.iter().enumerate().filter(|(_, n)| mask.iter().any(|m| *m == n.name)).map(|(i, _)| i).collect();
+    while let Some(i) = stack.pop() {
+        if set.insert(i) {
+            stack.extend(model.nodes[i].children.iter().copied());
+        }
+    }
+    set
 }
 
 /// Reads a `.controller.json` asset.
@@ -187,12 +227,52 @@ struct Acc {
 
 /// Samples the states into node transforms (`node index → entity`).
 pub fn apply(world: &mut World, nodes: &[Option<Entity>], clips: &[(&ModelAnimation, f32, f32)]) {
+    apply_layer(world, nodes, clips, None, false);
+}
+
+/// Like [`apply`], limited to the `mask` nodes; `additive` adds each clip's change from its
+/// first frame to the current pose instead of replacing it.
+pub fn apply_layer(world: &mut World, nodes: &[Option<Entity>], clips: &[(&ModelAnimation, f32, f32)], mask: Option<&HashSet<usize>>, additive: bool) {
+    if additive {
+        for (anim, time, weight) in clips {
+            if *weight <= 0.0 {
+                continue;
+            }
+            for ch in &anim.channels {
+                if mask.is_some_and(|m| !m.contains(&ch.node)) {
+                    continue;
+                }
+                let Some(Some(e)) = nodes.get(ch.node) else { continue };
+                let Ok(mut t) = world.get::<&mut Transform>(*e) else { continue };
+                let rot = ch.path == AnimPath::Rotation;
+                let v = sample(&ch.times, &ch.values, ch.interpolation, rot, *time);
+                let v0 = ch.values[0];
+                match ch.path {
+                    AnimPath::Translation => t.position += (v - v0).truncate() * *weight,
+                    AnimPath::Rotation => {
+                        let q = Quat::from_xyzw(v.x, v.y, v.z, v.w).normalize();
+                        let q0 = Quat::from_xyzw(v0.x, v0.y, v0.z, v0.w).normalize();
+                        let delta = Quat::IDENTITY.slerp(q * q0.inverse(), *weight);
+                        t.rotation = (delta * t.rotation).normalize();
+                    }
+                    AnimPath::Scale => {
+                        let r = v.truncate() / v0.truncate().max(Vec3::splat(1e-6));
+                        t.scale *= Vec3::ONE.lerp(r, *weight);
+                    }
+                }
+            }
+        }
+        return;
+    }
     let mut acc: HashMap<usize, Acc> = HashMap::new();
     for (anim, time, weight) in clips {
         if *weight <= 0.0 {
             continue;
         }
         for ch in &anim.channels {
+            if mask.is_some_and(|m| !m.contains(&ch.node)) {
+                continue;
+            }
             let rot = ch.path == AnimPath::Rotation;
             let v = sample(&ch.times, &ch.values, ch.interpolation, rot, *time);
             let a = acc.entry(ch.node).or_default();
@@ -269,6 +349,8 @@ impl Plugin for AnimationPlugin {
     fn build(&mut self, _ctx: &mut Context) {
         #[cfg(feature = "scene")]
         goat_scene::registry(_ctx).component(scene::CODEC);
+        #[cfg(feature = "script")]
+        script::register(goat_script::extensions(_ctx));
     }
 
     fn update(&mut self, ctx: &mut Context) {
@@ -304,11 +386,40 @@ impl Plugin for AnimationPlugin {
                 }
                 anim.states.retain(|s| !(s.fade < 0.0 && s.weight <= 0.0));
             }
+            // events crossed this frame (clips weighing at least half)
+            let (all, data) = match &layers {
+                Some(l) => (l.iter().flat_map(|(lw, c)| c.iter().map(move |(n, t, w)| (n.clone(), *t, *w * lw))).collect::<Vec<_>>(), ctx.world.get::<&Animator>(root).ok().and_then(|a| a.controller.as_ref().map(|c| c.data.clone()))),
+                None => (sampled.clone(), None),
+            };
+            if let Ok(mut anim) = ctx.world.get::<&mut Animator>(root) {
+                let anim = &mut *anim;
+                anim.fired.clear();
+                let mut seen = HashSet::new();
+                for (clip, t, w) in &all {
+                    seen.insert(clip.clone());
+                    let last = anim.last_times.insert(clip.clone(), *t);
+                    if *w < 0.5 {
+                        continue;
+                    }
+                    let list = data.as_ref().and_then(|d| d.events.get(clip)).or_else(|| anim.events.get(clip));
+                    if let Some(list) = list {
+                        let dur = model.data.animation(clip).map(|a| a.duration).unwrap_or(0.0);
+                        crossed(list, last, *t, dur, &mut anim.fired, clip);
+                    }
+                }
+                anim.last_times.retain(|k, _| seen.contains(k));
+                // layer masks (once)
+                if let (Some(d), None) = (&data, &anim.masks) {
+                    anim.masks = Some(d.layers.iter().map(|l| (!l.mask.is_empty()).then(|| mask_nodes(&model.data, &l.mask))).collect());
+                }
+            }
             if let Some(layers) = layers {
-                // layer 0 poses the model; the next ones override it by their weight
-                for (weight, clips) in layers {
+                // layer 0 poses the model; the next ones override it (or add to it) by weight
+                let masks = ctx.world.get::<&Animator>(root).ok().and_then(|a| a.masks.clone()).unwrap_or_default();
+                for (li, (weight, clips)) in layers.into_iter().enumerate() {
                     let clips: Vec<(&ModelAnimation, f32, f32)> = clips.iter().filter_map(|(n, t, w)| model.data.animation(n).map(|a| (a, *t, *w * weight))).collect();
-                    apply(ctx.world, &nodes, &clips);
+                    let additive = data.as_ref().and_then(|d| d.layers.get(li)).is_some_and(|l| l.blending == LayerBlending::Additive);
+                    apply_layer(ctx.world, &nodes, &clips, masks.get(li).and_then(|m| m.as_ref()), additive);
                 }
                 continue;
             }
@@ -445,5 +556,48 @@ mod tests {
         a.crossfade("B", 0.5);
         assert_eq!(a.states.len(), 2);
         assert!(a.states.iter().all(|s| s.fade != 0.0));
+    }
+
+    #[test]
+    fn events_fire_once_per_crossing_and_masks_limit_layers() {
+        let mut out = Vec::new();
+        let ev = [ClipEvent { time: 0.5, name: "step".into(), parameter: String::new() }];
+        crossed(&ev, Some(0.4), 0.6, 1.0, &mut out, "Walk");
+        crossed(&ev, Some(0.6), 0.9, 1.0, &mut out, "Walk");
+        crossed(&ev, Some(0.9), 0.55, 1.0, &mut out, "Walk"); // looped: 0.9 → 1.0 → 0.55
+        crossed(&ev, None, 0.0, 1.0, &mut out, "Walk");
+        assert_eq!(out.len(), 2);
+        // the tentacle playing Sway with an event, through the plugin
+        struct G;
+        impl goat_runtime::Game for G {
+            fn start(&mut self, ctx: &mut Context) {
+                let mut assets = AssetServer::new(AssetIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/hello/assets")));
+                let root = assets.spawn_model(ctx.world, ctx.gfx, "models/tentacle.glb", None).unwrap();
+                let mut a = Animator::playing("Sway");
+                a.events.insert("Sway".into(), vec![ClipEvent { time: 0.1, name: "creak".into(), parameter: "x".into() }]);
+                ctx.world.insert(root, (a, goat_runtime::Name("T".into()))).unwrap();
+                ctx.resources.insert(assets);
+            }
+            fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+                vec![Box::new(AnimationPlugin::default())]
+            }
+        }
+        let mut gfx = NullBackend::new();
+        let mut e = goat_runtime::Engine::new(G);
+        e.frame(0.0, &mut gfx);
+        let root = e.world.query::<&goat_runtime::Name>().iter().find(|(_, n)| n.0 == "T").unwrap().0;
+        let mut fired = 0;
+        for _ in 0..12 {
+            e.frame(1.0 / 60.0, &mut gfx);
+            fired += e.world.get::<&Animator>(root).unwrap().fired.iter().filter(|f| f.name == "creak" && f.parameter == "x").count();
+        }
+        assert_eq!(fired, 1, "crossed 0.1 s once in 0.2 s");
+        // mask: only the named node and its children
+        let assets = e.resources.get::<AssetServer>().unwrap();
+        let model = &assets.loaded_model("models/tentacle.glb").unwrap().data;
+        let first = model.nodes.iter().position(|n| !n.children.is_empty()).unwrap();
+        let set = mask_nodes(model, &[model.nodes[first].name.clone()]);
+        assert!(set.contains(&first) && model.nodes[first].children.iter().all(|c| set.contains(c)));
+        assert!(set.len() < model.nodes.len() || model.roots.contains(&first));
     }
 }

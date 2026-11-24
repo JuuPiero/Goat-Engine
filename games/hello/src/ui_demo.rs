@@ -94,4 +94,49 @@ pub fn spawn(ctx: &mut Context) {
     let _ = world.insert_one(slider, UiSlider { value: 0.43, changed: false, fill: Some(fill), handle: Some(handle) });
 
     let _ = world.insert_one(canvas, Scripts::new().with(PanelActions { button, toggle, slider, slider_label: sl }));
+
+    // left: a scroll list (mask + vertical layout + content size fitter) and a dropdown
+    let view = spawn_ui(world, "List", canvas, RectTransform { anchor_min: Vec2::new(0.0, 1.0), anchor_max: Vec2::new(0.0, 1.0), pivot: Vec2::new(0.0, 1.0), offset: Vec2::new(6.0, -36.0), size: Vec2::new(112.0, 96.0) });
+    let _ = world.insert(view, (UiImage::color(Color::rgba(0.08, 0.09, 0.12, 0.82)), UiMask::default(), UiScrollRect::default()));
+    let content = spawn_ui(world, "Content", view, RectTransform { anchor_min: Vec2::new(0.0, 1.0), anchor_max: Vec2::new(1.0, 1.0), pivot: Vec2::new(0.5, 1.0), offset: Vec2::ZERO, size: Vec2::ZERO });
+    let _ = world.insert(content, (UiLayoutGroup { padding: [4.0, 4.0, 4.0, 4.0], spacing: Vec2::new(0.0, 3.0), control_width: true, expand_width: true, ..Default::default() }, UiContentSizeFitter { horizontal: false, vertical: true }));
+    for (i, name) in ["Đồi cỏ", "Hang đá", "Rừng tre", "Hồ sen", "Núi tuyết", "Sa mạc", "Đảo nhỏ", "Thác nước"].iter().enumerate() {
+        let item = spawn_ui(world, &format!("Item {i}"), content, RectTransform::anchored(Vec2::ZERO, Vec2::ZERO, Vec2::new(100.0, 20.0)));
+        let _ = world.insert(item, (UiImage::color(Color::hex(0x2a2f3b)), UiButton { normal: Color::hex(0x2a2f3b), ..Default::default() }));
+        let t = spawn_ui(world, "Text", item, RectTransform::stretch(4.0));
+        let _ = world.insert_one(t, UiText { align: Align::Left, valign: VAlign::Middle, ..UiText::new(format!("{}. {name}", i + 1), FONT, 10.0) });
+    }
+    // a filled bar (Image Type Filled) under the list: how far the list is scrolled
+    let bar = spawn_ui(world, "Scroll Bar", canvas, RectTransform { anchor_min: Vec2::new(0.0, 1.0), anchor_max: Vec2::new(0.0, 1.0), pivot: Vec2::new(0.0, 1.0), offset: Vec2::new(6.0, -134.0), size: Vec2::new(112.0, 4.0) });
+    let _ = world.insert_one(bar, UiImage { image_type: ImageType::Filled, fill_amount: 0.0, ..UiImage::color(Color::hex(0x3d8bff)) });
+    let drop = spawn_ui(world, "Mode", canvas, RectTransform { anchor_min: Vec2::new(0.0, 1.0), anchor_max: Vec2::new(0.0, 1.0), pivot: Vec2::new(0.0, 1.0), offset: Vec2::new(6.0, -8.0), size: Vec2::new(112.0, 22.0) });
+    let _ = world.insert(drop, (UiImage::color(Color::hex(0x3a4152)), UiButton::default(), UiDropdown { options: vec!["Bản đồ: Gần".into(), "Bản đồ: Xa".into(), "Bản đồ: Rất xa".into()], font: FONT.into(), font_size: 10.0, item_height: 20.0, ..Default::default() }));
+    let dl = spawn_ui(world, "Label", drop, RectTransform::stretch(5.0));
+    let _ = world.insert_one(dl, UiText { align: Align::Left, valign: VAlign::Middle, ..UiText::new("", FONT, 10.0) });
+    let _ = world.insert_one(view, Scripts::new().with(ListActions { view, bar, drop }));
+}
+
+/// The list's scroll position → the filled bar; the dropdown zooms the map camera.
+struct ListActions {
+    view: Entity,
+    bar: Entity,
+    drop: Entity,
+}
+
+impl Behaviour for ListActions {
+    fn late_update(&mut self, ctx: &mut Context, _me: Entity) {
+        let progress = ctx.world.get::<&UiScrollRect>(self.view).map(|s| 1.0 - s.normalized.y).unwrap_or(0.0);
+        if let Ok(mut img) = ctx.world.get::<&mut UiImage>(self.bar) {
+            img.fill_amount = progress.clamp(0.0, 1.0);
+        }
+        let choice = ctx.world.get::<&UiDropdown>(self.drop).ok().filter(|d| d.changed).map(|d| d.value);
+        if let Some(v) = choice {
+            let height = [11.0, 16.0, 24.0][v.min(2)];
+            for (_, (n, c)) in ctx.world.query_mut::<(&Name, &mut Camera)>() {
+                if n.0 == "Map Camera" {
+                    c.projection = goat_runtime::gfx::Projection::Orthographic { height, near: 0.1, far: 50.0 };
+                }
+            }
+        }
+    }
 }

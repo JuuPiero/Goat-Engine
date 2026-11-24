@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{copy_into, exe, run_command, BuildOptions, Builder};
+use super::{copy_into, exe, run_command, stage_assets, BuildOptions, Builder};
 use crate::config::Config;
 
 pub struct Nintendo3ds;
@@ -84,6 +84,8 @@ impl Builder for Nintendo3ds {
     }
 
     fn build(&self, config: &Config, options: &BuildOptions) -> Result<PathBuf, String> {
+        // romfs: the assets with scripts compiled (players/3ds/Cargo.toml points cargo-3ds here)
+        stage_assets(config, &config.target_dir().join("3ds-romfs"))?;
         let mut cmd = Self::cargo(config)?;
         cmd.args(["+nightly", "3ds", "build", "-p", PACKAGE]);
         if options.release {

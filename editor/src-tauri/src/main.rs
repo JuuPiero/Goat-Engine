@@ -162,10 +162,70 @@ fn find_project() -> PathBuf {
     PathBuf::from("assets")
 }
 
+/// tools/goat-cs (C# → JavaScript), found above the editor executable.
+fn goat_cs_dll() -> Option<PathBuf> {
+    let mut d = std::env::current_exe().ok()?;
+    while d.pop() {
+        let p = d.join("tools").join("goat-cs").join("bin").join("goat-cs.dll");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ScriptLog {
+    level: &'static str,
+    text: String,
+}
+
+/// Translates changed C# scripts (debounced), reporting to the Console (`script-log` events).
+fn csharp_worker(app: tauri::AppHandle, root: PathBuf) -> std::sync::mpsc::Sender<PathBuf> {
+    let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
+    std::thread::spawn(move || {
+        let log = |level: &'static str, text: String| {
+            let _ = app.emit("script-log", ScriptLog { level, text });
+        };
+        while let Ok(first) = rx.recv() {
+            let mut files = std::collections::BTreeSet::from([first]);
+            while let Ok(p) = rx.recv_timeout(std::time::Duration::from_millis(250)) {
+                files.insert(p);
+            }
+            files.retain(|f| f.is_file());
+            if files.is_empty() {
+                continue;
+            }
+            let Some(dll) = goat_cs_dll() else {
+                log("warn", "C#: tools/goat-cs isn't built (cd tools/goat-cs && dotnet build -c Release -o bin)".into());
+                continue;
+            };
+            match std::process::Command::new("dotnet").arg(&dll).arg(&root).args(&files).output() {
+                Ok(out) => {
+                    for l in String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.trim().is_empty()) {
+                        log("info", format!("C#: {l}"));
+                    }
+                    for l in String::from_utf8_lossy(&out.stderr).lines().filter(|l| !l.trim().is_empty()) {
+                        log("error", l.to_string());
+                    }
+                }
+                Err(e) => log("error", format!("C#: can't run dotnet ({e}) — install the .NET SDK")),
+            }
+        }
+    });
+    tx
+}
+
 fn watch(app: tauri::AppHandle, root: PathBuf) -> Option<notify::RecommendedWatcher> {
-    use notify::{RecursiveMode, Watcher};
+    use notify::{EventKind, RecursiveMode, Watcher};
+    let cs = csharp_worker(app.clone(), root.clone());
     let mut w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if res.is_ok() {
+        if let Ok(ev) = res {
+            if matches!(ev.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+                for p in ev.paths.iter().filter(|p| p.extension().is_some_and(|e| e == "cs")) {
+                    let _ = cs.send(p.clone());
+                }
+            }
             let _ = app.emit("assets-changed", ());
         }
     })

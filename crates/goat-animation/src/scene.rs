@@ -20,6 +20,9 @@ struct AnimatorJson {
     play: Vec<String>,
     #[serde(default = "one")]
     speed: f32,
+    /// Clip events (without a controller): { "Sway": [ { "time": 0.5, "name": "creak" } ] }.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    events: std::collections::BTreeMap<String, Vec<crate::ClipEvent>>,
 }
 
 fn one() -> f32 {
@@ -39,10 +42,10 @@ fn save(ctx: &SaveContext, e: Entity) -> Option<Value> {
                 }
             }
         }
-        return serde_json::to_value(AnimatorJson { controller: Some(key.clone()), parameters, play: Vec::new(), speed: a.speed }).ok();
+        return serde_json::to_value(AnimatorJson { controller: Some(key.clone()), parameters, play: Vec::new(), speed: a.speed, events: Default::default() }).ok();
     }
     let speed = a.states.first().map(|s| s.speed).unwrap_or(1.0);
-    serde_json::to_value(AnimatorJson { controller: None, parameters: Default::default(), play: a.states.iter().map(|s| s.clip.clone()).collect(), speed }).ok()
+    serde_json::to_value(AnimatorJson { controller: None, parameters: Default::default(), play: a.states.iter().map(|s| s.clip.clone()).collect(), speed, events: a.events.clone() }).ok()
 }
 
 fn load(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
@@ -55,7 +58,7 @@ fn load(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
         }
         return ctx.world.insert_one(e, a).map_err(|_| "entity vanished".to_string());
     }
-    let mut a = Animator::default();
+    let mut a = Animator { events: j.events, ..Default::default() };
     for c in &j.play {
         a.add(c, 1.0);
     }

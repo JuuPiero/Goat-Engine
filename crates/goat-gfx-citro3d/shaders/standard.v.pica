@@ -1,6 +1,7 @@
 ; GoatEngine standard vertex shader for the PICA200 (Nintendo 3DS).
 ; Feeds the GPU's fragment lighting (per-pixel Lambert + Blinn-Phong in hardware): it outputs the
-; view vector and the normal as a quaternion; color = vertex color, texcoord0 = uv.
+; view vector and the normal as a quaternion; color = vertex color, texcoord0 = texcoord1 = uv
+; (unit 0: base texture, unit 1: emissive map).
 ; Attributes: v0 position, v1 normal, v2 uv, v3 color (goat_gfx::Vertex layout).
 
 .fvec projection[4], modelView[4]
@@ -12,6 +13,7 @@
 
 .out outpos position
 .out outtc0 texcoord0
+.out outtc1 texcoord1
 .out outclr color
 .out outview view
 .out outnq normalquat
@@ -42,6 +44,7 @@
 	dp4 outpos.w, projection[3], r1
 
 	mov outtc0, intex
+	mov outtc1, intex
 	mov outclr, inclr
 
 	; view-space normal, normalized

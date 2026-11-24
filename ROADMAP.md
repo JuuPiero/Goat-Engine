@@ -18,8 +18,8 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ Fog tuyến tính (khối fog của PICA); 3DS dùng **w-buffer** → depth tuyến tính, chính xác đều cả gần lẫn xa
 - ✅ Viewport một phần trên 3DS (camera picture-in-picture, clear từng phần)
 - ✅ Frustum culling (bounding sphere của mesh, ở runtime cho mọi backend)
-- ⬜ Ambient bán cầu, emissive map, cubemap phản chiếu
-- ⬜ Batching / instancing, LOD
+- ✅ Ambient bán cầu (`RenderSettings.ambient_ground`; 3DS: ambient đất + một đèn từ trên xuống), emissive map, cubemap phản chiếu (`env_map` + `reflectivity`, `builtin:sky` / `.cubemap.json`; 3DS: shader thứ hai đưa vector phản chiếu vào texcoord0 cho unit cube)
+- ✅ Static batching (`StaticBatching` trên root: gộp mesh cùng material thành một draw), LOD (`LodGroup` chọn mesh theo chiều cao trên màn hình, cull), profiler CPU theo plugin (`Profiler`: ms mỗi phần + số draw call). PICA không có instancing phần cứng.
 
 **Đẹp mà vẫn nhanh trên 3DS** (theo yêu cầu, làm dần):
 - ✅ SSAA 2×2 khi tắt 3D (render 800×480, thu bằng display transfer — không tốn shader)
@@ -52,32 +52,41 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 
 ## Giai đoạn 3 — Gameplay systems (theo PiaEngine)
 - ✅ Physics 3D (`goat-physics`, Rapier): RigidBody dynamic / kinematic / static, Collider box / sphere / capsule, trigger, sự kiện va chạm, raycast, impulse; chạy được trên 3DS
-- ⬜ Physics 2D (Rapier2D), joint, character controller, mesh collider, layer va chạm
+- ✅ Physics 2D (`goat-physics2d`, Rapier 2D — crate riêng, game không dùng thì không mang theo): Rigidbody2D / Collider2D (box, circle, capsule, polygon lồi) trên mặt phẳng XY, trigger, sự kiện, raycast, overlap point; scene `physics2d.scene.json`
+- ✅ Joint (3D: fixed / hinge có giới hạn + motor / ball / slider / spring / rope; 2D: fixed / hinge / slider / spring / distance), CharacterController (trượt theo tường, leo bậc, dốc, grounded), mesh collider (trimesh + convex hull), edge collider 2D, layer va chạm (Layer Collision Matrix) + raycast / overlap theo layer mask, lệnh `Physics.*` / `Physics2D.*` cho script (GameObject đi qua lại được)
 - ✅ Audio (`goat-audio`): WAV / OGG, mixer phần mềm (volume, pan, pitch, loop, âm 3D), AudioSource / AudioListener, one-shot; ra loa qua cpal (desktop) / DSP ndsp (3DS); `GOAT_AUDIO_DUMP` ghi ra WAV để kiểm chứng
-- ⬜ Audio: stream nhạc dài (không giải nén hết), mixer group / hiệu ứng, scene codec cho AudioSource
+- ✅ Audio nâng cao: stream Ogg dài (giải mã dần khi phát, tự bật khi file > 512 KB hoặc `load_type` trong `.import.json`), mixer group (`audio/mixer.json`: volume, mute, low-pass, lồng dưới Master), pause / thời gian phát, codec scene, lệnh `Audio.*` / `AudioSource.*` / `AudioMixer.*` cho script
 - ✅ Animation (`goat-animation`): Animator phát clip glTF (nhiều clip theo trọng số, crossfade, loop, tốc độ), skinning bằng CPU (4 xương/đỉnh, mesh riêng cho mỗi instance), codec scene
-- ⬜ Animator Controller (state machine, blend tree, layer mask), animation event, sprite animation clip, GPU skinning trên desktop
+- ✅ Animator Controller (`.controller.json`): tham số float / int / bool / trigger, state (clip hoặc blend tree 1D đồng bộ thời gian), transition có điều kiện / exit time / crossfade, Any State, layer override theo weight; cửa sổ Animator trong editor (đồ thị state, kéo node, Make Transition, Inspector state / transition)
+- ✅ Avatar mask (`mask` theo tên node + con), layer additive, blend tree 2D (Freeform Cartesian, gradient band), animation event (`events` theo clip → `Animator.fired` / `Animator.of(go).onEvent`), sprite flipbook (`SpriteAnimator`: lưới hoặc rect, fps, loop, `next`)
+- ⬜ GPU skinning trên desktop, xem state đang chạy trực tiếp trong cửa sổ Animator khi Play
 - ✅ Particles (`goat-particles`): rate + burst, shape point / sphere / cone / box, khoảng min..max cho tuổi thọ / tốc độ / kích thước / góc, màu + kích thước theo tuổi, trọng lực, lực cản, không gian world/local, alpha/additive, billboard gom lô
-- ⬜ Particles: curve / gradient đầy đủ, sub-emitter, va chạm, texture sheet animation, trail; exporter Unity (như PiaEngine)
+- ✅ Particles nâng cao: gradient / curve theo tuổi (màu, kích thước, tốc độ), màu đầu random giữa hai màu, velocity over lifetime, texture sheet animation, va chạm (mặt phẳng + collider 3D với feature `physics`: nảy, mất tuổi thọ), sub-emitter (birth / death / collision), trail; exporter Unity → GoatEngine (`tools/unity-goat-exporter`, đã chạy thật bằng Unity 6 batch mode)
 - ✅ UI (`goat-ui`): Canvas theo màn hình, RectTransform (anchor / pivot / offset như Unity), Image, Text, Button, Toggle, Slider, cảm ứng / chuột; vẽ một lượt gom lô mỗi canvas
-- ⬜ UI: layout group, scroll view, input field, dropdown, 9-slice, điều hướng bằng D-pad, codec scene
-- ⬜ Tilemap, Spline, Tween (DOTween-like), Cinemachine-like camera, Input System (action map, rebinding)
-- ⬜ Coroutine / async (Awaitable), Job System (rayon trên desktop, 2–4 nhân trên New 3DS)
+- ✅ UI nâng cao: Image Sliced (9-slice) / Filled, layout group ngang / dọc / lưới + Layout Element + Content Size Fitter, mask cắt (RectMask2D), Scroll Rect (kéo, quán tính, bật lại ở mép), Input Field (gõ phím trên desktop, bàn phím hệ thống swkbd trên 3DS), Dropdown, điều hướng D-pad / analog (EventSystem), codec scene, lệnh `UI.*` cho script
+- ✅ Input actions (`goat-input`, như Input System của Unity): `.inputactions.json` (action map, binding theo đường dẫn Unity `<Gamepad>/buttonSouth`...), composite 2DVector / 1DAxis, interaction press / hold / tap, processor (deadzone, invert, scale, normalize, clamp), bật/tắt map, rebinding + lưu override JSON; cập nhật đầu frame (`Plugin::early_update`)
+- ⬜ Cửa sổ Input Actions trong editor, bàn phím / chuột như device riêng
+- ✅ Tween (`goat-tween`, như DOTween): move / scale / rotate / punch / shake / path, 31 ease, loop Restart / Yoyo / Incremental, delay, relative, From, sequence; component `TweenAnimation`; API DOTween trong TS / C#
+- ⬜ Tilemap, Spline, Cinemachine-like camera
+- ✅ Coroutine (Rust: hàm bước / `Steps`; TS: generator; C#: `IEnumerator` + `yield return`), `Awaitable` / async-await, `Time.timeScale` + thời gian unscaled
+- ⬜ Job System (rayon trên desktop, 2–4 nhân trên New 3DS)
 - ⬜ Netcode (UDS/local wireless trên 3DS, WebSocket/UDP trên desktop)
-- ⬜ Save data (archive SD / extdata trên 3DS)
+- ✅ Lưu dữ liệu (`goat-save`): PlayerPrefs + save slot JSON, ghi an toàn (file tạm + đổi tên); AppData trên desktop, thẻ SD trên 3DS
 
-## Giai đoạn 4 — Script đa ngôn ngữ
-Mọi ngôn ngữ đều đi qua cùng một trait `Behaviour`; engine không cần biết script viết bằng gì.
-- ⬜ **C ABI** (`goat.h`, sinh bằng cbindgen): C và C++ gọi engine qua handle. Trên mọi nền tảng, script C/C++ được link tĩnh.
-- ⬜ **TypeScript**: biên dịch TS → JS (esbuild), chạy trên QuickJS (rquickjs) ở mọi nền tảng kể cả 3DS. API giống PiaEngine (`MonoBehaviour`, `getComponent`...) để tái dùng code.
-- ⬜ **C#**: trên desktop, host CoreCLR qua hostfxr (hot reload). Trên console, dùng NativeAOT hoặc transpile sang TS/C (tái dùng hướng tiếp cận của com.pia.csharp).
-- ⬜ **Rust**: viết `Behaviour` trực tiếp (nhanh nhất)
-- ⬜ Hot reload script trên desktop
+## Giai đoạn 4 — Script đa ngôn ngữ ✅
+Mọi ngôn ngữ đi qua cùng một lõi (`goat-script`: component `Script`, trait `ScriptHost`, một API `Api` dùng chung, `Extensions` để subsystem thêm lệnh như `Animator.setTrigger`), nên hành vi giống hệt nhau.
+- ✅ **Rust**: `Behaviour` trực tiếp (nhanh nhất)
+- ✅ **TypeScript / JavaScript** (`goat-script-js`): ES module `export default class X extends Behaviour`, import API từ `"goat"` và import lẫn nhau; engine JS Boa (Rust thuần → chạy y hệt trên desktop, editor wasm, 3DS); TS biên dịch bằng oxc (lúc nạp trên desktop / editor, lúc build cho console)
+- ✅ **C#** (`tools/goat-cs`, Roslyn): kiểm tra kiểu theo API `GoatEngine` (tên Unity), dịch sang ES module `X.cs.js` chạy trên host JS; editor tự dịch khi file .cs đổi, lỗi hiện ở Console; `goat build` dịch trước khi đóng gói
+- ✅ **C / C++** (`goat-script-native`, `include/goat.h`): lớp behaviour = bảng callback, đăng ký bằng `goat_register_behaviour`, link tĩnh; ví dụ C + C++ (template class) có test
+- ⬜ QuickJS làm host JS nhanh hơn trên 3DS (cùng trait `ScriptHost`), hot reload script khi Play, debugger, field script hiện trong Inspector
 
-## Giai đoạn 5 — Editor
-- ⬜ Editor desktop: Hierarchy, Scene view (gizmo), Game view (có layout 3DS), Inspector, Project, Console, Play mode, Undo/Redo
-- ⬜ Hướng đi đề xuất: editor native viết bằng egui trên chính wgpu backend (một process, đọc/ghi scene trực tiếp). Phương án khác: dùng lại UI web của PiaEngine qua IPC.
-- ⬜ Chạy thử trên 3DS từ editor (`3dslink` + log qua mạng), profiler
+## Giai đoạn 5 — Editor 🔨
+- ✅ Tauri 2 + React + dockview; engine chạy dạng wasm (WebGPU / WebGL2) trong Scene / Game view
+- ✅ Project panel như file manager (kéo thả native giữa 2 editor / ra Explorer / vào từ OS), Hierarchy (tạo, xoá, kéo để đổi cha), Inspector mọi component (JSON theo codec scene, Add / Remove Component), Console (kể cả log engine + lỗi script)
+- ✅ Scene view: lưới, gizmo Move / Rotate / Scale (W / E / R), chọn bằng click, orbit / pan / zoom, F để frame, kéo model / prefab vào scene; Play / Stop; lưu scene
+- ✅ Cửa sổ Animator (Animator Controller)
+- ⬜ Undo / Redo, đa chọn, prefab mode, cửa sổ Input Actions, chạy thử trên 3DS từ editor (`3dslink` + log qua mạng), profiler
 
 ## Giai đoạn 6 — Thêm nền tảng (làm sau cùng, khi các thành phần engine đã xong)
 Mỗi nền tảng = backend đồ họa + platform + `Builder` trong `tools/goat`.

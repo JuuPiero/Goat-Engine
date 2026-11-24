@@ -58,6 +58,8 @@ export function App() {
     });
     void installDropHandling();
     const un = listen('assets-changed', () => refresh());
+    // C# translation results (tools/goat-cs, run by the backend when .cs files change)
+    void listen<{ level: 'info' | 'warn' | 'error'; text: string }>('script-log', (ev) => log(ev.payload.text, ev.payload.level));
     // automation / tests: window.__goat
     (window as unknown as { __goat: unknown }).__goat = { getState, setState, handleDrop, api, engine: getEngine, dock: () => dv.current, openScene, startPlay, stopPlay };
     return () => void un.then((f) => f());

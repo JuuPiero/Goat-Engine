@@ -49,13 +49,47 @@ mod imp {
         }));
     }
 
+    /// The system keyboard (swkbd applet); blocks until OK / cancel. None = cancelled.
+    fn show_keyboard(apt: &Apt, gfx: &Gfx, req: &goat_runtime::KeyboardRequest) -> Option<String> {
+        use ctru::applets::swkbd::{Button as KbButton, ButtonConfig, Kind, PasswordMode, SoftwareKeyboard};
+        let mut kb = SoftwareKeyboard::new(if req.numeric { Kind::Numpad } else { Kind::Normal }, ButtonConfig::LeftRight);
+        if !req.hint.is_empty() {
+            kb.set_hint_text(Some(&req.hint));
+        }
+        if !req.initial.is_empty() {
+            kb.set_initial_text(Some(std::borrow::Cow::Owned(req.initial.clone())));
+        }
+        if req.max_length > 0 {
+            kb.set_max_text_len(req.max_length.min(u16::MAX as u32) as u16);
+        }
+        if req.password {
+            kb.set_password_mode(PasswordMode::HideDelay);
+        }
+        match kb.launch(apt, gfx) {
+            Ok((text, KbButton::Right)) => Some(text),
+            Ok(_) => None,
+            Err(e) => {
+                goat_core::warn!("keyboard: {e:?}");
+                None
+            }
+        }
+    }
+
     /// Runs a game until it quits or the system closes it.
     pub fn run(game: impl Game) {
         goat_core::log::set_sink(log_sink);
         install_panic_screen();
         let apt = Apt::new().expect("APT");
         let mut hid = Hid::new().expect("HID");
-        let _gfx = Gfx::new().expect("GFX");
+        let ctru_gfx = Gfx::new().expect("GFX");
+        // New 3DS: 804 MHz + the bigger L2 cache (no effect on the original 3DS)
+        // SAFETY: plain libctru call after APT init.
+        unsafe {
+            let mut new3ds = false;
+            let _ = ctru_sys::APT_CheckNew3DS(&mut new3ds);
+            ctru_sys::osSetSpeedupEnable(true);
+            goat_core::info!("{} 3DS{}", if new3ds { "New" } else { "Original" }, if new3ds { ": 804 MHz mode" } else { "" });
+        }
         // the game's assets folder, packed into the .3dsx (goat-assets reads romfs:/)
         let _romfs = ctru::services::romfs::RomFS::new().map_err(|e| goat_core::warn!("no romfs: {e}")).ok();
         let mut gfx = match Citro3dBackend::new() {
@@ -66,6 +100,8 @@ mod imp {
             }
         };
         let mut engine = Engine::new(game);
+        // text boxes open the system keyboard
+        engine.resources.insert(goat_runtime::SoftwareKeyboard::default());
         let mut last = Instant::now();
         let map = [
             (Button::A, KeyPad::A),
@@ -109,6 +145,15 @@ mod imp {
             engine.frame(dt, &mut gfx);
             if engine.should_quit() {
                 break;
+            }
+            let request = engine.resources.get_mut::<goat_runtime::SoftwareKeyboard>().and_then(|k| k.request.take());
+            if let Some(req) = request {
+                let result = show_keyboard(&apt, &ctru_gfx, &req);
+                if let Some(k) = engine.resources.get_mut::<goat_runtime::SoftwareKeyboard>() {
+                    k.result = Some(result);
+                }
+                // the applet took a while: don't count it as a frame
+                last = Instant::now();
             }
         }
     }

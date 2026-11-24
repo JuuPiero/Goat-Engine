@@ -44,6 +44,10 @@ pub fn kind_of(name: &str, is_dir: bool) -> &'static str {
         "material"
     } else if ends(".controller.json") {
         "controller"
+    } else if ends(".inputactions.json") {
+        "input"
+    } else if ends(".ts") || ends(".js") || ends(".cs") || ends(".mjs") {
+        "script"
     } else if ends(".png") || ends(".jpg") || ends(".jpeg") {
         "image"
     } else if ends(".glb") || ends(".gltf") {

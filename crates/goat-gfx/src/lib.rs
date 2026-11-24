@@ -164,6 +164,12 @@ pub struct MaterialDesc {
     /// Blinn-Phong exponent (1..256).
     pub shininess: f32,
     pub emissive: Color,
+    /// Multiplies `emissive` (glowing windows, screens, lava cracks).
+    pub emissive_texture: Option<TextureId>,
+    /// A cube map reflected by the surface (see [`GraphicsBackend::create_cubemap`]).
+    pub env_map: Option<TextureId>,
+    /// 0 = no reflection, 1 = a mirror (the reflection replaces the lit color).
+    pub reflectivity: f32,
     pub blend: BlendMode,
     pub cull: CullMode,
     pub depth_write: bool,
@@ -182,6 +188,9 @@ impl Default for MaterialDesc {
             specular: Color::rgb(0.4, 0.4, 0.4),
             shininess: 32.0,
             emissive: Color::BLACK,
+            emissive_texture: None,
+            env_map: None,
+            reflectivity: 0.0,
             blend: BlendMode::Opaque,
             cull: CullMode::Back,
             depth_write: true,
@@ -282,13 +291,17 @@ impl Light {
 /// relevant ones: directional first, then the nearest point / spot lights).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lighting {
+    /// Ambient light (with `ambient_ground`: the sky color, from above).
     pub ambient: Color,
+    /// Hemisphere ambient (Unity's Gradient ambient): this color from below, blending to
+    /// `ambient` from above along the surface normal.
+    pub ambient_ground: Option<Color>,
     pub lights: Vec<Light>,
 }
 
 impl Default for Lighting {
     fn default() -> Self {
-        Lighting { ambient: Color::rgb(0.22, 0.24, 0.3), lights: Vec::new() }
+        Lighting { ambient: Color::rgb(0.22, 0.24, 0.3), ambient_ground: None, lights: Vec::new() }
     }
 }
 
@@ -438,6 +451,11 @@ pub trait GraphicsBackend {
 
     fn create_mesh(&mut self, mesh: &MeshData) -> Result<MeshId, GfxError>;
     fn create_texture(&mut self, tex: &TextureData) -> Result<TextureId, GfxError>;
+    /// A cube map from 6 square faces in the order +X, -X, +Y, -Y, +Z, -Z (world axes; the
+    /// face seen looking along that axis, up = +Y except ±Y faces: up = -Z / +Z).
+    fn create_cubemap(&mut self, _faces: &[TextureData; 6]) -> Result<TextureId, GfxError> {
+        Err(GfxError::Unsupported("cube maps".into()))
+    }
     fn create_material(&mut self, mat: &MaterialDesc) -> Result<MaterialId, GfxError>;
     fn update_material(&mut self, id: MaterialId, mat: &MaterialDesc);
     fn destroy_mesh(&mut self, id: MeshId);

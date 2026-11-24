@@ -15,6 +15,7 @@ pub fn plugins() -> Vec<Box<dyn Plugin>> {
     vec![
         Box::new(goat_assets::AssetsPlugin::with_dev_root(concat!(env!("CARGO_MANIFEST_DIR"), "/assets"))),
         Box::new(goat_scene::ScenePlugin),
+        Box::new(goat_assets::StaticBatchPlugin),
         Box::new(goat_input::InputActionsPlugin::new("input/controls.inputactions.json")),
         Box::new(goat_sprites::SpritePlugin::default()),
         Box::new(goat_text::TextPlugin::default()),
@@ -24,6 +25,10 @@ pub fn plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(goat_animation::AnimationPlugin::default()),
         Box::new(goat_particles::ParticlePlugin::default()),
         Box::new(goat_ui::UiPlugin::default()),
+        Box::new(goat_tween::TweenPlugin),
+        Box::new(goat_save::SavePlugin::new("GoatHello")),
+        // scripts: TypeScript / JavaScript / C# (translated by goat-cs) and native C / C++
+        Box::new(goat_script::ScriptPlugin::new().with_host(goat_script_js::JsHost::new()).with_host(goat_script_native::NativeHost::new())),
     ]
 }
 
@@ -252,7 +257,9 @@ impl Game for HelloGame {
 
         let ground = gfx.create_material(&MaterialDesc { texture: Some(checker), specular: Color::rgb(0.1, 0.1, 0.1), shininess: 8.0, ..Default::default() }).expect("material");
         let crate_mat = gfx.create_material(&MaterialDesc { texture: Some(crate_tex), specular: Color::rgb(0.35, 0.3, 0.25), shininess: 24.0, ..Default::default() }).expect("material");
-        let shiny = gfx.create_material(&MaterialDesc { base_color: Color::hex(0x3d8bff), specular: Color::rgb(0.9, 0.9, 0.9), shininess: 64.0, ..Default::default() }).expect("material");
+        // the blue ball reflects the built-in sky cube map
+        let sky = ctx.resources.get_mut::<goat_assets::AssetServer>().and_then(|a| a.cubemap(gfx, "builtin:sky").ok());
+        let shiny = gfx.create_material(&MaterialDesc { base_color: Color::hex(0x3d8bff), specular: Color::rgb(0.9, 0.9, 0.9), shininess: 64.0, env_map: sky, reflectivity: 0.35, ..Default::default() }).expect("material");
         let marker = gfx.create_material(&MaterialDesc { texture: Some(marker_tex), lighting: goat_runtime::gfx::LightingModel::Unlit, ..Default::default() }).expect("material");
         let glass = gfx.create_material(&MaterialDesc { base_color: Color::rgba(0.4, 1.0, 0.6, 0.55), blend: BlendMode::Alpha, depth_write: false, ..Default::default() }).expect("material");
 
@@ -260,7 +267,8 @@ impl Game for HelloGame {
         let sky = Color::hex(0x1d2330);
         world.spawn((
             Name("Render Settings".into()),
-            RenderSettings { ambient: Color::rgb(0.2, 0.22, 0.28), fog: Some(Fog { color: sky, start: 9.0, end: 24.0 }) },
+            // hemisphere ambient: cool sky light from above, warm bounce from the ground
+            RenderSettings { ambient: Color::rgb(0.26, 0.3, 0.4), ambient_ground: Some(Color::rgb(0.2, 0.15, 0.1)), fog: Some(Fog { color: sky, start: 9.0, end: 24.0 }) },
         ));
         world.spawn((
             Name("Sun".into()),
@@ -379,8 +387,21 @@ impl Game for HelloGame {
                 if let Some(mut t) = ctx.transform_mut(logo) {
                     t.position = hud::ORIGIN + Vec3::new(0.0, 70.0, 0.0);
                 }
+                // goat-tween: the logo breathes
+                if !FROZEN {
+                    goat_tween::tweens(ctx).add(goat_tween::Tween::scale_to(logo, Vec3::splat(1.08), 1.1).ease(goat_tween::Ease::InOutSine).loops(-1, goat_tween::LoopType::Yoyo));
+                }
             }
             Err(e) => goat_runtime::warn!("hud logo: {e}"),
+        }
+        // a firework made in Unity, exported by tools/unity-goat-exporter
+        match goat_scene::instantiate(ctx, "fx/Firework.prefab.json", None) {
+            Ok(fw) => {
+                if let Some(mut t) = ctx.transform_mut(fw) {
+                    t.position = Vec3::new(3.5, 0.2, 2.5);
+                }
+            }
+            Err(e) => goat_runtime::warn!("firework: {e}"),
         }
     }
 }

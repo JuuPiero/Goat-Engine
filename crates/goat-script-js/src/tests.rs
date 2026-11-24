@@ -66,7 +66,7 @@ impl Game for G {
         w.spawn((Name("Broken".into()), Transform::default(), Script(vec![ScriptRef::new("scripts/Broken.ts"), ScriptRef::new("scripts/BadSyntax.ts")])));
     }
     fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
-        vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::new(io())))]
+        vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(io())))]
     }
 }
 
@@ -78,14 +78,14 @@ fn find(e: &Engine, name: &str) -> Option<Entity> {
 fn typescript_behaviours_run_with_the_engine_api() {
     let mut gfx = NullBackend::new();
     let mut e = Engine::new(G);
-    e.frame(0.5, &mut gfx); // start (time doesn't advance on the first frame)
-    e.frame(0.5, &mut gfx);
+    e.frame(0.1, &mut gfx); // start (time doesn't advance on the first frame)
+    e.frame(0.1, &mut gfx); // (one frame is at most Time::max_delta = 0.1 s)
     let s = find(&e, "Spinner").unwrap();
     let t = *e.world.get::<&Transform>(s).unwrap();
     // props: speed 45 → 90°/s doubled by util.ts; offset → start position; 2 updates moved x by 2
     assert_eq!(t.position, Vec3::new(2.0, 2.0, 0.0), "start + translate");
     let (y, _, _) = t.rotation.to_euler(EulerRot::YXZ);
-    assert!((y.to_degrees() - 45.0).abs() < 0.01, "rotated 90°/s × 0.5 s (first frame dt = 0): {}", y.to_degrees());
+    assert!((y.to_degrees() - 9.0).abs() < 0.01, "rotated 90°/s × 0.1 s (first frame dt = 0): {}", y.to_degrees());
 
     // input + spawning + components as JSON + extension calls
     e.input.begin_frame();
@@ -113,6 +113,61 @@ fn errors_disable_only_the_failing_script() {
     assert_eq!(e.world.get::<&Transform>(s).unwrap().position.x, 4.0);
 }
 
+/// C#: tools/goat-cs translates tools/goat-cs/tests/Hover.cs, this host runs the module.
+/// Skipped (with a note) when dotnet or the built tool isn't there.
+#[test]
+fn csharp_scripts_run_after_goat_cs() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/goat-cs");
+    let tool = format!("{root}/bin/goat-cs.dll");
+    if !std::path::Path::new(&tool).exists() {
+        eprintln!("skipped: build tools/goat-cs first (dotnet build -c Release -o bin)");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("goat-cs-test-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::copy(format!("{root}/tests/Hover.cs"), dir.join("scripts/Hover.cs")).unwrap();
+    let out = std::process::Command::new("dotnet").arg(&tool).arg(&dir).output();
+    let Ok(out) = out else {
+        eprintln!("skipped: no dotnet");
+        return;
+    };
+    assert!(out.status.success(), "goat-cs failed: {}", String::from_utf8_lossy(&out.stderr));
+    let js = std::fs::read_to_string(dir.join("scripts/Hover.cs.js")).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    struct Cs(String);
+    impl Game for Cs {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(AssetIo::new("/nonexistent")));
+            goat_script::extensions(ctx).add("Test.double", |_, _, args| Ok(Value::from(args[0].as_f64().unwrap_or(0.0) * 2.0)));
+            ctx.world.spawn((Name("Hoverer".into()), Transform::default(), GlobalTransform::default(), Script(vec![ScriptRef::new("scripts/Hover.cs").with_props(serde_json::json!({ "height": 2, "offset": [0, 3, 0] }))])));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            let io = AssetIo::new("/nonexistent");
+            io.put("scripts/Hover.cs.js", self.0.clone().into_bytes());
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(io)))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(Cs(js));
+    e.frame(0.0, &mut gfx);
+    e.frame(0.1, &mut gfx);
+    let h = find(&e, "Hoverer").unwrap();
+    let p = e.world.get::<&Transform>(h).unwrap().position;
+    // y = offset.y + sin(t × speed) × height (t = 0.1, speed 2) ; x moved 0.5 per frame (2 updates)
+    assert!((p.y - (3.0 + (0.2f32).sin() * 2.0)).abs() < 1e-4, "hover y {p}");
+    assert!((p.x - 1.0).abs() < 1e-5, "hover x {p}");
+    e.input.begin_frame();
+    e.input.set(Button::A, true);
+    e.frame(1.0 / 60.0, &mut gfx);
+    assert!(find(&e, "Coin 0").is_some(), "the C# script spawned a coin");
+    e.input.begin_frame();
+    e.input.set(Button::A, false);
+    e.input.set(Button::B, true);
+    e.frame(1.0 / 60.0, &mut gfx);
+    assert!(find(&e, "Coin 0").is_none(), "and destroyed it");
+}
+
 #[cfg(feature = "typescript")]
 #[test]
 fn typescript_compiles_and_reports_errors() {
@@ -120,4 +175,170 @@ fn typescript_compiles_and_reports_errors() {
     assert!(js.contains("export const n = 1"), "{js}");
     assert!(!js.contains("interface"));
     assert!(compile_typescript("b.ts", "let = ;").is_err());
+}
+
+/// Coroutines (generators + yield instructions), Awaitable and DOTween from TypeScript.
+#[cfg(feature = "typescript")]
+#[test]
+fn coroutines_awaitables_and_tweens() {
+    let io = AssetIo::new("/nonexistent-goat-fx");
+    io.put(
+        "scripts/Fx.ts",
+        br#"
+import { Behaviour, WaitForSeconds, WaitUntil, Awaitable, DOTween, Ease, LoopType, Vector3, Time } from "goat";
+export default class Fx extends Behaviour {
+  log: string[] = [];
+  value = 0;
+  start(): void {
+    this.startCoroutine(this.routine());
+    this.wait();
+    this.transform.doMove(new Vector3(4, 0, 0), 0.4).setEase(Ease.Linear).onComplete(() => this.log.push("moved"));
+    DOTween.to(() => this.value, (v: number) => (this.value = v), 10, 0.2).setEase(Ease.Linear);
+    DOTween.sequence().appendInterval(0.3).appendCallback(() => this.log.push("seq"));
+    const s = this.transform.doScale(2, 0.1).setLoops(2, LoopType.Yoyo);
+    this.startCoroutine(function* (this: Fx) { yield s.waitForCompletion(); this.log.push("yoyo"); });
+  }
+  *routine(): Generator<any> {
+    this.log.push("co0");
+    yield new WaitForSeconds(0.2);
+    this.log.push("co1");
+    yield null;
+    yield new WaitUntil(() => Time.time > 0.45);
+    this.log.push("co2");
+  }
+  async wait(): Promise<void> {
+    await Awaitable.waitForSecondsAsync(0.25);
+    this.log.push("await");
+  }
+  update(): void {
+    this.gameObject.name = this.log.join(",") + "|" + this.value.toFixed(1);
+  }
+}
+"#
+        .to_vec(),
+    );
+    struct Fx(AssetIo);
+    impl Game for Fx {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(self.0.clone()));
+            ctx.world.spawn((Name("fx".into()), Transform::default(), GlobalTransform::default(), Script::one("scripts/Fx.ts")));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(self.0.clone()))), Box::new(goat_tween::TweenPlugin)]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(Fx(io));
+    e.frame(0.0, &mut gfx);
+    for _ in 0..9 {
+        e.frame(0.1, &mut gfx);
+    }
+    let (name, x, scale) = e
+        .world
+        .query::<(&Name, &Transform)>()
+        .iter()
+        .next()
+        .map(|(_, (n, t))| (n.0.clone(), t.position.x, t.scale.x))
+        .unwrap();
+    let (log, value) = name.split_once('|').unwrap();
+    let log: Vec<&str> = log.split(',').collect();
+    assert_eq!(value, "10.0", "{name}");
+    assert!((x - 4.0).abs() < 1e-4 && (scale - 1.0).abs() < 1e-4, "{x} {scale}");
+    for want in ["co0", "co1", "co2", "await", "seq", "moved", "yoyo"] {
+        assert!(log.contains(&want), "{want} missing: {name}");
+    }
+    let pos = |s: &str| log.iter().position(|x| *x == s).unwrap();
+    assert!(pos("co0") < pos("co1") && pos("co1") < pos("await") && pos("await") < pos("co2"), "{name}");
+}
+
+/// C# coroutines (IEnumerator + yield return), async/await and DOTween through goat-cs.
+#[test]
+fn csharp_coroutines_and_tweens() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/goat-cs");
+    let tool = format!("{root}/bin/goat-cs.dll");
+    if !std::path::Path::new(&tool).exists() {
+        eprintln!("skipped: build tools/goat-cs first");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("goat-cs-fx-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::copy(format!("{root}/tests/Fx.cs"), dir.join("scripts/Fx.cs")).unwrap();
+    let Ok(out) = std::process::Command::new("dotnet").arg(&tool).arg(&dir).output() else {
+        eprintln!("skipped: no dotnet");
+        return;
+    };
+    assert!(out.status.success(), "goat-cs failed: {}", String::from_utf8_lossy(&out.stdout));
+    let js = std::fs::read_to_string(dir.join("scripts/Fx.cs.js")).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let io = AssetIo::new("/nonexistent-cs-fx");
+    io.put("scripts/Fx.cs.js", js.into_bytes());
+    struct Cs(AssetIo);
+    impl Game for Cs {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(self.0.clone()));
+            ctx.world.spawn((Name("fx".into()), Transform::default(), GlobalTransform::default(), Script::one("scripts/Fx.cs")));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(self.0.clone()))), Box::new(goat_tween::TweenPlugin)]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(Cs(io));
+    e.frame(0.0, &mut gfx);
+    for _ in 0..6 {
+        e.frame(0.1, &mut gfx);
+    }
+    // yoyo 2 × 0.4 s: at 0.6 s it is on its way back
+    let x = e.world.query::<&Transform>().iter().next().map(|(_, t)| t.position.x).unwrap();
+    assert!((x - 2.0).abs() < 1e-3, "x {x}");
+    for _ in 0..4 {
+        e.frame(0.1, &mut gfx);
+    }
+    let x = e.world.query::<&Transform>().iter().next().map(|(_, t)| t.position.x).unwrap();
+    assert!(x.abs() < 1e-3, "back home: {x}");
+}
+
+/// Physics from TypeScript: raycast returns a GameObject; a character controller walks.
+#[cfg(feature = "typescript")]
+#[test]
+fn physics_calls_return_game_objects() {
+    let io = AssetIo::new("/nonexistent-goat-phys");
+    io.put(
+        "scripts/Probe.ts",
+        br#"
+import { Behaviour, Physics, Vector3, GameObject } from "goat";
+export default class Probe extends Behaviour {
+  frames = 0;
+  update(): void {
+    this.frames++;
+    if (this.frames < 3) return;
+    const hit = Physics.raycast(new Vector3(0, 10, 0), Vector3.down);
+    const m = Physics.moveCharacter(this.gameObject, new Vector3(0.1, -0.5, 0));
+    const near = Physics.overlapSphere(new Vector3(0, 0, 0), 0.1);
+    const ground = GameObject.find("Ground");
+    this.gameObject.name = `${hit ? hit.gameObject.name : "none"}|${hit ? hit.point.y.toFixed(2) : ""}|${m.isGrounded}|${near.length > 0 && near[0].equals(ground)}`;
+  }
+}
+"#
+        .to_vec(),
+    );
+    struct P(AssetIo);
+    impl Game for P {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(self.0.clone()));
+            ctx.world.spawn((Name("Ground".into()), Transform::from_position(Vec3::new(0.0, -0.5, 0.0)).with_scale(Vec3::new(20.0, 1.0, 20.0)), GlobalTransform::default(), goat_physics::Collider::unit_box()));
+            ctx.world.spawn((Name("hero".into()), Transform::from_position(Vec3::new(5.0, 1.2, 0.0)), GlobalTransform::default(), goat_physics::CharacterController::default(), Script::one("scripts/Probe.ts")));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(goat_physics::PhysicsPlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(self.0.clone())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(P(io));
+    e.frame(0.0, &mut gfx);
+    for _ in 0..6 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    let name = e.world.query::<(&Name, &goat_physics::CharacterController)>().iter().next().map(|(_, (n, _))| n.0.clone()).unwrap();
+    assert_eq!(name, "Ground|0.00|true|true", "{name}");
 }

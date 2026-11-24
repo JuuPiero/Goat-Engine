@@ -18,6 +18,7 @@ goat-gfx-wgpu.workspace = true
 hello-game.workspace = true
 goat-particles.workspace = true
 goat-physics2d.workspace = true
+goat-animation.workspace = true
 hecs.workspace = true
 serde.workspace = true
 serde_json.workspace = true

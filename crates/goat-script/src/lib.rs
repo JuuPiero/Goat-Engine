@@ -101,6 +101,11 @@ pub trait ScriptHost: 'static {
     fn destroy(&mut self, instance: u32);
     /// A source changed on disk: the next instances use the new code.
     fn invalidate(&mut self, _src: &str) {}
+    /// Once per frame after every Update (Unity runs coroutines there): language-side
+    /// schedulers (coroutines, awaitables, tween callbacks).
+    fn tick(&mut self, _api: &mut Api) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 // ------------------------------------------------------------------ extensions
@@ -125,6 +130,18 @@ impl Extensions {
         v.sort();
         v
     }
+}
+
+/// An entity inside the JSON exchanged with scripts: `{"$entity": <bits>}`. Hosts turn it into
+/// their object (a GameObject in TS / C#) and their objects passed as arguments back into it.
+pub fn entity_json(e: Entity) -> Value {
+    serde_json::json!({ "$entity": e.to_bits().get() as f64 })
+}
+
+/// The entity of an `{"$entity": ...}` argument.
+pub fn entity_arg(v: &Value) -> Option<Entity> {
+    let bits = v.get("$entity")?.as_f64()?;
+    Entity::from_bits(bits as u64)
 }
 
 /// `goat_script::extensions(ctx).add(...)`.
@@ -263,6 +280,22 @@ impl<'a, 'c> Api<'a, 'c> {
     pub fn fixed_delta_time(&self) -> f32 {
         self.ctx.time.fixed_delta
     }
+    pub fn unscaled_delta_time(&self) -> f32 {
+        self.ctx.time.unscaled_delta
+    }
+    pub fn unscaled_time(&self) -> f32 {
+        self.ctx.time.unscaled_elapsed
+    }
+    pub fn frame_count(&self) -> u64 {
+        self.ctx.time.frame
+    }
+    pub fn time_scale(&self) -> f32 {
+        self.ctx.resources.get::<goat_runtime::TimeScale>().map(|t| t.0).unwrap_or(self.ctx.time.time_scale)
+    }
+    /// Unity's `Time.timeScale = s` (applies from the next frame).
+    pub fn set_time_scale(&mut self, s: f32) {
+        self.ctx.resources.insert(goat_runtime::TimeScale(s.max(0.0)));
+    }
 
     // input
     pub fn button(&self, name: &str) -> (bool, bool, bool) {
@@ -373,7 +406,9 @@ impl ScriptPlugin {
                 continue;
             }
             let inst = self.instances.swap_remove(i);
-            if ctx.world.contains(inst.entity) && inst.started && !inst.failed {
+            // also when the entity itself was destroyed (Unity's OnDestroy); engine calls on it
+            // then find nothing
+            if inst.started && !inst.failed {
                 let mut api = Api::new(ctx);
                 let _ = self.hosts[inst.host].call(&mut api, inst.id, inst.entity, Method::OnDestroy);
             }
@@ -454,6 +489,12 @@ impl Plugin for ScriptPlugin {
     fn update(&mut self, ctx: &mut Context) {
         self.sync(ctx);
         self.run(ctx, Method::Update);
+        for h in self.hosts.iter_mut() {
+            let mut api = Api::new(ctx);
+            if let Err(err) = h.tick(&mut api) {
+                goat_core::error!("{}: {err}", h.name());
+            }
+        }
         self.run(ctx, Method::LateUpdate);
     }
 }

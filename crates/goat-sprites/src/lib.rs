@@ -10,8 +10,13 @@
 //!
 //! Add it with `fn plugins(&mut self) -> Vec<Box<dyn Plugin>> { vec![Box::new(SpritePlugin::default())] }`.
 
+pub mod anim;
 #[cfg(feature = "scene")]
 pub mod scene;
+#[cfg(feature = "script")]
+pub mod script;
+
+pub use anim::{SpriteAnimator, SpriteClip};
 
 use std::collections::HashMap;
 
@@ -281,7 +286,14 @@ impl Plugin for SpritePlugin {
     }
     fn build(&mut self, _ctx: &mut Context) {
         #[cfg(feature = "scene")]
-        goat_scene::registry(_ctx).component(scene::CODEC);
+        goat_scene::registry(_ctx).component(scene::CODEC).component(goat_scene::serde_codec::<SpriteAnimator>("SpriteAnimator"));
+        #[cfg(feature = "script")]
+        script::register(goat_script::extensions(_ctx));
+    }
+
+    /// Sprite animations (play mode).
+    fn update(&mut self, ctx: &mut Context) {
+        anim::update(ctx);
     }
 
     fn late_update(&mut self, ctx: &mut Context) {

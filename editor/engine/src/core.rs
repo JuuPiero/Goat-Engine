@@ -472,6 +472,17 @@ mod tests {
             w.query::<(&Name, &Transform)>().iter().find(|(_, (n, _))| n.0 == "Spinning Crate").map(|(_, (_, t))| t.rotation).unwrap()
         };
         assert!(play_rot.angle_between(Quat::IDENTITY) > 0.1, "the Spinner ran in play mode");
+        {
+            // scripts in three languages + the Animator Controller
+            let w = &c.play.as_ref().unwrap().world;
+            let t = |name: &str| w.query::<(&Name, &Transform)>().iter().find(|(_, (n, _))| n.0 == name).map(|(_, (_, t))| *t).unwrap();
+            let lamp = t("Lamp");
+            assert!((lamp.position.y - 1.5).abs() > 0.05, "Hover.ts moved the lamp: {}", lamp.position);
+            let ball = t("Ball");
+            assert!((ball.scale.x - 1.2).abs() > 0.01, "Pulse.cs scaled the ball: {}", ball.scale);
+            let state = w.query::<(&Name, &goat_animation::Animator)>().iter().find(|(_, (n, _))| n.0 == "Tentacle").and_then(|(_, (_, a))| a.current_state(0).map(str::to_string));
+            assert_eq!(state.as_deref(), Some("Idle"), "the tentacle runs its controller");
+        }
         c.stop();
         let edit_rot = c.edit.world.get::<&Transform>(crate_e).unwrap().rotation;
         assert!(edit_rot.angle_between(Quat::IDENTITY) < 1e-4, "edit world unchanged by play");

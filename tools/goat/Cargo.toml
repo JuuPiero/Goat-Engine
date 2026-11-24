@@ -5,3 +5,4 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+goat-script-js = { workspace = true, features = ["typescript"] }

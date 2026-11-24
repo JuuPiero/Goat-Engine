@@ -28,7 +28,13 @@
 //!   plus the exit time (normalized) when `has_exit_time`. `duration` = crossfade seconds.
 //!   Any State transitions are checked first and never re-enter the current state unless
 //!   `can_transition_to_self`.
-//! - Layers: layer 0 poses the model; each next layer overrides it by its `weight`.
+//! - Layers: layer 0 poses the model; each next layer overrides it by its `weight` — or adds to
+//!   it (`"blending": "additive"`: the clip's change from its first frame). `"mask"` (Unity's
+//!   Avatar Mask) limits a layer to the listed nodes and their descendants.
+//! - 2D blend trees (`"type": "2d"`, Unity's Freeform Cartesian): children at `position`
+//!   [x, y] weighted by (`parameter`, `parameter_y`) with gradient band interpolation.
+//! - Clip events (Unity's Animation Events): `"events": { "Walk": [ { "time": 0.3, "name": "footstep" } ] }`
+//!   (seconds into the clip) — reported by the Animator when playback crosses them.
 
 use std::sync::Arc;
 
@@ -79,14 +85,99 @@ pub struct BlendChild {
     pub clip: String,
     #[serde(default)]
     pub threshold: f32,
+    /// 2D trees: where the child sits in (parameter, parameter_y) space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f32; 2]>,
     #[serde(default = "one")]
     pub speed: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlendKind {
+    /// One float parameter, children at thresholds.
+    #[default]
+    #[serde(rename = "1d")]
+    OneD,
+    /// Two parameters, children at 2D positions (Freeform Cartesian).
+    #[serde(rename = "2d")]
+    TwoD,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BlendTree {
+    #[serde(rename = "type", default, skip_serializing_if = "is_1d")]
+    pub kind: BlendKind,
     pub parameter: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameter_y: Option<String>,
     pub children: Vec<BlendChild>,
+}
+
+fn is_1d(k: &BlendKind) -> bool {
+    *k == BlendKind::OneD
+}
+
+/// Gradient band interpolation (Unity's Freeform Cartesian): weights of `points` at `p`, summing to 1.
+pub fn gradient_band_weights(points: &[[f32; 2]], p: [f32; 2]) -> Vec<f32> {
+    let n = points.len();
+    let mut w = vec![0.0f32; n];
+    if n == 0 {
+        return w;
+    }
+    if n == 1 {
+        w[0] = 1.0;
+        return w;
+    }
+    for i in 0..n {
+        let pi = points[i];
+        let mut h: f32 = 1.0;
+        for (j, pj) in points.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            let (ix, iy) = (pj[0] - pi[0], pj[1] - pi[1]);
+            let len2 = ix * ix + iy * iy;
+            if len2 < 1e-12 {
+                continue;
+            }
+            let (px, py) = (p[0] - pi[0], p[1] - pi[1]);
+            h = h.min(1.0 - (px * ix + py * iy) / len2);
+        }
+        w[i] = h.max(0.0);
+    }
+    let sum: f32 = w.iter().sum();
+    if sum > 0.0 {
+        for x in w.iter_mut() {
+            *x /= sum;
+        }
+    } else {
+        // outside every band: the nearest point
+        let k = (0..n).min_by(|&a, &b| dist2(points[a], p).total_cmp(&dist2(points[b], p))).unwrap_or(0);
+        w[k] = 1.0;
+    }
+    w
+}
+
+fn dist2(a: [f32; 2], b: [f32; 2]) -> f32 {
+    (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)
+}
+
+/// A named moment of a clip (Unity's AnimationEvent).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClipEvent {
+    /// Seconds from the clip's start.
+    pub time: f32,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parameter: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LayerBlending {
+    #[default]
+    Override,
+    Additive,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -136,6 +227,15 @@ pub struct Layer {
     /// Where the Any State node sits in the editor's graph.
     #[serde(default)]
     pub any_state_position: [f32; 2],
+    #[serde(default, skip_serializing_if = "is_override")]
+    pub blending: LayerBlending,
+    /// Avatar mask: node names (each with its descendants); empty = every node.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mask: Vec<String>,
+}
+
+fn is_override(b: &LayerBlending) -> bool {
+    *b == LayerBlending::Override
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -143,6 +243,9 @@ pub struct ControllerData {
     #[serde(default)]
     pub parameters: Vec<Parameter>,
     pub layers: Vec<Layer>,
+    /// Events by clip name.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub events: std::collections::BTreeMap<String, Vec<ClipEvent>>,
 }
 
 fn one() -> f32 {
@@ -181,6 +284,13 @@ impl ControllerData {
                 if let Some(b) = &s.blend_tree {
                     if !param(&b.parameter) {
                         return Err(format!("state {}: unknown parameter {}", s.name, b.parameter));
+                    }
+                    if b.kind == BlendKind::TwoD {
+                        match &b.parameter_y {
+                            Some(p) if param(p) => {}
+                            Some(p) => return Err(format!("state {}: unknown parameter {p}", s.name)),
+                            None => return Err(format!("state {}: a 2D blend tree needs parameter_y", s.name)),
+                        }
                     }
                 }
                 if let Some(p) = &s.speed_parameter {
@@ -306,6 +416,12 @@ impl ControllerState {
     fn motions(&self, s: &State) -> Vec<(String, f32, f32)> {
         if let Some(b) = &s.blend_tree {
             let p = self.param_value(&b.parameter);
+            if b.kind == BlendKind::TwoD {
+                let py = b.parameter_y.as_deref().map(|n| self.param_value(n)).unwrap_or(0.0);
+                let pts: Vec<[f32; 2]> = b.children.iter().map(|c| c.position.unwrap_or([c.threshold, 0.0])).collect();
+                let w = gradient_band_weights(&pts, [p, py]);
+                return b.children.iter().zip(w).filter(|(_, w)| *w > 1e-4).map(|(c, w)| (c.clip.clone(), w, c.speed)).collect();
+            }
             let mut kids: Vec<&BlendChild> = b.children.iter().collect();
             kids.sort_by(|a, b| a.threshold.total_cmp(&b.threshold));
             if kids.is_empty() {
@@ -518,5 +634,26 @@ mod tests {
     fn validation_names_the_broken_reference() {
         let bad = SAMPLE.replace(r#""to": "Fall""#, r#""to": "Nope""#);
         assert!(ControllerData::parse(&bad).unwrap_err().contains("Nope"));
+    }
+
+    #[test]
+    fn gradient_bands_and_2d_trees() {
+        let pts = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]];
+        let w = gradient_band_weights(&pts, [0.0, 0.0]);
+        assert!((w[0] - 1.0).abs() < 1e-5, "at a point: only it {w:?}");
+        let w = gradient_band_weights(&pts, [0.5, 0.0]);
+        assert!((w[0] - 0.5).abs() < 1e-4 && (w[1] - 0.5).abs() < 1e-4, "halfway: {w:?}");
+        let w = gradient_band_weights(&pts, [3.0, 0.0]);
+        assert!((w[1] - 1.0).abs() < 1e-5, "outside: the nearest edge point {w:?}");
+        let json = r#"{ "parameters": [ { "name": "x" }, { "name": "y" } ], "layers": [ { "name": "Base", "states": [
+            { "name": "Move", "blend_tree": { "type": "2d", "parameter": "x", "parameter_y": "y", "children": [
+              { "clip": "Idle", "position": [0, 0] }, { "clip": "Right", "position": [1, 0] }, { "clip": "Fwd", "position": [0, 1] } ] } } ] } ] }"#;
+        let mut c = ControllerState::new(Arc::new(ControllerData::parse(json).unwrap()));
+        c.set("y", 0.5);
+        let out = c.update(0.0, &|_| Some(1.0));
+        let names: Vec<(&str, f32)> = out[0].1.iter().map(|(n, _, w)| (n.as_str(), *w)).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.iter().all(|(n, w)| *n != "Right" && (w - 0.5).abs() < 1e-4), "{names:?}");
+        assert!(ControllerData::parse(&json.replace(r#""parameter_y": "y", "#, "")).unwrap_err().contains("parameter_y"));
     }
 }

@@ -1,0 +1,24 @@
+[package]
+name = "goat-tween"
+description = "GoatEngine tweens (DOTween-like): Transform / value tweens with eases, loops, delays, punch / shake, paths, sequences; TweenAnimation component; Tween.* script calls."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+goat-core.workspace = true
+goat-runtime.workspace = true
+hecs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+goat-scene = { workspace = true, optional = true }
+goat-script = { workspace = true, optional = true }
+
+[features]
+# TweenAnimation in scene files
+scene = ["dep:goat-scene"]
+# Tween.* calls for scripts (TS / C# / C)
+script = ["dep:goat-script"]
+
+[dev-dependencies]
+goat-gfx.workspace = true

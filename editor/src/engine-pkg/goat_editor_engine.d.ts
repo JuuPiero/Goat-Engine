@@ -76,6 +76,10 @@ export class EditorEngine {
     stats(): string;
     stop(): void;
     /**
+     * Engine log lines since the last call: `[[level, text], ...]` (JSON).
+     */
+    take_logs(): string;
+    /**
      * `{ position, euler, scale }` of an entity.
      */
     transform(id: string): string | undefined;
@@ -121,10 +125,43 @@ export interface InitOutput {
     readonly editorengine_set_transform: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly editorengine_stats: (a: number) => [number, number];
     readonly editorengine_stop: (a: number) => void;
+    readonly editorengine_take_logs: (a: number) => [number, number];
     readonly editorengine_transform: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_zoom: (a: number, b: number) => void;
-    readonly wasm_bindgen_5ad06e3504d95cf8___convert__closures_____invoke___js_sys_ecc67c0883bd7d2___Function_fn_wasm_bindgen_5ad06e3504d95cf8___JsValue_____wasm_bindgen_5ad06e3504d95cf8___sys__Undefined___js_sys_ecc67c0883bd7d2___Function_fn_wasm_bindgen_5ad06e3504d95cf8___JsValue_____wasm_bindgen_5ad06e3504d95cf8___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen_5ad06e3504d95cf8___convert__closures_____invoke___wasm_bindgen_5ad06e3504d95cf8___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_5ad06e3504d95cf8___JsError___true_: (a: number, b: number, c: any) => [number, number];
+    readonly goat_action_triggered: (a: number, b: number) => number;
+    readonly goat_action_value: (a: number, b: number, c: number) => void;
+    readonly goat_button: (a: number, b: number) => number;
+    readonly goat_call: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly goat_delta_time: (a: number) => number;
+    readonly goat_destroy: (a: number, b: number) => void;
+    readonly goat_exists: (a: number, b: number) => number;
+    readonly goat_find: (a: number, b: number) => number;
+    readonly goat_get_component: (a: number, b: number, c: number, d: number, e: number) => number;
+    readonly goat_get_euler: (a: number, b: number, c: number) => void;
+    readonly goat_get_name: (a: number, b: number, c: number, d: number) => number;
+    readonly goat_get_parent: (a: number, b: number) => number;
+    readonly goat_get_position: (a: number, b: number, c: number) => void;
+    readonly goat_get_scale: (a: number, b: number, c: number) => void;
+    readonly goat_get_world_position: (a: number, b: number, c: number) => void;
+    readonly goat_instantiate: (a: number, b: number, c: number) => number;
+    readonly goat_log: (a: number, b: number, c: number) => void;
+    readonly goat_register_behaviour: (a: number) => void;
+    readonly goat_remove_component: (a: number, b: number, c: number) => void;
+    readonly goat_rotate: (a: number, b: number, c: number) => void;
+    readonly goat_set_component: (a: number, b: number, c: number, d: number) => number;
+    readonly goat_set_euler: (a: number, b: number, c: number) => void;
+    readonly goat_set_name: (a: number, b: number, c: number) => void;
+    readonly goat_set_parent: (a: number, b: number, c: number) => void;
+    readonly goat_set_position: (a: number, b: number, c: number) => void;
+    readonly goat_set_scale: (a: number, b: number, c: number) => void;
+    readonly goat_set_time_scale: (a: number, b: number) => void;
+    readonly goat_spawn: (a: number, b: number) => number;
+    readonly goat_stick: (a: number, b: number) => void;
+    readonly goat_time: (a: number) => number;
+    readonly goat_time_scale: (a: number) => number;
+    readonly goat_unscaled_delta_time: (a: number) => number;
+    readonly wasm_bindgen_49c42322a91a8d99___convert__closures_____invoke___js_sys_1f8126b8a616f9cf___Function_fn_wasm_bindgen_49c42322a91a8d99___JsValue_____wasm_bindgen_49c42322a91a8d99___sys__Undefined___js_sys_1f8126b8a616f9cf___Function_fn_wasm_bindgen_49c42322a91a8d99___JsValue_____wasm_bindgen_49c42322a91a8d99___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen_49c42322a91a8d99___convert__closures_____invoke___wasm_bindgen_49c42322a91a8d99___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_49c42322a91a8d99___JsError___true_: (a: number, b: number, c: any) => [number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;

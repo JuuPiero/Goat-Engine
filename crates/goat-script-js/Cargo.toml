@@ -4,6 +4,7 @@ description = "GoatEngine TypeScript / JavaScript scripting: a Boa (pure Rust) h
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 goat-core.workspace = true
@@ -30,3 +31,5 @@ boa_engine = { version = "0.22", default-features = false, features = ["js"] }
 [dev-dependencies]
 goat-gfx.workspace = true
 goat-scene.workspace = true
+goat-tween = { workspace = true, features = ["script"] }
+goat-physics = { workspace = true, features = ["script"] }

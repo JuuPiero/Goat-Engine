@@ -4,7 +4,7 @@ Game engine viết bằng **Rust**, chạy native để tận dụng toàn bộ 
 
 Nền tảng đầu tiên là **Nintendo 3DS** (GPU PICA200, qua citro3d). Desktop (Windows / Linux / macOS, qua wgpu + Vulkan) vừa là nền tảng thứ hai, vừa là chỗ xem trước nhanh hai màn hình 3DS.
 
-> Trạng thái: **nền móng** (giai đoạn 0–1 của [ROADMAP.md](ROADMAP.md)). Đã có renderer 3DS + desktop, ECS, script `Behaviour`, input và CLI `goat` với builder cho 2 nền tảng. Mục tiêu bản đầu là ngang tính năng với PiaEngine; lộ trình nằm trong ROADMAP.
+> Trạng thái: renderer 3DS + desktop, asset / scene / prefab, text, physics 2D + 3D, audio, animation (có Animator Controller), particles, UI, input actions, script **Rust / TypeScript / JavaScript / C# / C / C++**, editor (Tauri) và CLI `goat` với builder cho 2 nền tảng. Mục tiêu bản đầu là ngang tính năng với PiaEngine; phần còn lại nằm trong [ROADMAP.md](ROADMAP.md).
 
 ## Vì sao Rust
 
@@ -27,7 +27,13 @@ goat-runtime         Engine + ECS (hecs): Transform/GlobalTransform/Parent, Came
    ├── backend đồ họa        goat-gfx-wgpu (Vulkan/Metal/DX12)   goat-gfx-citro3d (PICA200)
    ├── platform              goat-platform-desktop (winit)        goat-platform-3ds (libctru)
    └── player (binary)       players/desktop                      players/3ds
-games/hello          game mẫu (chỉ phụ thuộc goat-runtime, chạy nguyên si trên mọi nền tảng)
+goat-sprites / -assets / -scene / -text / -physics / -physics2d / -audio / -animation / -particles / -ui / -input / -tween / -save
+                     subsystem = plugin, game chọn cái nó dùng (bản build chỉ chứa những gì game dùng)
+goat-script (+ -js, -native)   script: lõi chung + TypeScript / JavaScript / C# (host JS) + C / C++ (C ABI)
+games/hello          game mẫu (chạy nguyên si trên mọi nền tảng)
+tools/goat-cs        C# → JavaScript (Roslyn, .NET)
+tools/unity-goat-exporter  Editor tool của Unity: ParticleSystem → prefab GoatEngine
+editor/              editor Tauri 2 + React; engine trong editor là wasm (editor/engine)
 tools/goat           CLI: goat build|run <platform>, goat doctor — mỗi nền tảng là một Builder
 third_party/         ctru-rs + citro3d-rs (rust3ds) vendored, có bản vá bindgen cho Windows
 ```
@@ -255,6 +261,21 @@ world.spawn((Transform::default(), AudioSource::new("music.ogg").looping().play_
 - Audio: desktop phát ra loa mặc định (cpal), 3DS phát qua DSP. Máy 3DS thật cần file `/3ds/dspfirm.cdc` trên thẻ SD, Citra thì không cần.
 - `GOAT_AUDIO_DUMP=out.wav` ghi âm thanh đã mix ra file thay vì phát ra loa (dùng khi test).
 
+### Audio: stream, mixer group
+
+- Ogg dài hơn 512 KB (hoặc có `"load_type": "streaming"` trong `<clip>.import.json`) được giải mã dần khi phát, không bung hết ra RAM. Nhạc nền trên 3DS nên dùng cách này.
+- Mixer group như AudioMixer của Unity. Khai báo trong `audio/mixer.json`:
+
+  ```json
+  { "groups": [ { "name": "Music", "volume": 0.8 }, { "name": "SFX" }, { "name": "UI", "parent": "SFX" } ] }
+  ```
+
+  `AudioSource { output: "Music", .. }` cho âm thanh đi qua group đó. Mỗi group có `volume`, `mute`, `lowpass` (Hz, làm tiếng nghe như dưới nước / khi pause).
+- Trong script:
+  - `Audio.playOneShot("sfx/coin.wav", 1, "SFX")` phát một lần.
+  - `AudioSource.of(go).play() / pause() / unPause() / stop()`, đọc `isPlaying`, `time`.
+  - `AudioMixer.set("Music", { lowpass: 600 })`, `AudioMixer.setVolumeDb("Music", -10)`.
+
 ## Animation, particles, UI
 
 ```rust
@@ -277,6 +298,231 @@ if world.get::<&UiButton>(btn)?.clicked { /* ... */ }
 
 Thêm vào game bằng `AnimationPlugin`, `ParticlePlugin`, `UiPlugin`. `RectTransform` dùng quy ước của Unity: đơn vị pixel, y hướng lên, anchor tính từ góc dưới trái.
 
+UI còn có (tên giống Unity, đều dùng được trong file scene):
+- `UiImage` kiểu `Sliced` (9-slice: `border` giữ nguyên kích thước, phần giữa giãn ra) và `Filled` (`fill_amount`, cho thanh máu / tiến trình).
+- `UiLayoutGroup` (Horizontal / Vertical / Grid: padding, spacing, căn lề, điều khiển và giãn kích thước con), `UiLayoutElement`, `UiContentSizeFitter`.
+- `UiMask`: cắt mọi thứ con nằm ngoài khung.
+- `UiScrollRect`: kéo bằng tay có quán tính, bật lại khi kéo quá mép; con tên "Content" là phần cuộn.
+- `UiInputField`: con "Text" và "Placeholder"; giới hạn ký tự, kiểu số nguyên / số thực / mật khẩu. Desktop gõ phím, trên 3DS chạm vào là mở bàn phím hệ thống.
+- `UiDropdown`: con "Label"; danh sách mở đè lên mọi thứ khác.
+- `UiEventSystem` (`navigation: true`): D-pad / cần analog di chuyển vùng chọn, A để bấm, B để thoát ô nhập / đóng danh sách. Vùng chọn có màu riêng.
+
+### Animator Controller
+
+State machine như Mecanim của Unity, lưu trong file `.controller.json` (tạo bằng *Create ▸ Animator Controller*, sửa trong cửa sổ **Animator** của editor):
+
+- **Tham số** `float` / `int` / `bool` / `trigger` (trigger tự tắt khi một transition dùng nó).
+- **State**: một clip của model, hoặc *blend tree 1D* (nhiều clip trộn theo một tham số float, chạy đồng bộ thời gian). `speed` × tham số nhân tốc độ, `loop`.
+- **Transition**: từ một state hoặc từ `Any State`, điều kiện (`if` / `ifnot` / `greater` / `less` / `equals` / `notequal`), *Has Exit Time* (thời gian chuẩn hoá), `duration` (giây crossfade).
+- **Layer**: layer 0 tạo dáng, các layer sau ghi đè theo `weight`.
+
+```rust
+let mut anim = Animator::from_controller_asset(&assets, "animators/tentacle.controller.json")?;
+anim.set_float("energy", 0.7);
+anim.set_trigger("poke");
+if anim.current_state(0) == Some("Poke") { /* ... */ }
+```
+
+Trong scene: `"Animator": { "controller": "animators/tentacle.controller.json", "parameters": { "energy": 0.5 } }`. Script gọi qua `gameObject.call("Animator.setTrigger", "poke")`.
+
+### Physics: layer, mesh collider, joint, CharacterController
+
+- **Layer:** `Collider { layer: 3, .. }` + `physics.set_layer_collision(0, 3, false)` (Layer Collision Matrix của Unity). `raycast_layers(..., mask)` và `overlap_sphere` lọc theo layer mask.
+- **Mesh collider:** `Shape::Mesh { source: "models/rock.glb", convex: false }`.
+  - `source` có thể là `builtin:cube`, một model, một mesh con `#mesh:0:0`, hoặc để trống để lấy mesh của MeshRenderer.
+  - Mesh lõm chỉ dùng cho vật tĩnh / kinematic; `convex: true` dùng bao lồi, vật dynamic cũng được.
+- **Joint:** đặt trên vật thứ nhất, `connected` là tên vật kia (để trống = gắn vào thế giới).
+  - 3D: `Joint::hinge(Vec3::Z).to("Door Frame")` (có giới hạn góc, motor), ngoài ra có fixed / ball / slider / spring / rope.
+  - 2D: `Joint2D` với fixed / hinge / slider / spring / distance.
+- **CharacterController** (như Unity): `physics.move_character(world, e, velocity * dt, dt)` trượt theo tường, leo bậc (`step_offset`), đi dốc đến `slope_limit`, rồi cập nhật `is_grounded` / `collision_flags`.
+- **Trong script:**
+  - `Physics.raycast(origin, dir)` trả về `{ gameObject, point, normal, distance }`. Cũng có `Physics.overlapSphere`, `Physics.collisions(go)` (enter / exit / trigger của frame này), `Physics.addForce / addImpulse`.
+  - `Physics.moveCharacter(go, motion)` là `controller.Move` của Unity; `Physics2D.*` có các lệnh tương tự cho 2D.
+
+### Particles nâng cao
+
+Các module tuỳ chọn (không ghi = tắt):
+- `color_over_life` (gradient `[[t, "#rrggbbaa"], ...]`), `start_colors` (random giữa hai màu).
+- `size_curve` / `speed_curve` (`[[t, v], ...]`), `velocity_over_life`.
+- `texture_sheet` (`tiles`, `cycles`, `random_row`).
+- `collision`: `planes` là danh sách `[điểm, pháp tuyến]`; `world: true` va chạm collider 3D, cần feature `physics`. Có `bounce`, `dampen`, `lifetime_loss`.
+- `sub_emitters` (`on: birth | death | collision`, `system`: tên entity có system con).
+- `trail` (dải mỏng hướng về camera).
+
+Hiệu ứng làm sẵn trong Unity có thể chuyển sang bằng `tools/unity-goat-exporter` (xem README trong thư mục đó).
+
+### Animation nâng cao
+
+- **Avatar mask:** `"mask": ["Spine"]` trên một layer, layer đó chỉ điều khiển node `Spine` và các con của nó.
+- **Layer additive:** `"blending": "additive"` cộng phần thay đổi của clip (so với frame đầu) lên tư thế hiện tại.
+- **Blend tree 2D:** `"type": "2d"` với `parameter` + `parameter_y`; mỗi con có `position: [x, y]`. Trộn bằng gradient band, giống Freeform Cartesian của Unity.
+- **Animation event:** `"events": { "Walk": [ { "time": 0.3, "name": "footstep" } ] }` (giây tính từ đầu clip), khai báo trong controller hoặc trong `Animator` của scene.
+  - Rust: đọc `animator.fired`.
+  - Script: `Animator.of(go).onEvent(e => ...)`.
+- **Sprite flipbook** (`SpriteAnimator`, đặt cạnh `SpriteRenderer`):
+
+  ```json
+  "SpriteAnimator": { "play": "walk", "clips": { "walk": { "grid": [16, 16], "frames": [0, 1, 2, 3], "fps": 10 },
+                                                 "hit": { "grid": [16, 16], "frames": [8, 9], "fps": 12, "loop": false, "next": "walk" } } }
+  ```
+
+  Trong script: `SpriteAnimator.of(go).play("hit")`.
+
+## Physics 2D
+
+Crate riêng `goat-physics2d` (Rapier 2D): game chỉ 2D thì không mang physics 3D theo, và ngược lại.
+
+```rust
+world.spawn((Transform::from_position(vec3(0.0, 4.0, 0.0)), Rigidbody2D::dynamic(), Collider2D::circle(0.5).with_restitution(0.4)));
+world.spawn((ground_transform, Collider2D::unit_box()));               // collider không có body = tĩnh
+let hit = goat_physics2d::physics2d(ctx).raycast(origin, Vec2::NEG_Y, 20.0);
+```
+
+- Vật nằm trên mặt phẳng XY: mô phỏng đọc / ghi X, Y và góc quay quanh Z; độ sâu Z và các trục quay khác giữ nguyên.
+- Shape: `box`, `circle`, `capsule`, `polygon` (bao lồi). Trigger, ma sát, độ nảy, mật độ hoặc khối lượng.
+- `Physics2D`: `gravity`, `events` (Enter / Exit / TriggerEnter / TriggerExit), `raycast`, `overlap_point`, `apply_impulse`.
+- Scene mẫu: `scenes/physics2d.scene.json`. Trong scene: `"Rigidbody2D": {}`, `"Collider2D": { "shape": { "circle": 0.5 } }`.
+
+## Input actions
+
+Giống Input System của Unity. File `.inputactions.json`:
+
+```json
+{ "maps": [ { "name": "Player", "actions": [
+    { "name": "Move", "type": "value", "processors": "stickDeadzone(min=0.12,max=0.95)", "bindings": [
+        { "path": "<Gamepad>/leftStick" },
+        { "composite": "2DVector", "up": "<Gamepad>/dpad/up", "down": "<Gamepad>/dpad/down", "left": "<Gamepad>/dpad/left", "right": "<Gamepad>/dpad/right" } ] },
+    { "name": "Jump", "type": "button", "bindings": [ { "path": "<Gamepad>/buttonSouth" }, { "path": "<Touchscreen>/press" } ] },
+    { "name": "Charge", "type": "button", "interactions": "hold(duration=0.5)", "bindings": [ { "path": "<Gamepad>/buttonWest" } ] }
+] } ] }
+```
+
+```rust
+// plugins(): Box::new(goat_input::InputActionsPlugin::new("input/controls.inputactions.json"))
+let a = goat_input::actions(ctx).unwrap();
+let move_dir = a.read_vec2("Player/Move");
+if a.triggered("Jump") { /* ... */ }
+```
+
+- Đường dẫn control theo Unity, bố cục Nintendo: `buttonSouth` = B, `buttonEast` = A, `buttonNorth` = X, `buttonWest` = Y (hoặc ghi thẳng `a` `b` `x` `y`), `leftShoulder` / `rightShoulder` = L / R, `leftTrigger` / `rightTrigger` = ZL / ZR, `start`, `select`, `dpad`, `leftStick` (+ `/x` `/up`...), `<Touchscreen>/press`, `<Pointer>/position`.
+- Loại action: `button`, `value`, `passthrough`. Interaction: `press`, `hold(duration=…)`, `tap(duration=…)`. Processor: `invert`, `invertVector2`, `scale`, `scaleVector2`, `normalizeVector2`, `clamp`, `axisDeadzone`, `stickDeadzone`.
+- Nhiều binding cùng lúc: binding bị tác động mạnh nhất thắng. `set_map_enabled`, đổi phím lúc chạy bằng `override_binding` + lưu / nạp `overrides_json`.
+- Action được cập nhật ở đầu frame (`Plugin::early_update`), nên behaviour, fixed update và plugin cùng thấy một trạng thái.
+
+## Tween, coroutine, lưu dữ liệu
+
+**Tween** (`goat-tween`, giống DOTween): di chuyển / co giãn / xoay / punch / shake / đi theo đường cong, ease (31 kiểu của DOTween), lặp (Restart / Yoyo / Incremental), delay, relative, `From`, sequence (append / join / insert / khoảng nghỉ / callback). Vật bị xoá thì tween của nó tự huỷ.
+
+```rust
+tweens(ctx).add(Tween::move_to(coin, vec3(0.0, 2.0, 0.0), 0.6).ease(Ease::OutBack).loops(-1, LoopType::Yoyo));
+tweens(ctx).add(Sequence::new().append(Tween::scale_to(e, Vec3::splat(1.3), 0.15)).append(Tween::scale_to(e, Vec3::ONE, 0.3).ease(Ease::OutBounce)).build());
+```
+
+Không cần code thì dùng component `TweenAnimation` trong scene (giống DOTweenAnimation):
+
+```json
+"TweenAnimation": { "animation": "Move", "end": [0, 0.4, 0], "relative": true, "duration": 1.2, "ease": "InOutSine", "loops": -1, "loopType": "Yoyo" }
+```
+
+Trong script viết như DOTween: `transform.doMove(v, 1).setEase(Ease.OutBack).onComplete(() => ...)`, `DOTween.sequence()`, `DOTween.to(() => x, v => x = v, 10, 1)`.
+
+**Coroutine** như Unity (chạy sau `Update`), dừng khi vật sở hữu bị xoá:
+
+```ts
+start() { this.startCoroutine(this.blink()); }
+*blink() { yield new WaitForSeconds(0.5); yield null; yield new WaitUntil(() => this.ready); }
+async load() { await Awaitable.waitForSecondsAsync(1); }   // Awaitable của Unity 2023
+```
+
+- C# viết y như Unity (`IEnumerator` + `yield return new WaitForSeconds(1f)`, `StartCoroutine(...)`, `async void` + `await Awaitable.WaitForSecondsAsync(1)`).
+- Rust: `start_coroutine(ctx, Some(me), |ctx| Yield::Seconds(1.0))` hoặc `Steps::new().wait(0.5).then(|ctx| ...).repeat().start(ctx, owner)`.
+- `Time.timeScale` (0 = dừng, 0.5 = chậm) và `Time.unscaledDeltaTime` có ở mọi ngôn ngữ.
+
+**Lưu dữ liệu** (`goat-save`, `SavePlugin::new("TenGame")`):
+- `PlayerPrefs.setInt / getInt / setFloat / setString...`, tự ghi file khi có thay đổi (tối đa 1 lần mỗi giây) và khi thoát game.
+- Save slot lưu JSON tuỳ ý: `SaveData.write("slot1", {...})` / `read` / `delete` / `slots()`.
+- Ghi qua file tạm rồi mới đổi tên, nên mất điện giữa chừng không hỏng bản lưu cũ.
+- Nơi lưu: Windows `%APPDATA%/TenGame/`, Linux `~/.local/share/TenGame/`, 3DS `sdmc:/3ds/TenGame/save/`.
+
+## Script: Rust, TypeScript, C#, C / C++
+
+Script gắn vào entity bằng component `Script` (tương đương MonoBehaviour). Mọi ngôn ngữ đi qua cùng một API nên chạy giống nhau, và chạy được trên cả desktop, editor lẫn 3DS.
+
+```json
+"Script": [ { "src": "scripts/Hover.ts", "props": { "height": 0.3 } }, { "src": "scripts/Pulse.cs" }, { "src": "native:Wobble" } ]
+```
+
+`props` là giá trị khởi tạo của field (như field serialize của Unity). Thứ tự gọi: `start` trước `update` đầu tiên, `update` rồi `lateUpdate` mỗi frame (sau behaviour Rust), `fixedUpdate` theo nhịp cố định, `onDestroy` khi entity hoặc script bị xoá. Script ném lỗi thì được ghi ra Console và tắt, các script khác vẫn chạy.
+
+**TypeScript / JavaScript** (`goat-script-js`) — ES module, API import từ `"goat"`:
+
+```ts
+import { Behaviour, Input, Time, Vector3, GameObject } from "goat";
+import { clamp } from "./util";              // script import lẫn nhau bằng đường dẫn tương đối
+
+export default class Hover extends Behaviour {
+  height = 0.25;                             // field → nhận giá trị từ "props"
+  update(): void {
+    this.transform.rotate(0, 90 * Time.deltaTime, 0);
+    if (Input.getButtonDown("A")) GameObject.instantiate("prefabs/coin.prefab.json");
+    if (Input.action("Player/Jump").triggered) this.gameObject.call("Animator.setTrigger", "jump");
+    const rb = this.getComponent("Rigidbody2D");          // component bất kỳ dưới dạng JSON của scene
+    if (rb) this.gameObject.patchComponent("Rigidbody2D", { velocity: [0, 5] });
+  }
+}
+```
+
+API:
+- Cơ bản: `Vector2`, `Vector3`, `Quaternion`, `Transform` (position, eulerAngles, rotation, localScale, translate, rotate, lookAt, parent, `do*` tween), `GameObject` (find, create, instantiate, destroy, name, get / set / patch / removeComponent, call), `Behaviour` / `MonoBehaviour` (+ startCoroutine).
+- Thời gian, input, log: `Time` (+ timeScale, unscaled), `Input` (getButton / Down / Up, stick, pointer, action), `Debug` (và `console`), `Mathf`, `Application.quit`.
+- Coroutine, tween: các lệnh `WaitFor*` / `WaitUntil` / `WaitWhile`, `Awaitable`, `DOTween` / `Ease` / `LoopType`.
+- Physics: `Physics`, `Physics2D` (raycast, overlap, collisions, addForce, moveCharacter).
+- Audio: `Audio`, `AudioSource`, `AudioMixer`.
+- Animation: `Animator` (tham số, play, events), `SpriteAnimator`.
+- UI, lưu dữ liệu: `UI` (onClick, onValueChanged, onSubmit, value, setText, select...), `PlayerPrefs`, `SaveData`.
+Engine JS là Boa (viết bằng Rust thuần, cùng một bản chạy mọi nơi). TypeScript được biên dịch bằng oxc lúc nạp (desktop, editor); `goat build` biên dịch sẵn ra `.js` cho console.
+
+**C#** (`tools/goat-cs`, Roslyn) — viết như Unity, được kiểm tra kiểu theo API `GoatEngine` rồi dịch sang ES module `X.cs.js` chạy trên host JS:
+
+```csharp
+using GoatEngine;
+
+public class Pulse : MonoBehaviour
+{
+    public float amount = 0.08f;
+    Vector3 baseScale;
+    float t;
+    void Start() { baseScale = transform.localScale; }
+    void Update()
+    {
+        t += Time.deltaTime;
+        transform.localScale = baseScale * (1f + Mathf.Sin(t * 2f * Mathf.PI) * amount);
+        if (Input.GetButtonDown("X")) Debug.Log($"pop at {t:F2}");
+    }
+}
+```
+
+- Tên Unity (`Start`, `Update`, `Debug.Log`, `GameObject.Find`, `Mathf.Sin`...); toán tử vector, `List<T>`, `Dictionary`, enum, property, string interpolation, lambda, `foreach`, `switch`, `try` đều được dịch. `GetComponent("Rigidbody2D")` trả về `dynamic`.
+- Cần .NET SDK. Editor tự dịch khi file `.cs` đổi (lỗi hiện ở Console); `goat build` dịch trước khi đóng gói. Dịch tay: `dotnet tools/goat-cs/bin/goat-cs.dll <thư mục assets>` (build tool: `cd tools/goat-cs && dotnet build -c Release -o bin`). `goat-cs --api <thư mục>` xuất file API `GoatEngine.cs` cho IDE.
+
+**C / C++** (`goat-script-native`, header `crates/goat-script-native/include/goat.h`) — lớp behaviour là một bảng callback, link tĩnh vào game (3DS không nạp thư viện động được):
+
+```c
+static void* create(GoatApi* g, GoatEntity self, const char* props_json) { return calloc(1, sizeof(State)); }
+static void update(void* s, GoatApi* g, GoatEntity self) {
+    GoatVec3 p = goat_get_position(g, self);
+    p.y += goat_delta_time(g);
+    goat_set_position(g, self, p);
+    if (goat_button(g, "A") & GOAT_PRESSED) goat_spawn(g, "Marker");
+}
+static const GoatBehaviourClass WOBBLE = { "Wobble", create, NULL, update, NULL, NULL, NULL, free };
+void goat_game_init(void) { goat_register_behaviour(&WOBBLE); }   // scene: "native:Wobble"
+```
+
+C++ bọc bảng này bằng một template class (xem `crates/goat-script-native/examples/orbit.cpp`).
+
+**Thêm lệnh cho script** (subsystem / game): `goat_script::extensions(ctx).add("Animator.setTrigger", f)` — mọi ngôn ngữ gọi được (`gameObject.call(...)`, `goat_call(...)`). `goat-animation` (feature `script`) đăng ký sẵn `Animator.setFloat / setInteger / setBool / setTrigger / resetTrigger / getFloat / getBool / currentState / play / crossFade`.
+
 ## Editor
 
 Editor dùng Tauri 2 + React; engine chạy bên trong editor dưới dạng WebAssembly và render bằng WebGPU.
@@ -290,7 +536,13 @@ Editor dùng Tauri 2 + React; engine chạy bên trong editor dưới dạng Web
 - **Scene view**: double-click file `.scene.json` để mở.
   - Chuột phải hoặc Alt + chuột trái: xoay; chuột giữa: kéo khung nhìn; cuộn: zoom; F: căn vào vật đang chọn.
   - Click để chọn; Hierarchy và Inspector (Transform, kéo nhãn X/Y/Z để chỉnh) đồng bộ theo. Ctrl+S lưu scene.
-- **Play (▶)**: chạy game thật (behaviour, physics, sprite, text) trong Game view, có thể bật layout 2 màn hình 3DS. Phím điều khiển giống bản desktop. Esc hoặc ■ để dừng; scene đang edit không bị thay đổi.
+- **Gizmo**: W / E / R (hoặc nút trên thanh Scene) chọn Move / Rotate / Scale; kéo trục đỏ / xanh lá / xanh dương. Lưới trên mặt đất. Delete xoá vật đang chọn.
+- **Hierarchy**: *＋ Create* (con của vật đang chọn, Ctrl+N), *Delete*; kéo một dòng thả lên dòng khác để đổi cha, thả vào chỗ trống để bỏ cha (vị trí trong thế giới được giữ nguyên).
+- **Inspector**: Transform và mọi component khác (sửa theo kiểu: số kéo nhãn để chỉnh, màu, vector, bool, chuỗi, object lồng nhau); *＋ Add Component*, ✕ để bỏ.
+- Kéo model (.glb) hoặc prefab từ Project vào Scene view / Hierarchy để thêm vào scene.
+- **Animator**: double-click file `.controller.json` để mở. Chuột phải nền: *Create State*; chuột phải state: *Make Transition* / *Set as Layer Default State* / *Delete*; click mũi tên để sửa transition; Alt + kéo hoặc chuột giữa để kéo khung nhìn; Ctrl+S lưu.
+- **Script**: file `.cs` được tự dịch khi lưu, lỗi biên dịch và lỗi script lúc Play hiện ở Console.
+- **Play (▶)**: chạy game thật (behaviour, script, physics, animation, sprite, text) trong Game view, có thể bật layout 2 màn hình 3DS. Phím điều khiển giống bản desktop. Esc hoặc ■ để dừng; scene đang edit không bị thay đổi.
 
 ```sh
 cargo build --target wasm32-unknown-unknown --release -p goat-editor-engine

@@ -1,6 +1,5 @@
 //! The Engine: one frame = game update → scripts → transforms → render extraction → backend.
 
-use std::collections::HashMap;
 
 use goat_core::math::{Mat4, Vec3};
 use goat_core::time::Time;
@@ -128,6 +127,9 @@ impl Engine {
         if self.displays.is_empty() {
             self.displays = gfx.displays();
         }
+        if let Some(ts) = self.resources.get::<crate::coroutine::TimeScale>() {
+            self.time.time_scale = ts.0;
+        }
         self.time.advance(if self.started { dt } else { 0.0 });
         if self.editing {
             if !self.started {
@@ -177,12 +179,29 @@ impl Engine {
             self.game.update(&mut ctx);
         }
         self.run_scripts(gfx, Phase::Update);
+        {
+            let time = self.time;
+            let mut ctx = Context { world: &mut self.world, time: &time, input: &self.input, gfx, displays: &self.displays, resources: &mut self.resources, quit: &mut self.quit };
+            crate::coroutine::run_coroutines(&mut ctx);
+        }
         self.each_plugin(gfx, |p, ctx| p.update(ctx));
         self.run_scripts(gfx, Phase::Late);
+        let t0 = crate::profiler::now();
         propagate_transforms(&mut self.world);
+        let t1 = crate::profiler::now();
         self.each_plugin(gfx, |p, ctx| p.late_update(ctx));
+        let t2 = crate::profiler::now();
         let views = extract_views(&self.world, &self.displays, &*gfx, self.view_camera);
+        let t3 = crate::profiler::now();
         self.last_stats = gfx.render(&views);
+        let t4 = crate::profiler::now();
+        let prof = self.resources.get_or_default::<crate::profiler::Profiler>();
+        prof.add("Transforms", t1 - t0);
+        prof.add("Culling", t3 - t2);
+        prof.add("Render", t4 - t3);
+        prof.draw_calls = self.last_stats.draw_calls;
+        prof.triangles = self.last_stats.triangles;
+        prof.end_frame();
     }
 
     fn each_plugin(&mut self, gfx: &mut dyn GraphicsBackend, mut f: impl FnMut(&mut dyn Plugin, &mut Context)) {
@@ -191,7 +210,12 @@ impl Engine {
         {
             let mut ctx = Context { world: &mut self.world, time: &time, input: &self.input, gfx, displays: &self.displays, resources: &mut self.resources, quit: &mut self.quit };
             for p in plugins.iter_mut() {
+                let t0 = crate::profiler::now();
                 f(p.as_mut(), &mut ctx);
+                let dt = crate::profiler::now() - t0;
+                if dt > 0.0 {
+                    ctx.resources.get_or_default::<crate::profiler::Profiler>().add(p.name(), dt);
+                }
             }
         }
         // a plugin may not add plugins (yet): keep the list as it was
@@ -199,6 +223,15 @@ impl Engine {
     }
 
     fn run_scripts(&mut self, gfx: &mut dyn GraphicsBackend, phase: Phase) {
+        let t0 = crate::profiler::now();
+        self.run_scripts_inner(gfx, phase);
+        let dt = crate::profiler::now() - t0;
+        if dt > 0.0 {
+            self.resources.get_or_default::<crate::profiler::Profiler>().add("Behaviours", dt);
+        }
+    }
+
+    fn run_scripts_inner(&mut self, gfx: &mut dyn GraphicsBackend, phase: Phase) {
         // Take each entity's Scripts out while they run, so behaviours can borrow the world freely.
         let owners: Vec<Entity> = self.world.query::<&Scripts>().iter().map(|(e, _)| e).collect();
         let time = self.time;
@@ -235,44 +268,48 @@ impl Engine {
     }
 }
 
-/// World matrices: Transform (+ Parent chain) → GlobalTransform.
+/// World matrices: Transform (+ Parent chain) → GlobalTransform. Walks from the roots down
+/// (children sorted by parent, no per-entity maps): cheap enough for the 3DS's CPU.
 pub fn propagate_transforms(world: &mut World) {
-    let mut locals: HashMap<Entity, (Mat4, Option<Entity>)> = HashMap::new();
-    for (e, (t, p)) in world.query::<(&Transform, Option<&Parent>)>().iter() {
-        locals.insert(e, (t.matrix(), p.map(|p| p.0)));
-    }
-    let mut globals: HashMap<Entity, Mat4> = HashMap::with_capacity(locals.len());
-    fn global_of(e: Entity, locals: &HashMap<Entity, (Mat4, Option<Entity>)>, globals: &mut HashMap<Entity, Mat4>, depth: u32) -> Mat4 {
-        if let Some(m) = globals.get(&e) {
-            return *m;
+    // (parent, child) pairs sorted by parent: a node's children are one range
+    let mut pairs: Vec<(u64, Entity)> = world.query::<&Parent>().with::<&Transform>().iter().map(|(c, p)| (p.0.to_bits().get(), c)).collect();
+    pairs.sort_unstable_by_key(|(p, _)| *p);
+    let children = |of: Entity, pairs: &[(u64, Entity)]| -> std::ops::Range<usize> {
+        let k = of.to_bits().get();
+        let lo = pairs.partition_point(|(p, _)| *p < k);
+        let hi = lo + pairs[lo..].partition_point(|(p, _)| *p == k);
+        lo..hi
+    };
+    // roots: no parent, or a parent without a Transform (or gone)
+    let roots: Vec<(Entity, Mat4)> = world
+        .query::<(&Transform, Option<&Parent>)>()
+        .iter()
+        .filter(|(_, (_, p))| p.is_none_or(|p| world.get::<&Transform>(p.0).is_err()))
+        .map(|(e, (t, _))| (e, t.matrix()))
+        .collect();
+    let mut missing: Vec<(Entity, Mat4)> = Vec::new();
+    let mut stack = roots;
+    let mut guard = 0usize;
+    while let Some((e, m)) = stack.pop() {
+        guard += 1;
+        if guard > 1_000_000 {
+            break; // a parent cycle
         }
-        let Some((local, parent)) = locals.get(&e).copied() else { return Mat4::IDENTITY };
-        let m = match parent {
-            Some(p) if depth < 64 && locals.contains_key(&p) => global_of(p, locals, globals, depth + 1) * local,
-            _ => local,
-        };
-        globals.insert(e, m);
-        m
-    }
-    let entities: Vec<Entity> = locals.keys().copied().collect();
-    for e in &entities {
-        global_of(*e, &locals, &mut globals, 0);
-    }
-    for e in entities {
-        let m = globals[&e];
-        let updated = match world.get::<&mut GlobalTransform>(e) {
-            Ok(mut g) => {
-                g.0 = m;
-                true
+        match world.get::<&mut GlobalTransform>(e) {
+            Ok(mut g) => g.0 = m,
+            Err(_) => missing.push((e, m)),
+        }
+        for i in children(e, &pairs) {
+            let c = pairs[i].1;
+            if let Ok(t) = world.get::<&Transform>(c) {
+                stack.push((c, m * t.matrix()));
             }
-            Err(_) => false,
-        };
-        if !updated {
-            let _ = world.insert_one(e, GlobalTransform(m));
         }
+    }
+    for (e, m) in missing {
+        let _ = world.insert_one(e, GlobalTransform(m));
     }
 }
-
 fn scaled(c: Color, intensity: f32) -> Color {
     Color::rgba(c.r * intensity, c.g * intensity, c.b * intensity, 1.0)
 }
@@ -325,17 +362,18 @@ fn pick_lights(directional: &[Light], local: &[Light], camera: Vec3, frustum: &F
 pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn GraphicsBackend, only: Option<Entity>) -> Vec<RenderView> {
     let settings = world.query::<&RenderSettings>().iter().next().map(|(_, s)| *s).unwrap_or_default();
     let (directional, local) = collect_lights(world);
-    // world-space bounding spheres (None = always drawn), layer bit
-    let renderers: Vec<(DrawItem, Option<(Vec3, f32)>, u32)> = world
-        .query::<(&MeshRenderer, &GlobalTransform)>()
+    // world-space bounding spheres (None = always drawn), layer bit, LOD levels
+    let renderers: Vec<(DrawItem, Option<(Vec3, f32)>, u32, Option<LodGroup>)> = world
+        .query::<(&MeshRenderer, &GlobalTransform, Option<&LodGroup>)>()
         .iter()
-        .filter(|(_, (r, _))| r.visible)
-        .map(|(_, (r, g))| {
-            let sphere = gfx.mesh_bounds(r.mesh).map(|b| {
+        .filter(|(_, (r, _, _))| r.visible)
+        .map(|(_, (r, g, lod))| {
+            let mesh = lod.and_then(|l| l.levels.first()).map(|l| l.mesh).unwrap_or(r.mesh);
+            let sphere = gfx.mesh_bounds(mesh).map(|b| {
                 let scale = g.0.x_axis.truncate().length().max(g.0.y_axis.truncate().length()).max(g.0.z_axis.truncate().length());
                 (g.0.transform_point3(b.center), b.radius * scale)
             });
-            (DrawItem { mesh: r.mesh, material: r.material, model: g.0, sorting_order: r.sorting_order }, sphere, 1u32 << r.layer.min(31))
+            (DrawItem { mesh, material: r.material, model: g.0, sorting_order: r.sorting_order }, sphere, 1u32 << r.layer.min(31), lod.cloned())
         })
         .collect();
     let mut views: Vec<RenderView> = world
@@ -351,10 +389,22 @@ pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn Graphics
                 .unwrap_or((16.0, 9.0));
             let aspect = (dw * c.viewport.width) / (dh * c.viewport.height).max(1e-4);
             let frustum = Frustum::from_matrix(c.projection.gl_matrix(aspect) * view);
+            let cam_pos = g.0.w_axis.truncate();
+            // object height as a fraction of the screen height (LOD selection)
+            let screen_height = |center: Vec3, radius: f32| match c.projection {
+                goat_gfx::Projection::Perspective { fov_y_radians, .. } => {
+                    let d = (center - cam_pos).length().max(1e-4);
+                    radius / (d * (fov_y_radians * 0.5).tan())
+                }
+                goat_gfx::Projection::Orthographic { height, .. } => 2.0 * radius / height.max(1e-4),
+            };
             let items = renderers
                 .iter()
-                .filter(|(_, s, layer)| c.culling_mask & layer != 0 && s.is_none_or(|(center, radius)| frustum.intersects_sphere(center, radius)))
-                .map(|(it, _, _)| *it)
+                .filter(|(_, s, layer, _)| c.culling_mask & layer != 0 && s.is_none_or(|(center, radius)| frustum.intersects_sphere(center, radius)))
+                .filter_map(|(it, s, _, lod)| match (lod, s) {
+                    (Some(l), Some((center, radius))) => l.pick(screen_height(*center, *radius)).map(|mesh| DrawItem { mesh, ..*it }),
+                    _ => Some(*it),
+                })
                 .collect();
             RenderView {
                 display: c.display,
@@ -363,7 +413,7 @@ pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn Graphics
                 projection: c.projection,
                 clear: c.clear,
                 clear_depth: c.clear_depth,
-                lighting: Lighting { ambient: settings.ambient, lights: pick_lights(&directional, &local, g.0.w_axis.truncate(), &frustum) },
+                lighting: Lighting { ambient: settings.ambient, ambient_ground: settings.ambient_ground, lights: pick_lights(&directional, &local, g.0.w_axis.truncate(), &frustum) },
                 fog: settings.fog,
                 items,
                 depth: c.depth,
@@ -386,5 +436,26 @@ mod tests {
         propagate_transforms(&mut w);
         let g = w.get::<&GlobalTransform>(c).unwrap().0;
         assert!((g.w_axis.truncate() - Vec3::new(1.0, 2.0, 0.0)).length() < 1e-5);
+    }
+    #[test]
+    fn lod_groups_switch_meshes_with_distance() {
+        use goat_gfx::GraphicsBackend;
+        let mut gfx = goat_gfx::NullBackend::new();
+        let hi = gfx.create_mesh(&goat_gfx::MeshData::sphere(0.5, 16, 24)).unwrap();
+        let lo = gfx.create_mesh(&goat_gfx::MeshData::cube(1.0)).unwrap();
+        let mat = gfx.create_material(&goat_gfx::MaterialDesc::default()).unwrap();
+        let mut w = World::new();
+        w.spawn((Transform::from_position(Vec3::new(0.0, 0.0, 5.0)), Camera::default()));
+        let obj = w.spawn((Transform::default(), MeshRenderer::new(hi, mat), LodGroup { levels: vec![LodLevel { mesh: hi, screen_height: 0.3 }, LodLevel { mesh: lo, screen_height: 0.05 }], cull: true }));
+        let displays = gfx.displays();
+        let mesh_at = |w: &mut World, z: f32| {
+            w.get::<&mut Transform>(obj).unwrap().position.z = -z;
+            propagate_transforms(w);
+            let v = extract_views(w, &displays, &gfx, None);
+            v[0].items.first().map(|i| i.mesh)
+        };
+        assert_eq!(mesh_at(&mut w, -3.5), Some(hi), "near (1.5 m): full detail");
+        assert_eq!(mesh_at(&mut w, 10.0), Some(lo), "farther: low detail");
+        assert_eq!(mesh_at(&mut w, 60.0), None, "tiny: culled");
     }
 }

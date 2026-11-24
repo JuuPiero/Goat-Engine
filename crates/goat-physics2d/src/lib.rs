@@ -8,6 +8,15 @@
 //!   is static geometry. Sizes are scaled by the entity's world scale when the body is created.
 //! - [`Physics2DPlugin`] steps in `fixed_update`; scripts write `velocity` / move Transforms like
 //!   in 3D. [`Physics2D`] (a resource): gravity, events of the frame, raycasts, point queries.
+//! - Layers (`Collider2D::layer` + [`Physics2D::set_layer_collision`]), edge colliders
+//!   ([`Shape2D::Edge`], Unity's EdgeCollider2D: one-sided ground lines), [`Joint2D`]s (fixed,
+//!   hinge with limits / motor, slider, spring, distance).
+
+mod joint;
+#[cfg(feature = "script")]
+pub mod script;
+
+pub use joint::{Joint2D, JointKind2D};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -69,6 +78,8 @@ pub enum Shape2D {
     Capsule { half_height: f32, radius: f32 },
     /// A convex polygon (its convex hull is used).
     Polygon(Vec<Vec2>),
+    /// A chain of segments through the points (Unity's EdgeCollider2D): terrain lines, static.
+    Edge(Vec<Vec2>),
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -80,6 +91,8 @@ pub struct Collider2D {
     pub restitution: f32,
     pub density: f32,
     pub is_trigger: bool,
+    /// Layer 0..31 (see [`Physics2D::set_layer_collision`]).
+    pub layer: u8,
 }
 
 impl Default for Collider2D {
@@ -90,7 +103,7 @@ impl Default for Collider2D {
 
 impl Collider2D {
     pub fn new(shape: Shape2D) -> Self {
-        Collider2D { shape, offset: Vec2::ZERO, friction: 0.4, restitution: 0.0, density: 1.0, is_trigger: false }
+        Collider2D { shape, offset: Vec2::ZERO, friction: 0.4, restitution: 0.0, density: 1.0, is_trigger: false, layer: 0 }
     }
     pub fn unit_box() -> Self {
         Self::new(Shape2D::Box(Vec2::splat(0.5)))
@@ -109,6 +122,14 @@ impl Collider2D {
     pub fn trigger(mut self) -> Self {
         self.is_trigger = true;
         self
+    }
+    pub fn on_layer(mut self, layer: u8) -> Self {
+        self.layer = layer.min(31);
+        self
+    }
+    /// An edge chain through `points` (local space).
+    pub fn edge(points: Vec<Vec2>) -> Self {
+        Self::new(Shape2D::Edge(points))
     }
 }
 
@@ -182,6 +203,9 @@ pub struct Physics2D {
     ccd: CCDSolver,
     queries: QueryPipeline,
     tracked: HashMap<Entity, Tracked>,
+    layers: [u32; 32],
+    joints: joint::Joints,
+    world_anchor: Option<RigidBodyHandle>,
 }
 
 impl Default for Physics2D {
@@ -201,6 +225,9 @@ impl Default for Physics2D {
             ccd: CCDSolver::new(),
             queries: QueryPipeline::new(),
             tracked: HashMap::new(),
+            layers: [u32::MAX; 32],
+            joints: Default::default(),
+            world_anchor: None,
         }
     }
 }
@@ -220,15 +247,43 @@ fn z_angle(q: Quat) -> f32 {
     x.y.atan2(x.x)
 }
 
+fn groups(layer: u8, layers: &[u32; 32]) -> InteractionGroups {
+    let l = layer.min(31) as usize;
+    InteractionGroups::new(Group::from_bits_truncate(1 << l), Group::from_bits_truncate(layers[l]))
+}
+
 impl Physics2D {
+    /// Whether layers `a` and `b` collide (Unity's Layer Collision Matrix, both ways).
+    pub fn set_layer_collision(&mut self, a: u8, b: u8, collide: bool) {
+        let (a, b) = (a.min(31) as usize, b.min(31) as usize);
+        for (x, y) in [(a, b), (b, a)] {
+            if collide {
+                self.layers[x] |= 1 << y;
+            } else {
+                self.layers[x] &= !(1 << y);
+            }
+        }
+        let layers = self.layers;
+        for (_, c) in self.colliders.iter_mut() {
+            let layer = c.collision_groups().memberships.bits().trailing_zeros().min(31) as u8;
+            c.set_collision_groups(groups(layer, &layers));
+        }
+    }
+
     /// The first (non-trigger) collider along a ray.
     pub fn raycast(&self, origin: Vec2, direction: Vec2, max_distance: f32) -> Option<RayHit2D> {
+        self.raycast_layers(origin, direction, max_distance, u32::MAX)
+    }
+
+    /// A raycast against the layers in `mask` only.
+    pub fn raycast_layers(&self, origin: Vec2, direction: Vec2, max_distance: f32, mask: u32) -> Option<RayHit2D> {
         let dir = direction.normalize_or_zero();
         if dir == Vec2::ZERO {
             return None;
         }
         let ray = Ray::new(point![origin.x, origin.y], v(dir));
-        let (handle, hit) = self.queries.cast_ray_and_get_normal(&self.bodies, &self.colliders, &ray, max_distance, true, QueryFilter::default().exclude_sensors())?;
+        let filter = QueryFilter::default().exclude_sensors().groups(InteractionGroups::new(Group::ALL, Group::from_bits_truncate(mask)));
+        let (handle, hit) = self.queries.cast_ray_and_get_normal(&self.bodies, &self.colliders, &ray, max_distance, true, filter)?;
         let entity = entity_of(self.colliders.get(handle)?)?;
         let toi = hit.time_of_impact;
         Some(RayHit2D { entity, point: origin + dir * toi, normal: gv(&hit.normal), distance: toi })
@@ -242,6 +297,22 @@ impl Physics2D {
             false
         });
         found
+    }
+
+    /// Every collider overlapping a circle (Physics2D.OverlapCircleAll).
+    pub fn overlap_circle(&self, center: Vec2, radius: f32, mask: u32) -> Vec<Entity> {
+        let mut out = Vec::new();
+        let shape = rapier2d::geometry::Ball::new(radius);
+        let filter = QueryFilter::default().groups(InteractionGroups::new(Group::ALL, Group::from_bits_truncate(mask)));
+        self.queries.intersections_with_shape(&self.bodies, &self.colliders, &Isometry::new(v(center), 0.0), &shape, filter, |h| {
+            if let Some(e) = self.colliders.get(h).and_then(entity_of) {
+                if !out.contains(&e) {
+                    out.push(e);
+                }
+            }
+            true
+        });
+        out
     }
 
     pub fn apply_impulse(&mut self, e: Entity, impulse: Vec2) {
@@ -276,6 +347,8 @@ impl Physics2D {
             Shape2D::Circle(r) => Some(ColliderBuilder::ball(r * s.max_element())),
             Shape2D::Capsule { half_height, radius } => Some(ColliderBuilder::capsule_y(half_height * s.y, radius * s.x)),
             Shape2D::Polygon(points) => ColliderBuilder::convex_hull(&points.iter().map(|q| point![q.x * s.x, q.y * s.y]).collect::<Vec<_>>()),
+            Shape2D::Edge(points) if points.len() >= 2 => Some(ColliderBuilder::polyline(points.iter().map(|q| point![q.x * s.x, q.y * s.y]).collect(), None)),
+            Shape2D::Edge(_) => None,
         };
         if let Some(shape) = shape {
             let area = shape_area(&c.shape, s).max(1e-6);
@@ -286,6 +359,7 @@ impl Physics2D {
                 .restitution(c.restitution)
                 .density(density)
                 .sensor(c.is_trigger)
+                .collision_groups(groups(c.layer, &self.layers))
                 .active_events(ActiveEvents::COLLISION_EVENTS)
                 .user_data(e.to_bits().get() as u128)
                 .build();
@@ -313,6 +387,7 @@ impl Physics2D {
             let m = world_matrix(world, e);
             self.add(e, &m, rb.as_ref(), &c);
         }
+        self.sync_joints(world);
         for (e, t) in self.tracked.iter_mut() {
             let Some(body) = self.bodies.get_mut(t.body) else { continue };
             let rb = world.get::<&Rigidbody2D>(*e).ok().map(|r| *r);
@@ -427,6 +502,8 @@ fn shape_area(s: &Shape2D, scale: Vec2) -> f32 {
             let n = p.len();
             (0..n).map(|i| p[i].x * scale.x * p[(i + 1) % n].y * scale.y - p[(i + 1) % n].x * scale.x * p[i].y * scale.y).sum::<f32>().abs() * 0.5
         }
+        // edges have no area (static geometry)
+        Shape2D::Edge(_) => 1.0,
     }
 }
 
@@ -454,7 +531,12 @@ impl Plugin for Physics2DPlugin {
     fn build(&mut self, ctx: &mut Context) {
         ctx.resources.get_or_default::<Physics2D>();
         #[cfg(feature = "scene")]
-        goat_scene::registry(ctx).component(goat_scene::serde_codec::<Rigidbody2D>("Rigidbody2D")).component(goat_scene::serde_codec::<Collider2D>("Collider2D"));
+        goat_scene::registry(ctx)
+            .component(goat_scene::serde_codec::<Rigidbody2D>("Rigidbody2D"))
+            .component(goat_scene::serde_codec::<Collider2D>("Collider2D"))
+            .component(goat_scene::serde_codec::<Joint2D>("Joint2D"));
+        #[cfg(feature = "script")]
+        script::register(goat_script::extensions(ctx));
     }
     fn fixed_update(&mut self, ctx: &mut Context) {
         let dt = ctx.time.delta;
@@ -526,5 +608,30 @@ mod tests {
         assert!((a.abs() - std::f32::consts::FRAC_PI_2).abs() < 0.1, "fell on its side: {a}");
         assert!((r * Vec3::Z - Vec3::Z).length() < 1e-4, "still facing the camera");
         assert!(triggered);
+    }
+
+    #[test]
+    fn edges_layers_and_joints_2d() {
+        let mut w = World::new();
+        let mut p = Physics2D::default();
+        // a V-shaped edge chain: a ball dropped on it rolls to the bottom
+        w.spawn((Transform::default(), GlobalTransform::default(), Collider2D::edge(vec![Vec2::new(-5.0, 5.0), Vec2::new(0.0, 0.0), Vec2::new(5.0, 5.0)])));
+        let ball = w.spawn((Transform::from_position(Vec3::new(-3.0, 6.0, 0.0)), GlobalTransform::default(), Rigidbody2D::dynamic(), Collider2D::circle(0.25).with_friction(0.0)));
+        // layer 2 ignores layer 0: falls through the edge
+        p.set_layer_collision(0, 2, false);
+        let ghost = w.spawn((Transform::from_position(Vec3::new(3.0, 6.0, 0.0)), GlobalTransform::default(), Rigidbody2D::dynamic(), Collider2D::circle(0.25).on_layer(2)));
+        // a hinge pendulum on the world and a distance joint between two bodies
+        let bob = w.spawn((goat_runtime::Name("bob".into()), Transform::from_position(Vec3::new(20.0, 0.0, 0.0)), GlobalTransform::default(), Rigidbody2D::dynamic(), Collider2D::circle(0.1), Joint2D::new(JointKind2D::Hinge { limits: None, motor_speed: 0.0, motor_torque: 0.0 }).at(Vec2::new(-2.0, 0.0), Vec2::new(18.0, 0.0))));
+        for _ in 0..240 {
+            p.step(&mut w, 1.0 / 60.0);
+            p.events.clear();
+        }
+        let b = w.get::<&Transform>(ball).unwrap().position;
+        assert!(b.y < 1.5 && b.x.abs() < 1.5, "rolled down the V: {b}");
+        assert!(w.get::<&Transform>(ghost).unwrap().position.y < -10.0, "layer 2 passes through");
+        let bp = w.get::<&Transform>(bob).unwrap().position.truncate();
+        assert!(((bp - Vec2::new(18.0, 0.0)).length() - 2.0).abs() < 0.05, "pendulum length kept: {bp}");
+        assert_eq!(p.joint_count(), 1);
+        assert_eq!(p.overlap_circle(b.truncate(), 0.05, u32::MAX), vec![ball]);
     }
 }

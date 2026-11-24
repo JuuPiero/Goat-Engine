@@ -68,6 +68,63 @@ pub(crate) fn copy_into(dir: &Path, files: &[PathBuf]) -> Result<PathBuf, String
 /// The sample game's assets folder (copied next to desktop builds; packed into romfs on the 3DS).
 pub(crate) const GAME_ASSETS: &str = "games/hello/assets";
 
+/// The game's assets as a build ships them, in `dest`: a copy where scripts are compiled —
+/// C# → JavaScript (tools/goat-cs, needs the .NET SDK when there are .cs files), TypeScript →
+/// JavaScript (oxc) — and their sources dropped (consoles load the JavaScript).
+pub(crate) fn stage_assets(config: &Config, dest: &Path) -> Result<(), String> {
+    let src = config.root.join(GAME_ASSETS);
+    copy_dir(&src, dest)?;
+    let mut files = Vec::new();
+    walk(dest, &mut files);
+    if files.iter().any(|f| f.extension().is_some_and(|e| e == "cs")) {
+        goat_cs(config, dest)?;
+    }
+    let mut compiled = 0;
+    for f in &files {
+        let name = f.to_string_lossy();
+        if name.ends_with(".ts") && !name.ends_with(".d.ts") {
+            let key = f.strip_prefix(dest).unwrap_or(f).to_string_lossy().replace('\\', "/");
+            let text = std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
+            let js = goat_script_js::compile_typescript(&key, &text).map_err(|e| format!("{key}: {e}"))?;
+            std::fs::write(f.with_extension("js"), js).map_err(|e| format!("{}: {e}", f.display()))?;
+            std::fs::remove_file(f).map_err(|e| e.to_string())?;
+            compiled += 1;
+        } else if name.ends_with(".cs") || name.ends_with(".d.ts") {
+            std::fs::remove_file(f).map_err(|e| e.to_string())?;
+        }
+    }
+    if compiled > 0 {
+        println!("goat: compiled {compiled} TypeScript file(s)");
+    }
+    Ok(())
+}
+
+fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            walk(&p, out);
+        } else {
+            out.push(p);
+        }
+    }
+}
+
+/// Runs tools/goat-cs on a folder (building the tool first when needed).
+fn goat_cs(config: &Config, dir: &Path) -> Result<(), String> {
+    let tool_dir = config.root.join("tools").join("goat-cs");
+    let dll = tool_dir.join("bin").join("goat-cs.dll");
+    let stale = std::fs::metadata(&dll).and_then(|m| m.modified()).ok().is_none_or(|built| {
+        ["Program.cs", "JsWriter.cs", "Api/GoatEngine.cs"].iter().any(|f| std::fs::metadata(tool_dir.join(f)).and_then(|m| m.modified()).is_ok_and(|m| m > built))
+    });
+    if stale {
+        println!("goat: building tools/goat-cs (C# → JavaScript)");
+        run_command(std::process::Command::new("dotnet").current_dir(&tool_dir).args(["build", "-c", "Release", "-o", "bin", "-v", "q"]))
+            .map_err(|e| format!("C# scripts need the .NET SDK (dotnet) to build tools/goat-cs: {e}"))?;
+    }
+    run_command(std::process::Command::new("dotnet").arg(&dll).arg(dir))
+}
+
 /// Copies a folder tree (assets) into `dest`, replacing what is there.
 pub(crate) fn copy_dir(src: &Path, dest: &Path) -> Result<(), String> {
     if dest.exists() {

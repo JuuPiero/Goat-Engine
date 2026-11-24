@@ -151,6 +151,33 @@ impl AssetServer {
         Ok(id)
     }
 
+    /// A cube map: a `.cubemap.json` file (`{ "faces": ["px.png", "nx.png", "py.png", "ny.png",
+    /// "pz.png", "nz.png"] }`, relative to the file) or `builtin:sky` (a soft blue sky over a
+    /// darker ground, for quick shiny materials).
+    pub fn cubemap(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<TextureId, AssetError> {
+        if let Some(id) = self.textures.get(key) {
+            return Ok(*id);
+        }
+        let faces: [TextureData; 6] = if key == "builtin:sky" {
+            std::array::from_fn(sky_face)
+        } else {
+            let text = self.io.read_string(key)?;
+            let j: serde_json::Value = serde_json::from_str(&text).map_err(|e| AssetError::Format(key.into(), e.to_string()))?;
+            let list: Vec<String> = j.get("faces").and_then(|f| f.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|s| resolve_relative(key, s))).collect()).unwrap_or_default();
+            if list.len() != 6 {
+                return Err(AssetError::Format(key.into(), "a cube map needs 6 faces (+X, -X, +Y, -Y, +Z, -Z)".into()));
+            }
+            let mut out = Vec::with_capacity(6);
+            for f in &list {
+                out.push(to_power_of_two(&self.texture_data(f)?));
+            }
+            out.try_into().map_err(|_| AssetError::Format(key.into(), "faces".into()))?
+        };
+        let id = gfx.create_cubemap(&faces).map_err(|e| AssetError::Gpu(key.into(), e))?;
+        self.register_texture(key, id);
+        Ok(id)
+    }
+
     /// `builtin:default`, a `.mat.json` file, or `<model>#material:<i>`.
     pub fn material(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<MaterialId, AssetError> {
         if let Some(id) = self.materials.get(key) {
@@ -170,17 +197,27 @@ impl AssetServer {
         } else {
             let text = self.io.read_string(key)?;
             let file: MaterialFile = serde_json::from_str(&text).map_err(|e| AssetError::Format(key.into(), e.to_string()))?;
+            let rel = |t: &str| if t.starts_with("builtin:") { t.to_string() } else { t.strip_prefix('/').map(str::to_string).unwrap_or_else(|| resolve_relative(key, t)) };
             let texture = match &file.texture {
-                Some(t) => {
-                    let tkey = match t.strip_prefix('/') {
-                        Some(rooted) => rooted.to_string(),
-                        None => resolve_relative(key, t),
-                    };
-                    Some(self.texture(gfx, &tkey)?)
-                }
+                Some(t) => Some(self.texture(gfx, &rel(t))?),
                 None => None,
             };
-            MaterialDesc { texture, ..file.desc() }
+            let emissive_texture = match &file.emissive_texture {
+                Some(t) => Some(self.texture(gfx, &rel(t))?),
+                None => None,
+            };
+            // a reflection the backend can't do (no cube maps) just isn't drawn
+            let env_map = match &file.env_map {
+                Some(t) => match self.cubemap(gfx, &rel(t)) {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        goat_core::warn!("{key}: env map: {e}");
+                        None
+                    }
+                },
+                None => None,
+            };
+            MaterialDesc { texture, emissive_texture, env_map, ..file.desc() }
         };
         let id = gfx.create_material(&desc).map_err(|e| AssetError::Gpu(key.into(), e))?;
         self.register_material(key, id);
@@ -245,6 +282,70 @@ impl AssetServer {
             }
         }
         Ok(&self.models[key])
+    }
+
+    /// Full vertices of a mesh on the CPU (static batching): `builtin:*` or
+    /// `<model>#mesh:<mesh>:<primitive>` (re-read from the model file).
+    pub fn mesh_data(&self, key: &str) -> Result<MeshData, AssetError> {
+        match key {
+            "builtin:cube" => return Ok(MeshData::cube(1.0)),
+            "builtin:sphere" => return Ok(MeshData::sphere(0.5, 16, 24)),
+            "builtin:plane" => return Ok(MeshData::plane(10.0, 10.0)),
+            _ => {}
+        }
+        let (file, sub) = key.split_once('#').ok_or_else(|| AssetError::Format(key.into(), "not a mesh key".into()))?;
+        let mut parts = sub.strip_prefix("mesh:").unwrap_or("").split(':').map(|s| s.parse::<usize>().ok());
+        let (Some(Some(mi)), pi) = (parts.next(), parts.next().flatten().unwrap_or(0)) else {
+            return Err(AssetError::Format(key.into(), "bad sub-asset".into()));
+        };
+        let data = load_model(&self.io, file)?;
+        data.meshes.get(mi).and_then(|ps| ps.get(pi)).map(|p| p.mesh.clone()).ok_or_else(|| AssetError::Format(key.into(), "no such mesh".into()))
+    }
+
+    /// Triangles of a mesh on the CPU (mesh colliders, navigation): `builtin:cube|sphere|plane`,
+    /// `<model>#mesh:<mesh>:<primitive>`, or a whole `<model>` (every node's meshes in the
+    /// model's space). Model files are read again (their GPU meshes keep no CPU copy).
+    pub fn mesh_geometry(&self, key: &str) -> Result<(Vec<goat_core::math::Vec3>, Vec<[u32; 3]>), AssetError> {
+        use goat_core::math::{Mat4, Vec3};
+        let mut points = Vec::new();
+        let mut tris = Vec::new();
+        let mut add = |m: &MeshData, xf: &Mat4| {
+            let base = points.len() as u32;
+            points.extend(m.vertices.iter().map(|v| xf.transform_point3(Vec3::from(v.position))));
+            tris.extend(m.indices.chunks_exact(3).map(|t| [base + t[0] as u32, base + t[1] as u32, base + t[2] as u32]));
+        };
+        match key {
+            "builtin:cube" => add(&MeshData::cube(1.0), &Mat4::IDENTITY),
+            "builtin:sphere" => add(&MeshData::sphere(0.5, 16, 24), &Mat4::IDENTITY),
+            "builtin:plane" => add(&MeshData::plane(10.0, 10.0), &Mat4::IDENTITY),
+            _ => {
+                let data = load_model(&self.io, file_of(key))?;
+                if let Some((_, sub)) = key.split_once('#') {
+                    let mut parts = sub.strip_prefix("mesh:").unwrap_or("").split(':').map(|s| s.parse::<usize>().ok());
+                    let (Some(Some(mi)), pi) = (parts.next(), parts.next().flatten().unwrap_or(0)) else {
+                        return Err(AssetError::Format(key.into(), "bad sub-asset".into()));
+                    };
+                    let p = data.meshes.get(mi).and_then(|ps| ps.get(pi)).ok_or_else(|| AssetError::Format(key.into(), "no such mesh".into()))?;
+                    add(&p.mesh, &Mat4::IDENTITY);
+                } else {
+                    let mut stack: Vec<(usize, Mat4)> = data.roots.iter().map(|&r| (r, Mat4::IDENTITY)).collect();
+                    while let Some((n, parent)) = stack.pop() {
+                        let Some(node) = data.nodes.get(n) else { continue };
+                        let m = parent * Mat4::from_scale_rotation_translation(node.scale, node.rotation, node.translation);
+                        if let Some(mi) = node.mesh {
+                            for p in data.meshes.get(mi).into_iter().flatten() {
+                                add(&p.mesh, &m);
+                            }
+                        }
+                        stack.extend(node.children.iter().map(|&c| (c, m)));
+                    }
+                }
+            }
+        }
+        if tris.is_empty() {
+            return Err(AssetError::Format(key.into(), "no triangles".into()));
+        }
+        Ok((points, tris))
     }
 
     /// A model already loaded (no GPU access needed).
@@ -353,4 +454,31 @@ pub fn mesh(ctx: &mut Context, key: &str) -> Result<MeshId, AssetError> {
 pub fn spawn_model(ctx: &mut Context, key: &str, parent: Option<Entity>) -> Result<Entity, AssetError> {
     let server = ctx.resources.get_mut::<AssetServer>().ok_or_else(|| AssetError::Format(key.into(), "no AssetsPlugin".into()))?;
     server.spawn_model(ctx.world, ctx.gfx, key, parent)
+}
+
+/// Face `i` (+X, -X, +Y, -Y, +Z, -Z) of the builtin sky: a gradient by direction height.
+fn sky_face(i: usize) -> TextureData {
+    use goat_core::math::Vec3;
+    let n = 32u32;
+    let mut rgba = Vec::with_capacity((n * n * 4) as usize);
+    for y in 0..n {
+        for x in 0..n {
+            // face coordinates (-1..1), v down
+            let (u, v) = ((x as f32 + 0.5) / n as f32 * 2.0 - 1.0, (y as f32 + 0.5) / n as f32 * 2.0 - 1.0);
+            let d = match i {
+                0 => Vec3::new(1.0, -v, -u),
+                1 => Vec3::new(-1.0, -v, u),
+                2 => Vec3::new(u, 1.0, v),
+                3 => Vec3::new(u, -1.0, -v),
+                4 => Vec3::new(u, -v, 1.0),
+                _ => Vec3::new(-u, -v, -1.0),
+            }
+            .normalize();
+            let h = d.y;
+            let (sky, horizon, ground) = (Vec3::new(0.35, 0.55, 0.9), Vec3::new(0.85, 0.88, 0.92), Vec3::new(0.25, 0.22, 0.2));
+            let c = if h >= 0.0 { horizon.lerp(sky, h.powf(0.6)) } else { horizon.lerp(ground, (-h).powf(0.4)) };
+            rgba.extend_from_slice(&[(c.x * 255.0) as u8, (c.y * 255.0) as u8, (c.z * 255.0) as u8, 255]);
+        }
+    }
+    TextureData { width: n, height: n, rgba, filter: goat_gfx::Filter::Linear, wrap: goat_gfx::Wrap::Clamp, mipmaps: false, format: Default::default() }
 }

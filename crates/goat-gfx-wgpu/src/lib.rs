@@ -89,6 +89,8 @@ struct FrameUniform {
     /// xyz = camera forward
     camera_forward: [f32; 4],
     ambient: [f32; 4],
+    /// Hemisphere ambient from below, w = 1 when on.
+    ambient_ground: [f32; 4],
     /// rgb = fog color, w = 1 when fog is on
     fog_color: [f32; 4],
     /// x = start, y = end
@@ -144,6 +146,10 @@ pub struct WgpuBackend {
     materials: Pool<MaterialDesc>,
     gpu_materials: HashMap<u32, GpuMaterial>,
     white: GpuTexture,
+    /// Stand-in reflection (materials without an env map).
+    black_cube: GpuTexture,
+    /// Texture ids that are cube maps.
+    cubes: std::collections::HashSet<u32>,
     screenshot: Option<std::path::PathBuf>,
 }
 
@@ -227,6 +233,21 @@ impl WgpuBackend {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                // emissive map
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
+                // reflection cube map + its sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::Cube, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -270,6 +291,7 @@ impl WgpuBackend {
             mapped_at_creation: false,
         });
         let white = upload_texture(&device, &queue, &TextureData::solid(Color::WHITE));
+        let black_cube = upload_cubemap(&device, &queue, &std::array::from_fn(|_| TextureData::solid(Color::BLACK)));
         Ok(WgpuBackend {
             device,
             queue,
@@ -297,6 +319,8 @@ impl WgpuBackend {
             materials: Pool::new(),
             gpu_materials: HashMap::new(),
             white,
+            black_cube,
+            cubes: Default::default(),
             screenshot: None,
         })
     }
@@ -397,12 +421,21 @@ impl WgpuBackend {
         })
     }
 
-    fn material_bind_group(&self, texture: Option<TextureId>) -> wgpu::BindGroup {
-        let t = texture.and_then(|t| self.gpu_textures.get(&t.index())).unwrap_or(&self.white);
+    fn material_bind_group(&self, m: &MaterialDesc) -> wgpu::BindGroup {
+        let get = |id: Option<TextureId>, cube: bool| id.filter(|t| self.cubes.contains(&t.index()) == cube).and_then(|t| self.gpu_textures.get(&t.index()));
+        let t = get(m.texture, false).unwrap_or(&self.white);
+        let e = get(m.emissive_texture, false).unwrap_or(&self.white);
+        let c = get(m.env_map, true).unwrap_or(&self.black_cube);
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material"),
             layout: &self.material_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&t.view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&t.sampler) }],
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&t.view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&t.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&e.view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&c.view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&c.sampler) },
+            ],
         })
     }
 
@@ -502,6 +535,44 @@ fn upload_texture(device: &wgpu::Device, queue: &wgpu::Queue, t: &TextureData) -
     GpuTexture { view: tex.create_view(&Default::default()), sampler, texture: tex }
 }
 
+/// A cube map from 6 faces (+X, -X, +Y, -Y, +Z, -Z), resized to the first face's size.
+fn upload_cubemap(device: &wgpu::Device, queue: &wgpu::Queue, faces: &[TextureData; 6]) -> GpuTexture {
+    let n = faces[0].width.max(1);
+    let size = wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 6 };
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("cubemap"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (i, f) in faces.iter().enumerate() {
+        // faces must match: nearest resample to n × n
+        let px: Vec<u8> = if f.width == n && f.height == n {
+            f.rgba.clone()
+        } else {
+            (0..n * n).flat_map(|k| {
+                let (x, y) = (k % n * f.width / n, k / n * f.height / n);
+                let o = ((y * f.width + x) * 4) as usize;
+                f.rgba.get(o..o + 4).map(|s| [s[0], s[1], s[2], s[3]]).unwrap_or([0, 0, 0, 255])
+            })
+            .collect()
+        };
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d { x: 0, y: 0, z: i as u32 }, aspect: wgpu::TextureAspect::All },
+            &px,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(n) },
+            wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 1 },
+        );
+    }
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
+    let view = tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::Cube), ..Default::default() });
+    GpuTexture { view, sampler, texture: tex }
+}
+
 fn projection_matrix(p: Projection, aspect: f32) -> Mat4 {
     match p {
         Projection::Perspective { fov_y_radians, near, far } => Mat4::perspective_rh(fov_y_radians, aspect, near, far),
@@ -590,8 +661,16 @@ impl GraphicsBackend for WgpuBackend {
         Ok(id)
     }
 
+    fn create_cubemap(&mut self, faces: &[TextureData; 6]) -> Result<TextureId, GfxError> {
+        let gpu = upload_cubemap(&self.device, &self.queue, faces);
+        let id = self.textures.insert(faces[0].clone_meta());
+        self.gpu_textures.insert(id.index(), gpu);
+        self.cubes.insert(id.index());
+        Ok(id)
+    }
+
     fn create_material(&mut self, mat: &MaterialDesc) -> Result<MaterialId, GfxError> {
-        let bind_group = self.material_bind_group(mat.texture);
+        let bind_group = self.material_bind_group(mat);
         let id = self.materials.insert(mat.clone());
         self.gpu_materials.insert(id.index(), GpuMaterial { desc: mat.clone(), bind_group, texture: mat.texture });
         Ok(id)
@@ -601,8 +680,8 @@ impl GraphicsBackend for WgpuBackend {
         if self.materials.get(id).is_none() {
             return;
         }
-        let rebind = self.gpu_materials.get(&id.index()).map(|g| g.texture != mat.texture).unwrap_or(true);
-        let bind_group = if rebind { Some(self.material_bind_group(mat.texture)) } else { None };
+        let rebind = self.gpu_materials.get(&id.index()).map(|g| g.texture != mat.texture || g.desc.emissive_texture != mat.emissive_texture || g.desc.env_map != mat.env_map).unwrap_or(true);
+        let bind_group = if rebind { Some(self.material_bind_group(mat)) } else { None };
         if let Some(g) = self.gpu_materials.get_mut(&id.index()) {
             g.desc = mat.clone();
             g.texture = mat.texture;
@@ -706,6 +785,7 @@ impl GraphicsBackend for WgpuBackend {
                 // w = 1: vertex colors are sRGB-authored and must be linearized (sRGB target)
                 camera_forward: cam_world.transform_vector3(Vec3::NEG_Z).normalize_or(Vec3::NEG_Z).extend(if lin { 1.0 } else { 0.0 }).into(),
                 ambient: c4(v.lighting.ambient, lin),
+                ambient_ground: v.lighting.ambient_ground.map(|g| { let c = c4(g, lin); [c[0], c[1], c[2], 1.0] }).unwrap_or([0.0; 4]),
                 fog_color: fog.map(|f| { let c = c4(f.color, lin); [c[0], c[1], c[2], 1.0] }).unwrap_or([0.0; 4]),
                 fog_range: fog.map(|f| [f.start, f.end.max(f.start + 1e-3), 0.0, 0.0]).unwrap_or([0.0; 4]),
                 lights,
@@ -722,7 +802,7 @@ impl GraphicsBackend for WgpuBackend {
                     base_color: c4(d.base_color, lin),
                     specular: { let s = c4(d.specular, lin); [s[0], s[1], s[2], d.shininess.max(1.0)] },
                     emissive: c4(d.emissive, lin),
-                    flags: [if d.lighting == LightingModel::Lit { 1.0 } else { 0.0 }, if d.fog { 1.0 } else { 0.0 }, 0.0, 0.0],
+                    flags: [if d.lighting == LightingModel::Lit { 1.0 } else { 0.0 }, if d.fog { 1.0 } else { 0.0 }, if d.env_map.is_some() { d.reflectivity } else { 0.0 }, 0.0],
                 };
                 objects.push((it.mesh, it.material, put(bytemuck::bytes_of(&ou))));
             }

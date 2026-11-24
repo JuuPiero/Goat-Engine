@@ -44,7 +44,7 @@ impl Output for DumpOutput {
         self.since_write += dt;
         if self.since_write >= 1.0 {
             self.since_write = 0.0;
-            let clip = AudioClip { channels: 2, sample_rate: self.rate, samples: Arc::new(self.samples.clone()) };
+            let clip = AudioClip { channels: 2, sample_rate: self.rate, samples: Arc::new(self.samples.clone()), stream: None };
             let _ = std::fs::write(&self.path, clip.to_wav());
         }
     }

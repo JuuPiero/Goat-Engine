@@ -4,7 +4,6 @@ description = "GoatEngine native scripts through a C ABI (include/goat.h): behav
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-links = "goat_script_native"
 
 [dependencies]
 goat-core.workspace = true

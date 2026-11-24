@@ -87,6 +87,8 @@ struct App {
     keys: std::collections::HashSet<KeyCode>,
     mouse: Option<PhysicalPosition<f64>>,
     mouse_down: bool,
+    /// Text typed since the last frame.
+    typed: String,
     frames: u64,
     title_timer: f32,
     fps_frames: u32,
@@ -105,6 +107,7 @@ pub fn run(game: impl Game, options: DesktopOptions) {
         keys: Default::default(),
         mouse: None,
         mouse_down: false,
+        typed: String::new(),
         frames: 0,
         title_timer: 0.0,
         fps_frames: 0,
@@ -118,6 +121,7 @@ impl App {
     fn update_input(&mut self) {
         let input = &mut self.engine.input;
         input.begin_frame();
+        input.text = std::mem::take(&mut self.typed);
         let k = |c: KeyCode| self.keys.contains(&c);
         let map: [(Button, &[KeyCode]); Button::COUNT] = [
             (Button::A, &[KeyCode::KeyK, KeyCode::Space]),
@@ -199,6 +203,9 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(c) = event.physical_key {
                     if event.state == ElementState::Pressed {
+                        if let Some(t) = &event.text {
+                            self.typed.push_str(t);
+                        }
                         self.keys.insert(c);
                     } else {
                         self.keys.remove(&c);

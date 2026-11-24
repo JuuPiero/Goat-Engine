@@ -7,9 +7,22 @@ use wasm_bindgen::prelude::*;
 use crate::core::{entity_of, id_of, EditorCore, TransformEdit};
 use crate::tools::GizmoMode;
 
+/// Engine log lines waiting for the editor's Console (`take_logs`).
+static LOGS: std::sync::Mutex<Vec<(&'static str, String)>> = std::sync::Mutex::new(Vec::new());
+
 fn log_sink(level: goat_core::log::Level, args: &std::fmt::Arguments<'_>) {
-    let line = format!("[{}] {}", level.label(), args);
-    web_sys::console::log_1(&JsValue::from_str(&line));
+    let text = args.to_string();
+    web_sys::console::log_1(&JsValue::from_str(&format!("[{}] {}", level.label(), text)));
+    let level = match level {
+        goat_core::log::Level::Error => "error",
+        goat_core::log::Level::Warn => "warn",
+        _ => "info",
+    };
+    if let Ok(mut l) = LOGS.lock() {
+        if l.len() < 1000 {
+            l.push((level, text));
+        }
+    }
 }
 
 #[wasm_bindgen]
@@ -33,6 +46,12 @@ impl EditorEngine {
         let mut me = EditorEngine { gfx, core, width: w, height: h };
         me.core.first_frame(&mut me.gfx);
         Ok(me)
+    }
+
+    /// Engine log lines since the last call: `[[level, text], ...]` (JSON).
+    pub fn take_logs(&self) -> String {
+        let lines = LOGS.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default();
+        serde_json::to_string(&lines).unwrap_or_else(|_| "[]".into())
     }
 
     pub fn backend_name(&self) -> String {

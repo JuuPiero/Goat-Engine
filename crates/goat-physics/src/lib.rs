@@ -8,7 +8,22 @@
 //!   from a script is picked up on the next step (Unity's `rb.velocity = ...` / teleport).
 //! - [`Physics`] (a resource): gravity, collision / trigger events of the frame, raycasts.
 //!
+//! - Layers: `Collider::layer` (0..31) + [`Physics::set_layer_collision`] (Unity's Layer
+//!   Collision Matrix); raycasts take a layer mask.
+//! - Mesh colliders: [`Shape::Mesh`] (triangles of a model / builtin mesh, static or kinematic) or
+//!   its convex hull (`convex: true`, any body).
+//! - [`Joint`]s (fixed, hinge with limits / motor, ball, slider, spring, rope) and the
+//!   [`CharacterController`] (Unity's: `Physics::move_character`, steps, slopes, grounded).
+//!
 //! Collider sizes are scaled by the entity's world scale when the body is created.
+
+mod character;
+mod joint;
+#[cfg(feature = "script")]
+pub mod script;
+
+pub use character::{CharacterController, CollisionFlags};
+pub use joint::{Joint, JointKind};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -63,7 +78,7 @@ impl RigidBody {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Shape {
     /// Half extents (a 1×1×1 cube = 0.5).
@@ -71,9 +86,18 @@ pub enum Shape {
     Sphere(f32),
     /// Along Y: half height of the cylinder part, radius.
     Capsule { half_height: f32, radius: f32 },
+    /// Triangles of a mesh (Unity's MeshCollider): `source` = `builtin:cube`, `models/a.glb`,
+    /// `models/a.glb#mesh:0:0`, or empty = the entity's MeshRenderer mesh. Concave meshes are
+    /// for static / kinematic bodies; `convex` uses the hull (dynamic bodies too).
+    Mesh {
+        #[serde(default)]
+        source: String,
+        #[serde(default)]
+        convex: bool,
+    },
 }
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Collider {
     pub shape: Shape,
@@ -85,6 +109,8 @@ pub struct Collider {
     pub density: f32,
     /// Reports overlaps, no collision response (Unity's Is Trigger).
     pub is_trigger: bool,
+    /// Layer 0..31 (which others it collides with: [`Physics::set_layer_collision`]).
+    pub layer: u8,
 }
 
 impl Default for Collider {
@@ -95,7 +121,7 @@ impl Default for Collider {
 
 impl Collider {
     pub fn new(shape: Shape) -> Self {
-        Collider { shape, center: Vec3::ZERO, friction: 0.5, restitution: 0.0, density: 1.0, is_trigger: false }
+        Collider { shape, center: Vec3::ZERO, friction: 0.5, restitution: 0.0, density: 1.0, is_trigger: false, layer: 0 }
     }
     /// A box matching `MeshData::cube(1.0)` (scaled by the transform).
     pub fn unit_box() -> Self {
@@ -112,6 +138,14 @@ impl Collider {
     pub fn trigger(mut self) -> Self {
         self.is_trigger = true;
         self
+    }
+    pub fn on_layer(mut self, layer: u8) -> Self {
+        self.layer = layer.min(31);
+        self
+    }
+    /// A mesh collider (see [`Shape::Mesh`]).
+    pub fn mesh(source: &str, convex: bool) -> Self {
+        Self::new(Shape::Mesh { source: source.into(), convex })
     }
 }
 
@@ -192,6 +226,13 @@ pub struct Physics {
     ccd: CCDSolver,
     queries: QueryPipeline,
     tracked: HashMap<Entity, Tracked>,
+    /// Which layers each layer collides with (bit j of `layers[i]`).
+    layers: [u32; 32],
+    /// Mesh collider triangles by source key (filled from the AssetServer by the plugin).
+    pub(crate) meshes: HashMap<String, std::sync::Arc<(Vec<Point<Real>>, Vec<[u32; 3]>)>>,
+    joints: joint::Joints,
+    /// Fixed body joints attach to when they have no connected body (the world).
+    world_anchor: Option<RigidBodyHandle>,
 }
 
 impl Default for Physics {
@@ -211,6 +252,10 @@ impl Default for Physics {
             ccd: CCDSolver::new(),
             queries: QueryPipeline::new(),
             tracked: HashMap::new(),
+            layers: [u32::MAX; 32],
+            meshes: HashMap::new(),
+            joints: Default::default(),
+            world_anchor: None,
         }
     }
 }
@@ -233,15 +278,47 @@ fn entity_of(c: &rapier3d::geometry::Collider) -> Option<Entity> {
     Entity::from_bits(c.user_data as u64)
 }
 
+fn groups(layer: u8, layers: &[u32; 32]) -> InteractionGroups {
+    let l = layer.min(31) as usize;
+    InteractionGroups::new(Group::from_bits_truncate(1 << l), Group::from_bits_truncate(layers[l]))
+}
+
 impl Physics {
+    /// Whether layers `a` and `b` collide (both ways, like Unity's matrix). Applies to colliders
+    /// created afterwards and, from the next step, to existing ones.
+    pub fn set_layer_collision(&mut self, a: u8, b: u8, collide: bool) {
+        let (a, b) = (a.min(31) as usize, b.min(31) as usize);
+        for (x, y) in [(a, b), (b, a)] {
+            if collide {
+                self.layers[x] |= 1 << y;
+            } else {
+                self.layers[x] &= !(1 << y);
+            }
+        }
+        let layers = self.layers;
+        for (_, c) in self.colliders.iter_mut() {
+            let m = c.collision_groups().memberships.bits();
+            let layer = m.trailing_zeros().min(31) as u8;
+            c.set_collision_groups(groups(layer, &layers));
+        }
+    }
+    pub fn layers_collide(&self, a: u8, b: u8) -> bool {
+        self.layers[a.min(31) as usize] & (1 << b.min(31)) != 0
+    }
+
     /// The first collider hit by a ray (`direction` needn't be normalized).
     pub fn raycast(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Option<RayHit> {
+        self.raycast_layers(origin, direction, max_distance, u32::MAX)
+    }
+
+    /// A raycast against the layers in `mask` only (Unity's layerMask).
+    pub fn raycast_layers(&self, origin: Vec3, direction: Vec3, max_distance: f32, mask: u32) -> Option<RayHit> {
         let dir = direction.normalize_or_zero();
         if dir == Vec3::ZERO {
             return None;
         }
         let ray = Ray::new(point![origin.x, origin.y, origin.z], v(dir));
-        let filter = QueryFilter::default().exclude_sensors();
+        let filter = QueryFilter::default().exclude_sensors().groups(InteractionGroups::new(Group::ALL, Group::from_bits_truncate(mask)));
         let (handle, hit) = self.queries.cast_ray_and_get_normal(&self.bodies, &self.colliders, &ray, max_distance, true, filter)?;
         let entity = entity_of(self.colliders.get(handle)?)?;
         let toi = hit.time_of_impact;
@@ -261,9 +338,45 @@ impl Physics {
         self.bodies.len()
     }
 
-    fn add(&mut self, e: Entity, world_m: &Mat4, rb: Option<&RigidBody>, cols: &[Collider]) {
+    /// Every collider overlapping a sphere (Unity's OverlapSphere), triggers included.
+    pub fn overlap_sphere(&self, center: Vec3, radius: f32, mask: u32) -> Vec<Entity> {
+        let mut out = Vec::new();
+        let shape = rapier3d::geometry::Ball::new(radius);
+        let filter = QueryFilter::default().groups(InteractionGroups::new(Group::ALL, Group::from_bits_truncate(mask)));
+        self.queries.intersections_with_shape(&self.bodies, &self.colliders, &iso(center, Quat::IDENTITY), &shape, filter, |h| {
+            if let Some(e) = self.colliders.get(h).and_then(entity_of) {
+                if !out.contains(&e) {
+                    out.push(e);
+                }
+            }
+            true
+        });
+        out
+    }
+
+    /// The collider shape (scaled), or None when a mesh isn't loaded / has no hull.
+    fn shape_builder(&self, e: Entity, c: &Collider, s: Vec3) -> Option<ColliderBuilder> {
+        Some(match &c.shape {
+            Shape::Box(h) => ColliderBuilder::cuboid(h.x * s.x, h.y * s.y, h.z * s.z),
+            Shape::Sphere(r) => ColliderBuilder::ball(r * s.max_element()),
+            Shape::Capsule { half_height, radius } => ColliderBuilder::capsule_y(half_height * s.y, radius * s.x.max(s.z)),
+            Shape::Mesh { source, convex } => {
+                let key = if source.is_empty() { renderer_mesh_key(e) } else { source.clone() };
+                let data = self.meshes.get(&key)?;
+                let pts: Vec<Point<Real>> = data.0.iter().map(|p| point![p.x * s.x, p.y * s.y, p.z * s.z]).collect();
+                if *convex {
+                    ColliderBuilder::convex_hull(&pts)?
+                } else {
+                    ColliderBuilder::trimesh(pts, data.1.clone())
+                }
+            }
+        })
+    }
+
+    fn add(&mut self, e: Entity, world_m: &Mat4, rb: Option<&RigidBody>, cols: &[Collider], character: bool) {
         let (scale, rot, pos) = world_m.to_scale_rotation_translation();
         let builder = match rb.map(|r| r.body_type) {
+            None if character => RigidBodyBuilder::kinematic_position_based(),
             None | Some(BodyType::Static) => RigidBodyBuilder::fixed(),
             Some(BodyType::Kinematic) => RigidBodyBuilder::kinematic_position_based(),
             Some(BodyType::Dynamic) => RigidBodyBuilder::dynamic(),
@@ -285,10 +398,9 @@ impl Physics {
         let s = scale.abs();
         let total_volume: f32 = cols.iter().map(|c| shape_volume(&c.shape, s)).sum::<f32>().max(1e-6);
         for c in cols {
-            let shape = match c.shape {
-                Shape::Box(h) => ColliderBuilder::cuboid(h.x * s.x, h.y * s.y, h.z * s.z),
-                Shape::Sphere(r) => ColliderBuilder::ball(r * s.max_element()),
-                Shape::Capsule { half_height, radius } => ColliderBuilder::capsule_y(half_height * s.y, radius * s.x.max(s.z)),
+            let Some(shape) = self.shape_builder(e, c, s) else {
+                goat_core::warn!("collider shape not available yet: {:?}", c.shape);
+                continue;
             };
             let density = match rb.and_then(|r| r.mass) {
                 Some(mass) => mass / total_volume,
@@ -300,12 +412,13 @@ impl Physics {
                 .restitution(c.restitution)
                 .density(density)
                 .sensor(c.is_trigger)
+                .collision_groups(groups(c.layer, &self.layers))
                 .active_events(ActiveEvents::COLLISION_EVENTS)
                 .user_data(e.to_bits().get() as u128)
                 .build();
             self.colliders.insert_with_parent(col, body, &mut self.bodies);
         }
-        let r = rb.copied().unwrap_or_else(RigidBody::fixed);
+        let r = rb.copied().unwrap_or_else(|| RigidBody { body_type: if character { BodyType::Kinematic } else { BodyType::Static }, ..RigidBody::fixed() });
         self.tracked.insert(e, Tracked { body, pose: (pos, rot), velocity: r.velocity, angular_velocity: r.angular_velocity });
     }
 
@@ -318,30 +431,35 @@ impl Physics {
     /// One fixed step: sync from the world, simulate, write back.
     pub fn step(&mut self, world: &mut World, dt: f32) {
         // removed entities / components
-        let gone: Vec<Entity> = self.tracked.keys().copied().filter(|&e| !world.contains(e) || world.get::<&Collider>(e).is_err()).collect();
+        let gone: Vec<Entity> = self.tracked.keys().copied().filter(|&e| !world.contains(e) || (world.get::<&Collider>(e).is_err() && world.get::<&CharacterController>(e).is_err())).collect();
         for e in gone {
             self.remove(e);
         }
-        // new entities (colliders on the entity itself; a RigidBody without colliders is skipped)
-        let new: Vec<(Entity, Mat4, Option<RigidBody>, Collider)> = world
+        // new entities (colliders on the entity itself; a RigidBody without colliders is skipped;
+        // a CharacterController is its own capsule)
+        let new: Vec<(Entity, Mat4, Option<RigidBody>, Collider, bool)> = world
             .query::<(&Collider, Option<&RigidBody>, &GlobalTransform)>()
+            .without::<&CharacterController>()
             .iter()
             .filter(|(e, _)| !self.tracked.contains_key(e))
-            .map(|(e, (c, rb, g))| (e, g.0, rb.copied(), *c))
+            .map(|(e, (c, rb, g))| (e, g.0, rb.copied(), c.clone(), false))
+            .chain(world.query::<(&CharacterController, &GlobalTransform)>().iter().filter(|(e, _)| !self.tracked.contains_key(e)).map(|(e, (cc, g))| (e, g.0, None, cc.collider(), true)))
             .collect();
-        for (e, m, rb, c) in new {
+        for (e, m, rb, c, character) in new {
             // GlobalTransform is identity until the first propagation: use the Transform chain
             let m = if m == Mat4::IDENTITY { world_matrix(world, e) } else { m };
-            self.add(e, &m, rb.as_ref(), &[c]);
+            self.add(e, &m, rb.as_ref(), &[c], character);
         }
+        self.sync_joints(world);
         // script changes: velocities written, transforms moved, kinematic targets
         for (e, t) in self.tracked.iter_mut() {
             let Some(body) = self.bodies.get_mut(t.body) else { continue };
             let rb = world.get::<&RigidBody>(*e).ok().map(|r| *r);
             let m = world_matrix(world, *e);
             let (_, rot, pos) = m.to_scale_rotation_translation();
+            let kinematic = rb.map(|r| r.body_type) == Some(BodyType::Kinematic) || (rb.is_none() && body.is_kinematic());
             match rb.map(|r| r.body_type) {
-                Some(BodyType::Kinematic) => body.set_next_kinematic_position(iso(pos, rot)),
+                _ if kinematic => body.set_next_kinematic_position(iso(pos, rot)),
                 Some(BodyType::Dynamic) => {
                     let r = rb.unwrap();
                     if (pos - t.pose.0).length_squared() > 1e-8 || rot.dot(t.pose.1).abs() < 1.0 - 1e-6 {
@@ -432,6 +550,12 @@ impl Physics {
     }
 }
 
+/// The key mesh colliders without a source use: the entity's MeshRenderer mesh, filled by the
+/// plugin.
+pub(crate) fn renderer_mesh_key(e: Entity) -> String {
+    format!("renderer:{}", e.to_bits().get())
+}
+
 fn shape_volume(s: &Shape, scale: Vec3) -> f32 {
     match *s {
         Shape::Box(h) => 8.0 * h.x * h.y * h.z * scale.x * scale.y * scale.z,
@@ -443,6 +567,8 @@ fn shape_volume(s: &Shape, scale: Vec3) -> f32 {
             let (h, r) = (half_height * scale.y, radius * scale.x.max(scale.z));
             std::f32::consts::PI * r * r * (2.0 * h + 4.0 / 3.0 * r)
         }
+        // meshes: density × a nominal unit volume
+        Shape::Mesh { .. } => scale.x * scale.y * scale.z,
     }
 }
 
@@ -473,9 +599,16 @@ impl Plugin for PhysicsPlugin {
     fn build(&mut self, ctx: &mut Context) {
         ctx.resources.get_or_default::<Physics>();
         #[cfg(feature = "scene")]
-        goat_scene::registry(ctx).component(goat_scene::serde_codec::<RigidBody>("RigidBody")).component(goat_scene::serde_codec::<Collider>("Collider"));
+        goat_scene::registry(ctx)
+            .component(goat_scene::serde_codec::<RigidBody>("RigidBody"))
+            .component(goat_scene::serde_codec::<Collider>("Collider"))
+            .component(goat_scene::serde_codec::<Joint>("Joint"))
+            .component(goat_scene::serde_codec::<CharacterController>("CharacterController"));
+        #[cfg(feature = "script")]
+        script::register(goat_script::extensions(ctx));
     }
     fn fixed_update(&mut self, ctx: &mut Context) {
+        load_meshes(ctx);
         let dt = ctx.time.delta;
         if let Some(p) = ctx.resources.get_mut::<Physics>() {
             p.step(ctx.world, dt);
@@ -486,6 +619,54 @@ impl Plugin for PhysicsPlugin {
         if let Some(p) = ctx.resources.get_mut::<Physics>() {
             p.events.clear();
         }
+    }
+}
+
+/// Mesh collider triangles for colliders not simulated yet (read from the AssetServer once per
+/// source; sources without an AssetServer stay unresolved).
+fn load_meshes(ctx: &mut Context) {
+    let Some(phys) = ctx.resources.get::<Physics>() else { return };
+    let wanted: Vec<(String, String)> = ctx
+        .world
+        .query::<&Collider>()
+        .iter()
+        .filter(|(e, _)| !phys.tracked.contains_key(e))
+        .filter_map(|(e, c)| match &c.shape {
+            Shape::Mesh { source, .. } if source.is_empty() => Some((renderer_mesh_key(e), String::new())),
+            Shape::Mesh { source, .. } => Some((source.clone(), source.clone())),
+            _ => None,
+        })
+        .filter(|(k, _)| !phys.meshes.contains_key(k))
+        .collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let mut loaded = Vec::new();
+    {
+        let Some(assets) = ctx.resources.get::<goat_assets::AssetServer>() else { return };
+        for (key, source) in wanted {
+            // empty source: the entity's MeshRenderer mesh
+            let source = if source.is_empty() {
+                let bits: u64 = key.trim_start_matches("renderer:").parse().unwrap_or(0);
+                let mesh = Entity::from_bits(bits).and_then(|e| ctx.world.get::<&goat_runtime::MeshRenderer>(e).ok().map(|r| r.mesh));
+                match mesh.and_then(|m| assets.key_of_mesh(m)) {
+                    Some(k) => k.to_string(),
+                    None => {
+                        goat_core::warn!("mesh collider: no MeshRenderer mesh with an asset key");
+                        continue;
+                    }
+                }
+            } else {
+                source
+            };
+            match assets.mesh_geometry(&source) {
+                Ok((pts, tris)) => loaded.push((key, std::sync::Arc::new((pts.iter().map(|p| point![p.x, p.y, p.z]).collect(), tris)))),
+                Err(e) => goat_core::warn!("mesh collider {source}: {e}"),
+            }
+        }
+    }
+    if let Some(phys) = ctx.resources.get_mut::<Physics>() {
+        phys.meshes.extend(loaded);
     }
 }
 
@@ -541,5 +722,112 @@ mod tests {
         w.despawn(body).unwrap();
         p.step(&mut w, 1.0 / 60.0);
         assert_eq!(p.body_count(), 2);
+    }
+
+    fn steps(w: &mut World, p: &mut Physics, n: usize) {
+        for _ in 0..n {
+            p.step(w, 1.0 / 60.0);
+            p.events.clear();
+        }
+    }
+
+    #[test]
+    fn layers_filter_collisions_and_raycasts() {
+        let (mut w, mut p, _) = world_with_ground();
+        p.set_layer_collision(0, 3, false);
+        let ghost = w.spawn((Transform::from_position(Vec3::new(0.0, 2.0, 0.0)), GlobalTransform::default(), RigidBody::dynamic(), Collider::new(Shape::Sphere(0.5)).on_layer(3)));
+        let solid = w.spawn((Transform::from_position(Vec3::new(3.0, 2.0, 0.0)), GlobalTransform::default(), RigidBody::dynamic(), Collider::new(Shape::Sphere(0.5)).on_layer(1)));
+        steps(&mut w, &mut p, 120);
+        assert!(w.get::<&Transform>(ghost).unwrap().position.y < -2.0, "layer 3 passes through layer 0");
+        assert!((w.get::<&Transform>(solid).unwrap().position.y - 0.5).abs() < 0.05);
+        // a ray masked to layer 1 only ignores the ground
+        let hit = p.raycast_layers(Vec3::new(3.0, 10.0, 0.0), Vec3::NEG_Y, 100.0, 1 << 1).unwrap();
+        assert_eq!(hit.entity, solid);
+        assert!(p.raycast_layers(Vec3::new(-5.0, 10.0, 0.0), Vec3::NEG_Y, 100.0, 1 << 1).is_none());
+        assert_eq!(p.overlap_sphere(Vec3::new(3.0, 0.5, 0.0), 0.2, u32::MAX), vec![solid]);
+    }
+
+    #[test]
+    fn mesh_colliders_static_and_convex() {
+        let mut w = World::new();
+        let mut p = Physics::default();
+        let cube = goat_gfx_cube();
+        p.meshes.insert("builtin:cube".into(), std::sync::Arc::new(cube));
+        // a 10×1×10 static box made of triangles, and a convex hull falling on it
+        w.spawn((Transform::from_position(Vec3::new(0.0, -0.5, 0.0)).with_scale(Vec3::new(10.0, 1.0, 10.0)), GlobalTransform::default(), Collider::mesh("builtin:cube", false)));
+        let hull = w.spawn((Transform::from_position(Vec3::new(0.0, 3.0, 0.0)), GlobalTransform::default(), RigidBody::dynamic(), Collider::mesh("builtin:cube", true)));
+        steps(&mut w, &mut p, 180);
+        let y = w.get::<&Transform>(hull).unwrap().position.y;
+        assert!((y - 0.5).abs() < 0.05, "hull cube rests on the trimesh: {y}");
+    }
+
+    /// Triangles of a unit cube (what AssetServer::mesh_geometry gives for builtin:cube).
+    fn goat_gfx_cube() -> (Vec<Point<Real>>, Vec<[u32; 3]>) {
+        let mut pts = Vec::new();
+        for i in 0..8u32 {
+            pts.push(point![if i & 1 == 0 { -0.5 } else { 0.5 }, if i & 2 == 0 { -0.5 } else { 0.5 }, if i & 4 == 0 { -0.5 } else { 0.5 }]);
+        }
+        let tris = vec![[0, 2, 1], [1, 2, 3], [4, 5, 6], [5, 7, 6], [0, 1, 4], [1, 5, 4], [2, 6, 3], [3, 6, 7], [0, 4, 2], [2, 4, 6], [1, 3, 5], [3, 7, 5]];
+        (pts, tris)
+    }
+
+    #[test]
+    fn joints_hold_bodies() {
+        let mut w = World::new();
+        let mut p = Physics::default();
+        // a pendulum: hinge at the world origin, bob 2 m to the side
+        let bob = w.spawn((goat_runtime::Name("bob".into()), Transform::from_position(Vec3::new(2.0, 0.0, 0.0)), GlobalTransform::default(), RigidBody::dynamic(), Collider::new(Shape::Sphere(0.2)), Joint::hinge(Vec3::Z).at(Vec3::new(-2.0, 0.0, 0.0), Vec3::ZERO)));
+        // a rope: a ball hanging under a fixed anchor body, at most 1.5 m
+        w.spawn((goat_runtime::Name("anchor".into()), Transform::from_position(Vec3::new(10.0, 5.0, 0.0)), GlobalTransform::default(), Collider::new(Shape::Sphere(0.1))));
+        let hang = w.spawn((Transform::from_position(Vec3::new(10.0, 4.0, 0.0)), GlobalTransform::default(), RigidBody::dynamic(), Collider::new(Shape::Sphere(0.1)), Joint::new(JointKind::Rope { max_length: 1.5 }).to("anchor")));
+        let mut lowest: f32 = 0.0;
+        for _ in 0..120 {
+            p.step(&mut w, 1.0 / 60.0);
+            lowest = lowest.min(w.get::<&Transform>(bob).unwrap().position.y);
+        }
+        assert_eq!(p.joint_count(), 2);
+        let b = w.get::<&Transform>(bob).unwrap().position;
+        assert!((b.length() - 2.0).abs() < 0.05, "the bob stays 2 m from the hinge: {b}");
+        assert!(lowest < -1.9, "and swings down: {lowest}");
+        let h = w.get::<&Transform>(hang).unwrap().position;
+        assert!((Vec3::new(10.0, 5.0, 0.0) - h).length() < 1.55, "the rope holds: {h}");
+        // removing the component removes the joint
+        w.remove_one::<Joint>(bob).unwrap();
+        p.step(&mut w, 1.0 / 60.0);
+        assert_eq!(p.joint_count(), 1);
+    }
+
+    #[test]
+    fn character_controller_slides_climbs_and_lands() {
+        let (mut w, mut p, _) = world_with_ground();
+        // a wall at x = 3 and a 0.2 m step at z = 3
+        w.spawn((Transform::from_position(Vec3::new(3.5, 1.0, 0.0)).with_scale(Vec3::new(1.0, 2.0, 4.0)), GlobalTransform::default(), Collider::unit_box()));
+        w.spawn((Transform::from_position(Vec3::new(0.0, 0.1, 5.0)).with_scale(Vec3::new(4.0, 0.2, 4.0)), GlobalTransform::default(), Collider::unit_box()));
+        let hero = w.spawn((Transform::from_position(Vec3::new(0.0, 1.5, 0.0)), GlobalTransform::default(), CharacterController::default()));
+        p.step(&mut w, 1.0 / 60.0);
+        let dt = 1.0 / 60.0;
+        // fall onto the ground
+        for _ in 0..60 {
+            p.move_character(&mut w, hero, Vec3::new(0.0, -5.0 * dt, 0.0), dt);
+            p.step(&mut w, dt);
+        }
+        assert!(w.get::<&CharacterController>(hero).unwrap().is_grounded);
+        assert!((w.get::<&Transform>(hero).unwrap().position.y - 1.0).abs() < 0.05, "capsule (2 m) standing on y = 0");
+        // walk into the wall (+x) while also going +z: slides along it
+        for _ in 0..60 {
+            p.move_character(&mut w, hero, Vec3::new(4.0 * dt, -dt, 1.0 * dt), dt);
+            p.step(&mut w, dt);
+        }
+        let pos = w.get::<&Transform>(hero).unwrap().position;
+        assert!(pos.x < 2.55 && pos.x > 2.3, "stopped by the wall: {pos}");
+        assert!(pos.z > 0.9, "slid along it: {pos}");
+        assert!(w.get::<&CharacterController>(hero).unwrap().collision_flags.sides);
+        // walk onto the step
+        for _ in 0..120 {
+            p.move_character(&mut w, hero, Vec3::new(-2.0 * dt, -dt, 3.0 * dt), dt);
+            p.step(&mut w, dt);
+        }
+        let pos = w.get::<&Transform>(hero).unwrap().position;
+        assert!(pos.z > 4.0 && (pos.y - 1.2).abs() < 0.08, "climbed the 0.2 m step: {pos}");
     }
 }

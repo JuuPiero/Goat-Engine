@@ -1,1 +1,1 @@
-{ "texture": "../textures/logo.png", "specular": "#404040", "shininess": 16 }
+{ "texture": "../textures/logo.png", "specular": "#404040", "shininess": 16, "emissive": "#606060", "emissive_texture": "../textures/logo.png" }

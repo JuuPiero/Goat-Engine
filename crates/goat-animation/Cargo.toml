@@ -12,9 +12,12 @@ goat-runtime.workspace = true
 goat-assets.workspace = true
 hecs.workspace = true
 goat-scene = { workspace = true, optional = true }
+goat-script = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 
 [features]
 # Animator in scene / prefab files
 scene = ["dep:goat-scene"]
+# Animator calls for scripts (TS / C# / C): Animator.setTrigger...
+script = ["dep:goat-script"]

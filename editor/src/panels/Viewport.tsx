@@ -7,6 +7,8 @@ import { frameSelected } from '../selection';
 import { getEngine, saveScene, startEngine, startPlay, stopPlay } from '../engine';
 import { getState, log, setState, useStore } from '../store';
 
+type LogLevel = 'info' | 'warn' | 'error';
+
 export function Viewport() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
@@ -56,6 +58,9 @@ export function Viewport() {
               return;
             }
             if (++frames % 20 === 0) setStats(e.stats());
+            // engine log lines (script errors, warnings) → the Console
+            const lines = e.take_logs();
+            if (lines !== '[]') for (const [level, text] of JSON.parse(lines) as [LogLevel, string][]) log(text, level);
             if (!e.is_playing() && getState().playing) setState({ playing: false, viewTab: 'scene' });
           }
           last = now;

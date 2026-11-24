@@ -55,6 +55,15 @@ export class Quaternion {
 }
 
 const v3 = (a) => new Vector3(a[0], a[1], a[2]);
+/** Engine call results: {"$go": handle} → GameObject (deep). */
+function fromNative(v) {
+  if (Array.isArray(v)) return v.map(fromNative);
+  if (v && typeof v === 'object') {
+    if (typeof v.$go === 'number' && Object.keys(v).length === 1) return new GameObject(v.$go);
+    for (const k of Object.keys(v)) v[k] = fromNative(v[k]);
+  }
+  return v;
+}
 const handle = (go) => (go == null ? -1 : typeof go === 'number' ? go : go._h);
 
 export class Transform {
@@ -78,6 +87,26 @@ export class Transform {
   /** Rotates by Euler degrees in local space (Unity's Rotate). */
   rotate(x, y, z) { if (typeof x === 'object') ({ x, y, z } = x); N.rotate(this._h, x, y, z); }
   lookAt(target) { const t = target instanceof Transform ? target.worldPosition : target; N.lookAt(this._h, t.x, t.y, t.z); }
+
+  // DOTween shortcuts (crates/goat-tween)
+  doMove(to, duration) { return tweenOf('Tween.to', this._h, ['position', arr(to), duration]); }
+  doLocalMove(to, duration) { return this.doMove(to, duration); }
+  doMoveX(x, duration) { const p = this.position; p.x = x; return this.doMove(p, duration); }
+  doMoveY(y, duration) { const p = this.position; p.y = y; return this.doMove(p, duration); }
+  doMoveZ(z, duration) { const p = this.position; p.z = z; return this.doMove(p, duration); }
+  doScale(to, duration) { return tweenOf('Tween.to', this._h, ['scale', typeof to === 'number' ? [to, to, to] : arr(to), duration]); }
+  doRotate(euler, duration) { return tweenOf('Tween.to', this._h, ['euler', arr(euler), duration]); }
+  doLocalRotate(euler, duration) { return this.doRotate(euler, duration); }
+  doRotateQuaternion(q, duration) { return tweenOf('Tween.to', this._h, ['rotation', [q.x, q.y, q.z, q.w], duration]); }
+  doPunchPosition(punch, duration, vibrato = 10, elasticity = 1) { return tweenOf('Tween.punch', this._h, ['position', arr(punch), duration, vibrato, elasticity]); }
+  doPunchScale(punch, duration, vibrato = 10, elasticity = 1) { return tweenOf('Tween.punch', this._h, ['scale', arr(punch), duration, vibrato, elasticity]); }
+  doPunchRotation(punch, duration, vibrato = 10, elasticity = 1) { return tweenOf('Tween.punch', this._h, ['euler', arr(punch), duration, vibrato, elasticity]); }
+  doShakePosition(duration, strength = 1, vibrato = 10, randomness = 90) { return tweenOf('Tween.shake', this._h, ['position', duration, arr(strength), vibrato, randomness]); }
+  doShakeScale(duration, strength = 1, vibrato = 10, randomness = 90) { return tweenOf('Tween.shake', this._h, ['scale', duration, arr(strength), vibrato, randomness]); }
+  doShakeRotation(duration, strength = 90, vibrato = 10, randomness = 90) { return tweenOf('Tween.shake', this._h, ['euler', duration, arr(strength), vibrato, randomness]); }
+  doPath(points, duration, pathType, closed = false) { return tweenOf('Tween.path', this._h, [points.map(arr), duration, closed]); }
+  /** Kills this object's tweens (returns 0, like DOTween's count is not tracked). */
+  doKill(complete = false) { N.call('Tween.killTarget', this._h, [complete]); return 0; }
 }
 
 export class GameObject {
@@ -100,9 +129,12 @@ export class GameObject {
   removeComponent(name) { N.removeComponent(this._h, name); }
   /** Changes some fields of a component: go.patchComponent("Rigidbody2D", { velocity: [0, 5] }). */
   patchComponent(name, fields) { const c = this.getComponent(name); if (c) this.setComponent(name, Object.assign(c, fields)); }
-  /** An engine call added by a subsystem / the game (e.g. "Animator.setTrigger"). */
-  call(name, ...args) { return N.call(name, this._h, args); }
+  /** An engine call added by a subsystem / the game (e.g. "Animator.setTrigger"). GameObjects
+   *  can be passed and come back as GameObjects. */
+  call(name, ...args) { return fromNative(N.call(name, this._h, args)); }
   equals(o) { return o != null && o._h === this._h; }
+  /** Plays the object's TweenAnimation(s) (DOTweenAnimation.DOPlay); with an id, only those. */
+  doPlay(id) { N.call('Tween.playAnimation', this._h, id == null ? [] : [id]); }
 }
 
 /** Base class of script components (Unity's MonoBehaviour). */
@@ -112,6 +144,11 @@ export class Behaviour {
   get name() { return N.name(this._h); }
   getComponent(name) { return N.getComponent(this._h, name); }
   setComponent(name, value) { N.setComponent(this._h, name, value ?? {}); }
+  /** Unity's StartCoroutine: a generator (`*blink() { yield new WaitForSeconds(1); }`), runs to its
+   *  first `yield` now, then once per frame after Update. Stops when the object is destroyed. */
+  startCoroutine(routine) { return startCoroutine(this._h, typeof routine === 'function' ? routine.call(this) : routine); }
+  stopCoroutine(co) { if (co) co.stopped = true; }
+  stopAllCoroutines() { for (const c of coroutines) if (c.owner === this._h) c.stopped = true; }
 }
 export { Behaviour as MonoBehaviour };
 
@@ -119,7 +156,353 @@ export const Time = {
   get deltaTime() { return N.dt(); },
   get time() { return N.time(); },
   get fixedDeltaTime() { return N.fixedDt(); },
+  get unscaledDeltaTime() { return N.unscaledDt(); },
+  get unscaledTime() { return N.unscaledTime(); },
+  get frameCount() { return N.frameCount(); },
+  /** 0 = paused, 0.5 = slow motion (applies from the next frame). */
+  get timeScale() { return N.timeScale(); },
+  set timeScale(s) { N.setTimeScale(s); },
 };
+
+// ------------------------------------------------------------------ coroutines
+
+export class WaitForSeconds { constructor(seconds) { this.seconds = seconds; } }
+export class WaitForSecondsRealtime { constructor(seconds) { this.seconds = seconds; } }
+export class WaitUntil { constructor(predicate) { this.predicate = predicate; } }
+export class WaitWhile { constructor(predicate) { this.predicate = predicate; } }
+export class WaitForEndOfFrame {}
+export class WaitForFixedUpdate {}
+
+/** A running coroutine (StartCoroutine's result; `yield` it to wait for it). */
+export class Coroutine {
+  constructor(owner, it) { this.owner = owner; this.it = it; this.wait = null; this.done = false; this.stopped = false; }
+}
+const coroutines = [];
+
+function startCoroutine(owner, it) {
+  if (!it || typeof it.next !== 'function') throw new Error('startCoroutine: expected a generator (function*)');
+  const co = new Coroutine(owner, it);
+  coroutines.push(co);
+  stepCoroutine(co);
+  return co;
+}
+
+/** Runs the coroutine to its next yield and records what it waits for. */
+function stepCoroutine(co) {
+  for (let guard = 0; guard < 1000; guard++) {
+    const r = co.it.next();
+    if (r.done) { co.done = true; return; }
+    const y = r.value;
+    if (y instanceof WaitForSeconds) { if (y.seconds <= 0) continue; co.wait = { seconds: y.seconds }; }
+    else if (y instanceof WaitForSecondsRealtime) co.wait = { real: y.seconds };
+    else if (y instanceof WaitUntil) { if (y.predicate()) continue; co.wait = { until: y.predicate }; }
+    else if (y instanceof WaitWhile) { if (!y.predicate()) continue; co.wait = { until: () => !y.predicate() }; }
+    else if (y instanceof Coroutine) co.wait = { until: () => y.done || y.stopped };
+    else if (y && typeof y.next === 'function') { const sub = startCoroutine(co.owner, y); co.wait = { until: () => sub.done || sub.stopped }; }
+    else if (y && typeof y.then === 'function') { let settled = false; y.then(() => { settled = true; }, () => { settled = true; }); co.wait = { until: () => settled }; }
+    else if (y instanceof Tween) co.wait = { until: () => !y.isActive() };
+    else co.wait = null; // null / anything else: next frame
+    return;
+  }
+}
+
+function tickCoroutines() {
+  const dt = N.dt(), real = N.unscaledDt();
+  for (let i = 0; i < coroutines.length; i++) {
+    const co = coroutines[i];
+    if (co.done || co.stopped || (co.owner >= 0 && !N.exists(co.owner))) { co.stopped = co.stopped || !co.done; coroutines.splice(i--, 1); continue; }
+    const w = co.wait;
+    let ready = true;
+    if (w && w.seconds !== undefined) ready = (w.seconds -= dt) <= 0;
+    else if (w && w.real !== undefined) ready = (w.real -= real) <= 0;
+    else if (w && w.until) ready = !!w.until();
+    if (!ready) continue;
+    try { stepCoroutine(co); } catch (e) { co.done = true; Debug.error(`coroutine: ${e && e.stack ? e.stack : e}`); }
+  }
+}
+
+// ------------------------------------------------------------------ Awaitable (Unity 2023)
+
+const waiters = [];
+export const Awaitable = {
+  nextFrameAsync() { return new Promise((resolve) => waiters.push({ frames: 1, resolve })); },
+  waitForSecondsAsync(seconds) { return new Promise((resolve) => waiters.push({ seconds, resolve })); },
+  endOfFrameAsync() { return Awaitable.nextFrameAsync(); },
+  fixedUpdateAsync() { return Awaitable.nextFrameAsync(); },
+};
+
+function tickAwaiters() {
+  const dt = N.dt();
+  for (let i = 0; i < waiters.length; i++) {
+    const w = waiters[i];
+    const ready = w.seconds !== undefined ? (w.seconds -= dt) <= 0 : --w.frames <= 0;
+    if (ready) { waiters.splice(i--, 1); w.resolve(); }
+  }
+}
+
+// ------------------------------------------------------------------ tweens (DOTween)
+
+export const Ease = Object.freeze(Object.fromEntries(['Linear', 'InSine', 'OutSine', 'InOutSine', 'InQuad', 'OutQuad', 'InOutQuad', 'InCubic', 'OutCubic', 'InOutCubic', 'InQuart', 'OutQuart', 'InOutQuart', 'InQuint', 'OutQuint', 'InOutQuint', 'InExpo', 'OutExpo', 'InOutExpo', 'InCirc', 'OutCirc', 'InOutCirc', 'InElastic', 'OutElastic', 'InOutElastic', 'InBack', 'OutBack', 'InOutBack', 'InBounce', 'OutBounce', 'InOutBounce'].map((e) => [e, e])));
+export const LoopType = Object.freeze({ Restart: 'Restart', Yoyo: 'Yoyo', Incremental: 'Incremental' });
+export const PathType = Object.freeze({ CatmullRom: 'CatmullRom', Linear: 'Linear' });
+
+const arr = (v) => (typeof v === 'number' ? [v, v, v] : v instanceof Quaternion ? [v.x, v.y, v.z, v.w] : Array.isArray(v) ? v : 'z' in v ? [v.x, v.y, v.z] : [v.x, v.y]);
+const callbacks = new Map();
+let nextCallback = 1;
+const updaters = []; // { tween, fn } (onUpdate, DOTween.to setters)
+
+/** A running tween: chain settings like DOTween (`.setEase(Ease.OutBack).setLoops(-1, LoopType.Yoyo)`). */
+export class Tween {
+  constructor(id) { this.id = id; }
+  _set(o) { N.call('Tween.set', -1, [this.id, o]); return this; }
+  _on(kind, fn) { const k = nextCallback++; callbacks.set(k, fn); N.call('Tween.on', -1, [this.id, kind, k]); return this; }
+  setEase(ease) { return this._set({ ease: String(ease) }); }
+  setLoops(loops, loopType = 'Restart') { return this._set({ loops, loopType: String(loopType) }); }
+  setDelay(delay) { return this._set({ delay }); }
+  setRelative(relative = true) { return this._set({ relative }); }
+  /** Animates from the given value (or from the end value) to the current one. */
+  from(value) { return this._set({ from: value === undefined ? true : arr(value) }); }
+  setId(id) { return this._set({ id: String(id) }); }
+  setAutoKill(autoKill) { return this._set({ autoKill }); }
+  setUpdate(ignoreTimeScale) { return this._set({ unscaled: !!ignoreTimeScale }); }
+  setSpeed(speed) { return this._set({ speed }); }
+  setLookAt() { return this._set({ lookAhead: true }); }
+  onStart(fn) { return this._on('start', fn); }
+  onStepComplete(fn) { return this._on('stepComplete', fn); }
+  onComplete(fn) { return this._on('complete', fn); }
+  onKill(fn) { return this._on('kill', fn); }
+  onUpdate(fn) { updaters.push({ tween: this, fn }); return this; }
+  kill(complete = false) { N.call('Tween.kill', -1, [this.id, complete]); }
+  pause() { N.call('Tween.pause', -1, [this.id]); return this; }
+  play() { N.call('Tween.play', -1, [this.id]); return this; }
+  restart() { N.call('Tween.restart', -1, [this.id]); return this; }
+  togglePause() { N.call('Tween.togglePause', -1, [this.id]); return this; }
+  isActive() { return N.call('Tween.isActive', -1, [this.id]); }
+  isPlaying() { return N.call('Tween.isPlaying', -1, [this.id]); }
+  duration() { const i = N.call('Tween.info', -1, [this.id]); return i ? i.duration : 0; }
+  elapsed() { const i = N.call('Tween.info', -1, [this.id]); return i ? i.elapsed : 0; }
+  /** `yield tween.waitForCompletion()` in a coroutine. */
+  waitForCompletion() { return new WaitUntil(() => !this.isActive()); }
+  /** `await tween.asyncWaitForCompletion()`. */
+  asyncWaitForCompletion() { return new Promise((resolve) => this.onKill(resolve)); }
+}
+
+/** DOTween.sequence(): tweens one after another / together, intervals, callbacks. */
+export class Sequence extends Tween {
+  append(t) { N.call('Tween.seqAdd', -1, [this.id, t.id, 'append']); return this; }
+  join(t) { N.call('Tween.seqAdd', -1, [this.id, t.id, 'join']); return this; }
+  insert(at, t) { N.call('Tween.seqAdd', -1, [this.id, t.id, at]); return this; }
+  appendInterval(seconds) { N.call('Tween.seqInterval', -1, [this.id, seconds]); return this; }
+  appendCallback(fn) { const k = nextCallback++; callbacks.set(k, fn); N.call('Tween.seqCallback', -1, [this.id, k]); return this; }
+  insertCallback(at, fn) { const k = nextCallback++; callbacks.set(k, fn); N.call('Tween.seqCallback', -1, [this.id, k, at]); return this; }
+}
+
+function tweenOf(call, h, args) { return new Tween(N.call(call, h, args)); }
+
+export const DOTween = {
+  sequence() { return new Sequence(N.call('Tween.sequence', -1, [])); },
+  /** DOTween.to(() => x, (v) => x = v, end, duration): numbers, Vector2 or Vector3. */
+  to(getter, setter, endValue, duration) {
+    const start = getter();
+    const kind = typeof start === 'number' ? 1 : start instanceof Vector3 ? 3 : 2;
+    const t = new Tween(N.call('Tween.value', -1, [arr(start), arr(endValue), duration]));
+    const make = (v) => (kind === 1 ? v[0] : kind === 3 ? new Vector3(v[0], v[1], v[2]) : new Vector2(v[0], v[1]));
+    updaters.push({ tween: t, fn: null, set: (v) => setter(make(v)), end: arr(endValue) });
+    return t;
+  },
+  /** Kills the tweens of a GameObject / Transform, or with an id. */
+  kill(targetOrId, complete = false) {
+    if (targetOrId && targetOrId._h !== undefined) N.call('Tween.killTarget', targetOrId._h, [complete]);
+    else N.call('Tween.killTag', -1, [String(targetOrId), complete]);
+    return 0;
+  },
+  killAll() { N.call('Tween.killAll', -1, []); return 0; },
+  get timeScale() { return N.call('Tween.timeScale', -1, []); },
+  set timeScale(s) { N.call('Tween.timeScale', -1, [s]); },
+};
+
+function tickTweens() {
+  if (callbacks.size > 0) {
+    for (const k of N.call('Tween.events', -1, [])) {
+      const f = callbacks.get(k);
+      if (f) { try { f(); } catch (e) { Debug.error(`tween callback: ${e && e.stack ? e.stack : e}`); } }
+    }
+  }
+  for (let i = 0; i < updaters.length; i++) {
+    const u = updaters[i];
+    const v = N.call('Tween.get', -1, [u.tween.id]);
+    const alive = u.tween.isActive();
+    if (u.set) { if (v) u.set(v); else if (!alive) u.set(u.end); }
+    if (u.fn && v) u.fn();
+    if (!alive) updaters.splice(i--, 1);
+  }
+}
+
+// ------------------------------------------------------------------ physics (crates/goat-physics, goat-physics2d)
+
+const call = (name, go, args) => fromNative(N.call(name, go == null ? -1 : handle(go), args));
+const hit3 = (h) => h && { gameObject: h.gameObject, point: v3(h.point), normal: v3(h.normal), distance: h.distance };
+const hit2 = (h) => h && { gameObject: h.gameObject, point: new Vector2(h.point[0], h.point[1]), normal: new Vector2(h.normal[0], h.normal[1]), distance: h.distance };
+const a2 = (v) => (Array.isArray(v) ? v : [v.x, v.y]);
+
+/** 3D physics. layerMask: bits of layers (-1 = all), like Unity. */
+export const Physics = {
+  /** { gameObject, point, normal, distance } or null. */
+  raycast(origin, direction, maxDistance = 1e6, layerMask = -1) { return hit3(call('Physics.raycast', null, [arr(origin), arr(direction), maxDistance, layerMask])); },
+  overlapSphere(center, radius, layerMask = -1) { return call('Physics.overlapSphere', null, [arr(center), radius, layerMask]); },
+  /** This frame's collisions of an object: [{ other, kind: "enter" | "exit" | "triggerEnter" | "triggerExit" }]. */
+  collisions(go) { return call('Physics.collisions', go, []); },
+  ignoreLayerCollision(a, b, ignore = true) { call('Physics.setLayerCollision', null, [a, b, !ignore]); },
+  get gravity() { return v3(call('Physics.gravity', null, [])); },
+  set gravity(g) { call('Physics.gravity', null, [arr(g)]); },
+  addForce(go, force) { call('Rigidbody.addForce', go, [arr(force)]); },
+  addImpulse(go, impulse) { call('Rigidbody.addImpulse', go, [arr(impulse)]); },
+  /** CharacterController.Move: { isGrounded, collisionFlags: { below, sides, above }, velocity }. */
+  moveCharacter(go, motion) {
+    const r = call('CharacterController.move', go, [arr(motion)]);
+    return { isGrounded: r.grounded, collisionFlags: { below: r.below, sides: r.sides, above: r.above }, velocity: v3(r.velocity) };
+  },
+  isGrounded(go) { return call('CharacterController.isGrounded', go, []); },
+};
+
+/** 2D physics (XY plane). */
+export const Physics2D = {
+  raycast(origin, direction, distance = 1e6, layerMask = -1) { return hit2(call('Physics2D.raycast', null, [a2(origin), a2(direction), distance, layerMask])); },
+  overlapPoint(point) { return call('Physics2D.overlapPoint', null, [a2(point)]); },
+  overlapCircleAll(center, radius, layerMask = -1) { return call('Physics2D.overlapCircle', null, [a2(center), radius, layerMask]); },
+  collisions(go) { return call('Physics2D.collisions', go, []); },
+  ignoreLayerCollision(a, b, ignore = true) { call('Physics2D.setLayerCollision', null, [a, b, !ignore]); },
+  get gravity() { const g = call('Physics2D.gravity', null, []); return new Vector2(g[0], g[1]); },
+  set gravity(g) { call('Physics2D.gravity', null, [a2(g)]); },
+  addForce(go, force) { call('Rigidbody2D.addForce', go, [a2(force)]); },
+  addImpulse(go, impulse) { call('Rigidbody2D.addImpulse', go, [a2(impulse)]); },
+};
+
+// ------------------------------------------------------------------ animation (crates/goat-animation, goat-sprites)
+
+const animListeners = [];
+
+/** The Animator of an object: Animator.of(go).setTrigger("jump"). */
+export class Animator {
+  constructor(go) { this._h = handle(go); }
+  static of(go) { return new Animator(go); }
+  _c(name, args = []) { return N.call(`Animator.${name}`, this._h, args); }
+  setFloat(name, v) { this._c('setFloat', [name, v]); }
+  setInteger(name, v) { this._c('setInteger', [name, v]); }
+  setBool(name, v) { this._c('setBool', [name, !!v]); }
+  setTrigger(name) { this._c('setTrigger', [name]); }
+  resetTrigger(name) { this._c('resetTrigger', [name]); }
+  getFloat(name) { return this._c('getFloat', [name]); }
+  getBool(name) { return this._c('getBool', [name]); }
+  play(state) { this._c('play', [state]); }
+  crossFade(state, seconds) { this._c('crossFade', [state, seconds]); }
+  currentState(layer = 0) { return this._c('currentState', [layer]); }
+  normalizedTime(layer = 0) { return this._c('normalizedTime', [layer]); }
+  set speed(s) { this._c('setSpeed', [s]); }
+  /** Animation events crossed this frame: [{ name, parameter, clip }]. */
+  get events() { return this._c('events'); }
+  /** Calls fn(event) for every animation event of this object (Unity calls a method by name). */
+  onEvent(fn) { animListeners.push({ h: this._h, fn }); return this; }
+}
+
+/** Flipbook animation of a SpriteRenderer: SpriteAnimator.of(go).play("run"). */
+export class SpriteAnimator {
+  constructor(go) { this._h = handle(go); }
+  static of(go) { return new SpriteAnimator(go); }
+  play(clip) { N.call('SpriteAnimator.play', this._h, [clip]); }
+  restart(clip) { N.call('SpriteAnimator.restart', this._h, [clip]); }
+  get current() { return N.call('SpriteAnimator.current', this._h, []); }
+  get finished() { return N.call('SpriteAnimator.finished', this._h, []); }
+  set speed(s) { N.call('SpriteAnimator.setSpeed', this._h, [s]); }
+  set paused(p) { N.call('SpriteAnimator.setPaused', this._h, [!!p]); }
+}
+
+function tickAnimation() {
+  for (let i = 0; i < animListeners.length; i++) {
+    const l = animListeners[i];
+    if (!N.exists(l.h)) { animListeners.splice(i--, 1); continue; }
+    for (const ev of N.call('Animator.events', l.h, [])) {
+      try { l.fn(ev); } catch (e) { Debug.error(`animation event: ${e && e.stack ? e.stack : e}`); }
+    }
+  }
+}
+
+// ------------------------------------------------------------------ audio (crates/goat-audio)
+
+export const Audio = {
+  /** A clip once (2D), optionally through a mixer group ("SFX"). */
+  playOneShot(clip, volume = 1, group = '') { N.call('Audio.playOneShot', -1, [clip, volume, group]); },
+  /** AudioSource.PlayClipAtPoint */
+  playClipAtPoint(clip, position, volume = 1) { N.call('Audio.playAt', -1, [clip, arr(position), volume]); },
+  set masterVolume(v) { N.call('Audio.masterVolume', -1, [v]); },
+};
+
+/** The AudioSource on an object: AudioSource.of(go).play(). */
+export class AudioSource {
+  constructor(go) { this._h = handle(go); }
+  static of(go) { return new AudioSource(go); }
+  play() { N.call('AudioSource.play', this._h, []); }
+  stop() { N.call('AudioSource.stop', this._h, []); }
+  pause() { N.call('AudioSource.pause', this._h, []); }
+  unPause() { N.call('AudioSource.unpause', this._h, []); }
+  get isPlaying() { return N.call('AudioSource.isPlaying', this._h, []); }
+  get time() { return N.call('AudioSource.time', this._h, []); }
+}
+
+/** Mixer groups (audio/mixer.json): AudioMixer.set("Music", { volume: 0.5, lowpass: 800 }). */
+export const AudioMixer = {
+  set(group, settings) { N.call('AudioMixer.set', -1, [group, settings]); },
+  get(group) { return N.call('AudioMixer.get', -1, [group]); },
+  /** Unity's SetFloat("MusicVolume", dB). */
+  setVolumeDb(group, db) { N.call('AudioMixer.set', -1, [group, { volumeDb: db }]); },
+};
+
+// ------------------------------------------------------------------ UI events (crates/goat-ui)
+
+const uiListeners = [];
+const ui = (name, go, args = []) => N.call(`UI.${name}`, handle(go), args);
+export const UI = {
+  /** Clicked this frame (pointer or A on the selection). */
+  clicked(go) { return ui('clicked', go); },
+  /** Toggle / Slider / InputField / Dropdown value changed this frame. */
+  changed(go) { return ui('changed', go); },
+  /** InputField: Enter / OK / left the field this frame. */
+  submitted(go) { return ui('submitted', go); },
+  /** Toggle isOn, Slider value, InputField text, Dropdown index, ScrollRect [x, y], Text text. */
+  value(go) { return ui('value', go); },
+  setValue(go, v) { ui('setValue', go, [v instanceof Vector2 ? [v.x, v.y] : v]); },
+  setText(go, text) { ui('setText', go, [String(text)]); },
+  setOptions(go, options) { ui('setOptions', go, [options]); },
+  setInteractable(go, on) { ui('setInteractable', go, [!!on]); },
+  /** Gives the D-pad selection to this element (EventSystem.SetSelectedGameObject). */
+  select(go) { ui('select', go); },
+  isSelected(go) { return ui('isSelected', go); },
+  /** button.onClick.AddListener */
+  onClick(go, fn) { uiListeners.push({ h: handle(go), kind: 'clicked', fn }); },
+  /** onValueChanged: fn(newValue) */
+  onValueChanged(go, fn) { uiListeners.push({ h: handle(go), kind: 'changed', fn, value: true }); },
+  /** InputField onSubmit / onEndEdit: fn(text) */
+  onSubmit(go, fn) { uiListeners.push({ h: handle(go), kind: 'submitted', fn, value: true }); },
+};
+
+function tickUi() {
+  for (let i = 0; i < uiListeners.length; i++) {
+    const l = uiListeners[i];
+    if (!N.exists(l.h)) { uiListeners.splice(i--, 1); continue; }
+    if (N.call(`UI.${l.kind}`, l.h, [])) {
+      try { l.fn(l.value ? N.call('UI.value', l.h, []) : undefined); } catch (e) { Debug.error(`UI listener: ${e && e.stack ? e.stack : e}`); }
+    }
+  }
+}
+
+/** Host: once per frame after every Update (crates/goat-script-js JsHost::tick). */
+export function __tick() {
+  if (uiListeners.length) tickUi();
+  if (animListeners.length) tickAnimation();
+  if (coroutines.length) tickCoroutines();
+  if (waiters.length) tickAwaiters();
+  if (callbacks.size || updaters.length) tickTweens();
+}
 
 export class InputAction {
   constructor(name) { this.name = name; }
@@ -150,6 +533,29 @@ export const Debug = {
 globalThis.console = { log: Debug.log, info: Debug.log, warn: Debug.warn, error: Debug.error, debug: Debug.log };
 
 export const Application = { quit() { N.quit(); } };
+
+/** Unity's PlayerPrefs (crates/goat-save): written automatically, `save()` forces it. */
+export const PlayerPrefs = {
+  getInt(key, def = 0) { return N.call('PlayerPrefs.getInt', -1, [key, def]); },
+  getFloat(key, def = 0) { return N.call('PlayerPrefs.getFloat', -1, [key, def]); },
+  getString(key, def = '') { return N.call('PlayerPrefs.getString', -1, [key, def]); },
+  setInt(key, v) { N.call('PlayerPrefs.setInt', -1, [key, Math.trunc(v)]); },
+  setFloat(key, v) { N.call('PlayerPrefs.setFloat', -1, [key, v]); },
+  setString(key, v) { N.call('PlayerPrefs.setString', -1, [key, String(v)]); },
+  hasKey(key) { return N.call('PlayerPrefs.hasKey', -1, [key]); },
+  deleteKey(key) { N.call('PlayerPrefs.deleteKey', -1, [key]); },
+  deleteAll() { N.call('PlayerPrefs.deleteAll', -1, []); },
+  save() { N.call('PlayerPrefs.save', -1, []); },
+};
+
+/** Save slots: any JSON value per slot (SD card on the 3DS, user data folder on desktop). */
+export const SaveData = {
+  write(slot, value) { N.call('Save.write', -1, [slot, value]); },
+  read(slot) { return N.call('Save.read', -1, [slot]); },
+  delete(slot) { N.call('Save.delete', -1, [slot]); },
+  exists(slot) { return N.call('Save.exists', -1, [slot]); },
+  slots() { return N.call('Save.slots', -1, []); },
+};
 export const Mathf = {
   PI: Math.PI, Deg2Rad: Math.PI / 180, Rad2Deg: 180 / Math.PI,
   clamp: (v, a, b) => Math.min(b, Math.max(a, v)),

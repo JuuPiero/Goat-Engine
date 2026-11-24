@@ -12,8 +12,10 @@ path = "src/main.rs"
 
 [dependencies]
 goat-platform-3ds.workspace = true
-hello-game.workspace = true
+# no TypeScript compiler on the console: `goat build 3ds` ships the compiled JavaScript
+hello-game = { path = "../../games/hello", default-features = false }
 
-# assets packed into the .3dsx (read at run time from romfs:/)
+# assets packed into the .3dsx (read at run time from romfs:/): staged by `goat build 3ds`
+# (games/hello/assets with the scripts compiled to JavaScript)
 [package.metadata.cargo-3ds]
-romfs_dir = "../../games/hello/assets"
+romfs_dir = "../../target/3ds-romfs"

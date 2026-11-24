@@ -13,10 +13,12 @@
 //! ([`material`]), texture import settings `<texture>.import.json`.
 
 pub mod image;
+pub mod batch;
 pub mod material;
 pub mod model;
 pub mod server;
 
+pub use batch::StaticBatchPlugin;
 pub use material::MaterialFile;
 pub use model::{AnimChannel, AnimPath, Interpolation, ModelAnimation, ModelData, ModelNode, ModelSkin, SkinVertices};
 pub use server::{material, mesh, spawn_model, texture, AssetServer, AssetsPlugin, LoadedModel, ModelInstance, ModelNodes, SkinnedMesh};

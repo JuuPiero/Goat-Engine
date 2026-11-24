@@ -2211,6 +2211,9 @@ dependencies = [
 [[package]]
 name = "goat"
 version = "0.1.0"
+dependencies = [
+ "goat-script-js",
+]
 
 [[package]]
 name = "goat-animation"
@@ -2221,6 +2224,7 @@ dependencies = [
  "goat-gfx",
  "goat-runtime",
  "goat-scene",
+ "goat-script",
  "hecs",
  "serde",
  "serde_json",
@@ -2250,8 +2254,10 @@ dependencies = [
  "goat-core",
  "goat-runtime",
  "goat-scene",
+ "goat-script",
  "lewton",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2282,6 +2288,7 @@ name = "goat-editor-engine"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "goat-animation",
  "goat-assets",
  "goat-core",
  "goat-gfx",
@@ -2348,6 +2355,7 @@ dependencies = [
  "goat-assets",
  "goat-core",
  "goat-gfx",
+ "goat-physics",
  "goat-runtime",
  "goat-scene",
  "goat-sprites",
@@ -2359,12 +2367,15 @@ dependencies = [
 name = "goat-physics"
 version = "0.1.0"
 dependencies = [
+ "goat-assets",
  "goat-core",
  "goat-runtime",
  "goat-scene",
+ "goat-script",
  "hecs",
  "rapier3d",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2374,9 +2385,11 @@ dependencies = [
  "goat-core",
  "goat-runtime",
  "goat-scene",
+ "goat-script",
  "hecs",
  "rapier2d",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2428,6 +2441,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "goat-save"
+version = "0.1.0"
+dependencies = [
+ "goat-core",
+ "goat-runtime",
+ "goat-script",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "goat-scene"
 version = "0.1.0"
 dependencies = [
@@ -2463,15 +2487,31 @@ dependencies = [
  "goat-assets",
  "goat-core",
  "goat-gfx",
+ "goat-physics",
  "goat-runtime",
  "goat-scene",
  "goat-script",
+ "goat-tween",
  "oxc_allocator",
  "oxc_codegen",
  "oxc_parser",
  "oxc_semantic",
  "oxc_span",
  "oxc_transformer",
+ "serde_json",
+]
+
+[[package]]
+name = "goat-script-native"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "goat-assets",
+ "goat-core",
+ "goat-gfx",
+ "goat-runtime",
+ "goat-scene",
+ "goat-script",
  "serde_json",
 ]
 
@@ -2484,6 +2524,7 @@ dependencies = [
  "goat-gfx",
  "goat-runtime",
  "goat-scene",
+ "goat-script",
  "hecs",
  "serde",
  "serde_json",
@@ -2505,6 +2546,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "goat-tween"
+version = "0.1.0"
+dependencies = [
+ "goat-core",
+ "goat-gfx",
+ "goat-runtime",
+ "goat-scene",
+ "goat-script",
+ "hecs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "goat-ui"
 version = "0.1.0"
 dependencies = [
@@ -2513,10 +2568,12 @@ dependencies = [
  "goat-gfx",
  "goat-runtime",
  "goat-scene",
+ "goat-script",
  "goat-sprites",
  "goat-text",
  "hecs",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2746,9 +2803,14 @@ dependencies = [
  "goat-physics",
  "goat-physics2d",
  "goat-runtime",
+ "goat-save",
  "goat-scene",
+ "goat-script",
+ "goat-script-js",
+ "goat-script-native",
  "goat-sprites",
  "goat-text",
+ "goat-tween",
  "goat-ui",
  "serde",
 ]

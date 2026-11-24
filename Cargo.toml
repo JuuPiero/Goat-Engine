@@ -17,10 +17,13 @@ members = [
     "crates/goat-input",
     "crates/goat-script",
     "crates/goat-script-js",
+    "crates/goat-script-native",
     "crates/goat-audio",
     "crates/goat-animation",
     "crates/goat-particles",
     "crates/goat-ui",
+    "crates/goat-tween",
+    "crates/goat-save",
     "crates/goat-platform-desktop",
     "crates/goat-platform-3ds",
     "games/hello",
@@ -46,10 +49,13 @@ default-members = [
     "crates/goat-input",
     "crates/goat-script",
     "crates/goat-script-js",
+    "crates/goat-script-native",
     "crates/goat-audio",
     "crates/goat-animation",
     "crates/goat-particles",
     "crates/goat-ui",
+    "crates/goat-tween",
+    "crates/goat-save",
     "crates/goat-gfx-citro3d", # host build = only the portable parts (texture tiling + its test)
     "crates/goat-platform-desktop",
     "games/hello",
@@ -79,10 +85,14 @@ goat-physics = { path = "crates/goat-physics" }
 goat-physics2d = { path = "crates/goat-physics2d" }
 goat-input = { path = "crates/goat-input" }
 goat-script = { path = "crates/goat-script" }
+goat-script-js = { path = "crates/goat-script-js", default-features = false }
+goat-script-native = { path = "crates/goat-script-native" }
 goat-audio = { path = "crates/goat-audio" }
 goat-animation = { path = "crates/goat-animation" }
 goat-particles = { path = "crates/goat-particles" }
 goat-ui = { path = "crates/goat-ui" }
+goat-tween = { path = "crates/goat-tween" }
+goat-save = { path = "crates/goat-save" }
 hello-game = { path = "games/hello" }
 
 glam = { version = "0.30", default-features = false, features = ["std", "serde"] }

@@ -1,6 +1,6 @@
 [package]
 name = "goat-audio"
-description = "GoatEngine audio: WAV / OGG clips, a software mixer (voices, volume, pitch, pan, loops, 3D attenuation), AudioSource / AudioListener components; output through cpal (desktop) or the 3DS DSP (ndsp)."
+description = "GoatEngine audio: WAV / OGG clips, a software mixer (voices, volume, pitch, pan, loops, 3D attenuation, mixer groups with low-pass, streamed Ogg), AudioSource / AudioListener components; output through cpal (desktop) or the 3DS DSP (ndsp)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,11 +11,15 @@ goat-runtime.workspace = true
 goat-assets.workspace = true
 lewton = "0.10"
 serde.workspace = true
+serde_json.workspace = true
 goat-scene = { workspace = true, optional = true }
+goat-script = { workspace = true, optional = true }
 
 [features]
 # AudioSource / AudioListener in scene files
 scene = ["dep:goat-scene"]
+# Audio.* / AudioSource.* / AudioMixer.* calls for scripts
+script = ["dep:goat-script"]
 
 [target.'cfg(not(any(target_os = "horizon", target_arch = "wasm32")))'.dependencies]
 cpal = "0.15"

@@ -1,6 +1,6 @@
 [package]
 name = "goat-ui"
-description = "GoatEngine UI (Unity UGUI-like): Canvas per display, RectTransform anchors / pivots, Image, Text, Button, Toggle, Slider; touch / mouse pointer input; drawn in one batched pass per canvas."
+description = "GoatEngine UI (Unity UGUI-like): Canvas per display, RectTransform anchors / pivots, Image (sliced / filled), Text, Button, Toggle, Slider, InputField, Dropdown, ScrollRect, layout groups, masks; touch / mouse / D-pad navigation; drawn in one batched pass per canvas."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,8 +14,12 @@ goat-sprites.workspace = true
 goat-text.workspace = true
 hecs.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 goat-scene = { workspace = true, optional = true }
+goat-script = { workspace = true, optional = true }
 
 [features]
 # UI components in scene / prefab files
 scene = ["dep:goat-scene"]
+# UI.* calls for scripts (clicks, values)
+script = ["dep:goat-script"]

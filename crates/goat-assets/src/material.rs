@@ -7,6 +7,8 @@
 //! ```
 //! Every field is optional. `texture` is relative to the material file (or a root key with a
 //! leading `/`). Colors are `#rrggbb` / `#rrggbbaa` (sRGB) or `[r, g, b, a]` floats.
+//! Also: `"emissive_texture"` (× emissive), `"env_map"` (a `.cubemap.json` or `builtin:sky`) +
+//! `"reflectivity"` 0..1.
 
 use goat_core::Color;
 use goat_gfx::{BlendMode, CullMode, LightingModel, MaterialDesc};
@@ -73,6 +75,12 @@ pub struct MaterialFile {
     pub depth_write: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fog: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emissive_texture: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_map: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reflectivity: Option<f32>,
 }
 
 impl MaterialFile {
@@ -91,6 +99,9 @@ impl MaterialFile {
             specular: self.specular.map(|c| c.0).unwrap_or(d.specular),
             shininess: self.shininess.unwrap_or(d.shininess),
             emissive: self.emissive.map(|c| c.0).unwrap_or(d.emissive),
+            emissive_texture: None,
+            env_map: None,
+            reflectivity: self.reflectivity.unwrap_or(0.0).clamp(0.0, 1.0),
             blend,
             cull: match self.cull.as_deref() {
                 Some("none") | Some("off") => CullMode::None,

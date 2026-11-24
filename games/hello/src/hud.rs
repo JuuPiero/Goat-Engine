@@ -133,16 +133,26 @@ pub const FONT: &str = "fonts/BeVietnamPro-Regular.ttf";
 struct FpsCounter {
     smoothed: f32,
     shown_at: f32,
+    logged_at: f32,
 }
 
 impl Behaviour for FpsCounter {
     fn update(&mut self, ctx: &mut Context, me: Entity) {
         let dt = ctx.time.delta.max(1e-4);
         self.smoothed = self.smoothed * 0.95 + (1.0 / dt) * 0.05;
+        if ctx.time.elapsed - self.logged_at > 5.0 {
+            self.logged_at = ctx.time.elapsed;
+            if let Some(p) = ctx.resources.get::<goat_runtime::Profiler>() {
+                let all: Vec<String> = p.top(12).iter().map(|(n, ms)| format!("{n} {ms:.1}")).collect();
+                goat_runtime::info!("profile (ms): {} | {} draws, {} tris", all.join(", "), p.draw_calls, p.triangles);
+            }
+        }
         if ctx.time.elapsed - self.shown_at > 0.25 {
             self.shown_at = ctx.time.elapsed;
             if let Ok(mut t) = ctx.world.get::<&mut goat_text::Text>(me) {
-                t.text = format!("{:.0} FPS", self.smoothed);
+                // the 4 most expensive parts of the frame (goat_runtime::Profiler), ms
+                let top = ctx.resources.get::<goat_runtime::Profiler>().map(|p| p.top(4).iter().map(|(n, ms)| format!("\n{n} {ms:.1}")).collect::<String>()).unwrap_or_default();
+                t.text = format!("{:.0} FPS{top}", self.smoothed);
             }
         }
     }
@@ -160,6 +170,6 @@ pub fn spawn_texts(ctx: &mut Context) {
         Name("FPS".into()),
         Transform::from_position(ORIGIN + Vec3::new(152.0, 84.0, 0.0)),
         Text::new("-- FPS", FONT, 12.0).with_align(Align::Right, VAlign::Top).with_layer(HUD_LAYER).with_sorting_order(2),
-        Scripts::new().with(FpsCounter { smoothed: 60.0, shown_at: 0.0 }),
+        Scripts::new().with(FpsCounter { smoothed: 60.0, shown_at: 0.0, logged_at: 0.0 }),
     ));
 }

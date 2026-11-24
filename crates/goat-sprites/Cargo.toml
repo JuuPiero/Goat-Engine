@@ -1,6 +1,6 @@
 [package]
 name = "goat-sprites"
-description = "GoatEngine 2D sprites: Sprite / SpriteRenderer, sprite sheets, batched into one draw per texture (SpritePlugin)."
+description = "GoatEngine 2D sprites: Sprite / SpriteRenderer, sprite sheets, flipbook animation (SpriteAnimator), batched into one draw per texture (SpritePlugin)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,7 +14,10 @@ goat-assets = { workspace = true, optional = true }
 goat-scene = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+goat-script = { workspace = true, optional = true }
 
 [features]
 # SpriteRenderer in scene / prefab files
 scene = ["dep:goat-assets", "dep:goat-scene", "dep:serde", "dep:serde_json"]
+# SpriteAnimator.* calls for scripts
+script = ["dep:goat-script", "dep:serde_json"]

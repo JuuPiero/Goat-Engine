@@ -61,6 +61,9 @@ impl GraphicsBackend for NullBackend {
     fn create_texture(&mut self, tex: &TextureData) -> Result<TextureId, GfxError> {
         Ok(self.textures.insert(tex.clone_meta()))
     }
+    fn create_cubemap(&mut self, faces: &[TextureData; 6]) -> Result<TextureId, GfxError> {
+        Ok(self.textures.insert(faces[0].clone_meta()))
+    }
     fn create_material(&mut self, mat: &MaterialDesc) -> Result<MaterialId, GfxError> {
         Ok(self.materials.insert(mat.clone()))
     }

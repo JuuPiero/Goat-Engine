@@ -19,8 +19,8 @@ pub fn compile(key: &str, source: &str) -> Result<String, String> {
     }
     let mut program = parsed.program;
     let semantic = SemanticBuilder::new().build(&program);
-    if !semantic.errors.is_empty() {
-        return Err(semantic.errors.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("; "));
+    if !semantic.diagnostics.is_empty() {
+        return Err(semantic.diagnostics.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("; "));
     }
     let scoping = semantic.semantic.into_scoping();
     let options = TransformOptions::default();

@@ -124,6 +124,45 @@ impl MeshRenderer {
     }
 }
 
+/// Level of detail (Unity's LOD Group) next to a [`MeshRenderer`]: the renderer draws the mesh
+/// of the first level whose `screen_height` (the object's height as a fraction of the screen,
+/// 0..1) is reached; below the last level it isn't drawn when `cull` is on. Picked per camera.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LodGroup {
+    /// Highest detail first, `screen_height` decreasing.
+    pub levels: Vec<LodLevel>,
+    /// Not drawn below the last level (Unity's Culled).
+    pub cull: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LodLevel {
+    pub mesh: MeshId,
+    pub screen_height: f32,
+}
+
+impl LodGroup {
+    /// The mesh for an object covering `height` of the screen (None = culled).
+    pub fn pick(&self, height: f32) -> Option<MeshId> {
+        for l in &self.levels {
+            if height >= l.screen_height {
+                return Some(l.mesh);
+            }
+        }
+        if self.cull {
+            None
+        } else {
+            self.levels.last().map(|l| l.mesh)
+        }
+    }
+}
+
+/// On a root: its static descendants' meshes are merged per material when the game starts
+/// (Unity's static batching): far fewer draw calls for level geometry. The merged objects must
+/// not move afterwards. Done by `goat_assets::StaticBatchPlugin`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StaticBatching;
+
 /// Layer helpers: `layer_mask(&[0, 5])` = a culling mask with those layers.
 pub fn layer_mask(layers: &[u8]) -> u32 {
     layers.iter().fold(0, |m, &l| m | (1u32 << l.min(31)))
@@ -177,13 +216,16 @@ impl Default for SpotLight {
 /// entity; without it the defaults apply.
 #[derive(Clone, Copy, Debug)]
 pub struct RenderSettings {
+    /// Ambient light (the sky color with `ambient_ground`).
     pub ambient: Color,
+    /// Hemisphere ambient: the color from below (Unity's Gradient ambient source).
+    pub ambient_ground: Option<Color>,
     pub fog: Option<goat_gfx::Fog>,
 }
 
 impl Default for RenderSettings {
     fn default() -> Self {
-        RenderSettings { ambient: Color::rgb(0.22, 0.24, 0.3), fog: None }
+        RenderSettings { ambient: Color::rgb(0.22, 0.24, 0.3), ambient_ground: None, fog: None }
     }
 }
 

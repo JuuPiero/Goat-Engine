@@ -188,6 +188,42 @@ fn load_mesh_renderer(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(),
     insert(ctx, e, r)
 }
 
+/// `"LodGroup": { "levels": [ { "mesh": "models/rock.glb#mesh:0:0", "screen_height": 0.4 }, ... ], "cull": true }`
+#[derive(Serialize, Deserialize)]
+struct LodJson {
+    levels: Vec<LodLevelJson>,
+    #[serde(default)]
+    cull: bool,
+}
+#[derive(Serialize, Deserialize)]
+struct LodLevelJson {
+    mesh: String,
+    screen_height: f32,
+}
+
+fn save_lod(ctx: &SaveContext, e: Entity) -> Option<Value> {
+    let l = ctx.world.get::<&goat_runtime::LodGroup>(e).ok()?;
+    let levels = l.levels.iter().filter_map(|x| ctx.assets.key_of_mesh(x.mesh).map(|k| LodLevelJson { mesh: k.into(), screen_height: x.screen_height })).collect();
+    to_value(LodJson { levels, cull: l.cull })
+}
+
+fn load_lod(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
+    let j: LodJson = from_value(v)?;
+    let mut levels = Vec::new();
+    for l in j.levels {
+        let mesh = ctx.assets.mesh(ctx.gfx, &l.mesh).map_err(|e| e.to_string())?;
+        levels.push(goat_runtime::LodLevel { mesh, screen_height: l.screen_height });
+    }
+    insert(ctx, e, goat_runtime::LodGroup { levels, cull: j.cull })
+}
+
+fn save_static(ctx: &SaveContext, e: Entity) -> Option<Value> {
+    ctx.world.get::<&goat_runtime::StaticBatching>(e).ok().map(|_| Value::Object(Default::default()))
+}
+fn load_static(ctx: &mut LoadContext, e: Entity, _: &Value) -> Result<(), String> {
+    insert(ctx, e, goat_runtime::StaticBatching)
+}
+
 // ------------------------------------------------------------------ lights, settings
 
 #[derive(Serialize, Deserialize)]
@@ -250,22 +286,25 @@ struct FogJson {
 #[serde(default)]
 struct RenderSettingsJson {
     ambient: FileColor,
+    /// Hemisphere ambient: the color from below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ambient_ground: Option<FileColor>,
     fog: Option<FogJson>,
 }
 
 impl Default for RenderSettingsJson {
     fn default() -> Self {
-        RenderSettingsJson { ambient: FileColor(RenderSettings::default().ambient), fog: None }
+        RenderSettingsJson { ambient: FileColor(RenderSettings::default().ambient), ambient_ground: None, fog: None }
     }
 }
 
 fn save_settings(ctx: &SaveContext, e: Entity) -> Option<Value> {
     let s = *ctx.world.get::<&RenderSettings>(e).ok()?;
-    to_value(RenderSettingsJson { ambient: FileColor(s.ambient), fog: s.fog.map(|f| FogJson { color: FileColor(f.color), start: f.start, end: f.end }) })
+    to_value(RenderSettingsJson { ambient: FileColor(s.ambient), ambient_ground: s.ambient_ground.map(FileColor), fog: s.fog.map(|f| FogJson { color: FileColor(f.color), start: f.start, end: f.end }) })
 }
 fn load_settings(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
     let j: RenderSettingsJson = from_value(v)?;
-    insert(ctx, e, RenderSettings { ambient: j.ambient.0, fog: j.fog.map(|f| Fog { color: f.color.0, start: f.start, end: f.end }) })
+    insert(ctx, e, RenderSettings { ambient: j.ambient.0, ambient_ground: j.ambient_ground.map(|c| c.0), fog: j.fog.map(|f| Fog { color: f.color.0, start: f.start, end: f.end }) })
 }
 
 pub(crate) fn register(r: &mut SceneRegistry) {
@@ -275,5 +314,7 @@ pub(crate) fn register(r: &mut SceneRegistry) {
         .component(ComponentCodec { name: "DirectionalLight", save: save_directional, load: load_directional, remove: remove_typed::<DirectionalLight> })
         .component(ComponentCodec { name: "PointLight", save: save_point, load: load_point, remove: remove_typed::<PointLight> })
         .component(ComponentCodec { name: "SpotLight", save: save_spot, load: load_spot, remove: remove_typed::<SpotLight> })
-        .component(ComponentCodec { name: "RenderSettings", save: save_settings, load: load_settings, remove: remove_typed::<RenderSettings> });
+        .component(ComponentCodec { name: "RenderSettings", save: save_settings, load: load_settings, remove: remove_typed::<RenderSettings> })
+        .component(ComponentCodec { name: "LodGroup", save: save_lod, load: load_lod, remove: remove_typed::<goat_runtime::LodGroup> })
+        .component(ComponentCodec { name: "StaticBatching", save: save_static, load: load_static, remove: remove_typed::<goat_runtime::StaticBatching> });
 }

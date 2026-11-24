@@ -278,6 +278,15 @@ fn layout(atlas: &mut FontAtlas, t: &Text, world: &Mat4, texture: TextureId) -> 
 pub struct Fonts {
     atlases: HashMap<String, FontAtlas>,
     failed: std::collections::HashSet<String>,
+    /// Bumped whenever an atlas is cleared (quads laid out before are stale).
+    generation: u32,
+}
+
+impl Fonts {
+    /// Changes when glyph quads laid out earlier may no longer be valid (an atlas was refilled).
+    pub fn generation(&self) -> u32 {
+        self.generation
+    }
 }
 
 impl Fonts {
@@ -312,14 +321,18 @@ impl Fonts {
             }
         }
         let tex = atlas.texture.unwrap();
-        match layout(atlas, t, world, tex) {
-            Some(q) => q,
+        let (q, cleared) = match layout(atlas, t, world, tex) {
+            Some(q) => (q, false),
             None => {
                 // atlas full: start over with only what this frame needs
                 atlas.clear();
-                layout(atlas, t, world, tex).unwrap_or_default()
+                (layout(atlas, t, world, tex).unwrap_or_default(), true)
             }
+        };
+        if cleared {
+            self.generation = self.generation.wrapping_add(1);
         }
+        q
     }
 
     /// Uploads atlases that got new glyphs.

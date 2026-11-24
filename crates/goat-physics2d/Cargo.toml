@@ -12,10 +12,14 @@ hecs.workspace = true
 rapier2d = "0.22"
 serde.workspace = true
 goat-scene = { workspace = true, optional = true }
+goat-script = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [features]
 # Rigidbody2D / Collider2D in scene files
 scene = ["dep:goat-scene"]
+# Physics2D.* / Rigidbody2D.* calls for scripts
+script = ["dep:goat-script", "dep:serde_json"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 rapier2d = { version = "0.22", features = ["wasm-bindgen"] }

@@ -7,8 +7,11 @@ use std::sync::Arc;
 pub struct AudioClip {
     pub channels: u16,
     pub sample_rate: u32,
-    /// Interleaved samples.
+    /// Interleaved samples (empty for streamed clips).
     pub samples: Arc<Vec<i16>>,
+    /// Ogg Vorbis bytes decoded while playing (Unity's Load Type: Streaming): long music keeps
+    /// ~10× less memory than decoded PCM.
+    pub stream: Option<Arc<Vec<u8>>>,
 }
 
 impl AudioClip {
@@ -30,11 +33,25 @@ impl AudioClip {
         }
     }
 
+    /// A clip streamed from Ogg Vorbis bytes (only the header is read now).
+    pub fn streaming(bytes: Vec<u8>) -> Result<AudioClip, String> {
+        if bytes.len() < 4 || &bytes[0..4] != b"OggS" {
+            return Err("streaming needs Ogg Vorbis".into());
+        }
+        let r = lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(&bytes[..])).map_err(|e| e.to_string())?;
+        let (channels, sample_rate) = (r.ident_hdr.audio_channels as u16, r.ident_hdr.audio_sample_rate);
+        Ok(AudioClip { channels, sample_rate, samples: Arc::new(Vec::new()), stream: Some(Arc::new(bytes)) })
+    }
+
+    pub fn is_streaming(&self) -> bool {
+        self.stream.is_some()
+    }
+
     /// A synthesized sound: `f(t)` in -1..1 for `seconds` (mono).
     pub fn synth(sample_rate: u32, seconds: f32, f: impl Fn(f32) -> f32) -> AudioClip {
         let n = (seconds * sample_rate as f32) as usize;
         let samples = (0..n).map(|i| (f(i as f32 / sample_rate as f32).clamp(-1.0, 1.0) * 32767.0) as i16).collect();
-        AudioClip { channels: 1, sample_rate, samples: Arc::new(samples) }
+        AudioClip { channels: 1, sample_rate, samples: Arc::new(samples), stream: None }
     }
 
     /// Writes the clip as a 16-bit WAV (tools, tests, dumps).
@@ -91,7 +108,7 @@ fn decode_wav(b: &[u8]) -> Result<AudioClip, String> {
             if channels == 0 {
                 return Err("WAV with 0 channels".into());
             }
-            return Ok(AudioClip { channels, sample_rate: rate, samples: Arc::new(samples) });
+            return Ok(AudioClip { channels, sample_rate: rate, samples: Arc::new(samples), stream: None });
         }
         pos = body + len + (len & 1);
     }
@@ -106,7 +123,7 @@ fn decode_ogg(b: &[u8]) -> Result<AudioClip, String> {
     while let Some(packet) = r.read_dec_packet_itl().map_err(|e| e.to_string())? {
         samples.extend_from_slice(&packet);
     }
-    Ok(AudioClip { channels, sample_rate: rate, samples: Arc::new(samples) })
+    Ok(AudioClip { channels, sample_rate: rate, samples: Arc::new(samples), stream: None })
 }
 
 #[cfg(test)]

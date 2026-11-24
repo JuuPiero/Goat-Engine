@@ -13,6 +13,11 @@ use goat_gfx::*;
 use crate::tile_texture;
 
 static SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/standard.shbin"));
+static SHADER_REFLECT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reflect.shbin"));
+
+/// Vertex shader programs: 0 = standard (base texture on unit 0, emissive map on unit 1),
+/// 1 = reflect (cube map on unit 0 from the reflection vector, base texture on unit 1).
+const PROGRAMS: usize = 2;
 
 /// Debug switches set at build time: `GOAT_3DS_DEBUG=nodraw,nodrawcall,unlit,notex,nossaa`
 /// (comma-separated) — for bisecting GPU problems.
@@ -24,6 +29,9 @@ fn debug(flag: &str) -> bool {
 const TRANSFER_FLAGS: u32 = (0 << 8) | (1 << 12);
 // … | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_XY): 2×2 box downscale (supersampling)
 const TRANSFER_FLAGS_SSAA: u32 = TRANSFER_FLAGS | (2 << 24);
+// … | GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_X): 2×1 downscale — the stereo eyes' antialiasing
+// (along the screen's vertical, the GPU's x): both eyes fit in VRAM where 2×2 wouldn't.
+const TRANSFER_FLAGS_AA_X: u32 = TRANSFER_FLAGS | (1 << 24);
 
 /// A linear-memory allocation the GPU reads.
 struct LinearBuf {
@@ -83,6 +91,8 @@ impl Mesh {
 
 struct Texture {
     tex: Box<c3d::C3D_Tex>,
+    /// Cube maps: the face table citro3d keeps a pointer to.
+    cube: Option<Box<c3d::C3D_TexCube>>,
 }
 
 impl Drop for Texture {
@@ -95,7 +105,7 @@ impl Drop for Texture {
 /// GPU state citro3d keeps *pointers* to while bound: it must never move (boxed, and the
 /// lookup tables boxed individually — a HashMap moves its values when it grows).
 struct Fixed {
-    program: c3d::shaderProgram_s,
+    programs: [c3d::shaderProgram_s; PROGRAMS],
     light_env: c3d::C3D_LightEnv,
     lights: [c3d::C3D_Light; MAX_LIGHTS],
     specular_luts: HashMap<u32, Box<c3d::C3D_LightLut>>,
@@ -105,11 +115,19 @@ struct Fixed {
 }
 
 pub struct Citro3dBackend {
-    dvlb: *mut ctru::DVLB_s,
+    dvlbs: [*mut ctru::DVLB_s; PROGRAMS],
     fixed: Box<Fixed>,
+    /// Uniform locations per program: projection, modelView, viewInv (-1 = none).
+    locs: [[i32; 3]; PROGRAMS],
     loc_projection: i32,
     loc_model_view: i32,
+    /// The program bound now and the view's matrices (re-uploaded when switching program).
+    bound_program: usize,
+    view_proj: Option<c3d::C3D_Mtx>,
+    view_inv: [[f32; 4]; 3],
     top_ssaa: *mut c3d::C3D_RenderTarget,
+    /// The eye targets are twice as wide (2×1 AA through the display transfer).
+    eyes_aa: bool,
     top_left: *mut c3d::C3D_RenderTarget,
     top_right: *mut c3d::C3D_RenderTarget,
     bottom: *mut c3d::C3D_RenderTarget,
@@ -119,6 +137,8 @@ pub struct Citro3dBackend {
     gpu_meshes: HashMap<u32, Mesh>,
     textures: Pool<TextureData>,
     gpu_textures: HashMap<u32, Texture>,
+    /// Texture ids that are cube maps.
+    cubes: std::collections::HashSet<u32>,
     materials: Pool<MaterialDesc>,
     current_lut: u32,
     /// The current view has fog (materials with `fog: false` turn it off for their draws).
@@ -202,29 +222,52 @@ impl Citro3dBackend {
         // SAFETY: plain citro3d / libctru initialisation calls with valid arguments; the pointers
         // they return are checked and owned by the backend until Drop.
         unsafe {
-            if !c3d::C3D_Init(c3d::C3D_DEFAULT_CMDBUF_SIZE as usize) {
+            // 1 MB of GPU commands per frame (the 256 KB default overflows — a panic — when the 3D
+            // top screen draws a busy scene twice)
+            if !c3d::C3D_Init(0x10_0000) {
                 return Err(GfxError::Backend("C3D_Init failed".into()));
             }
+            // VRAM (6 MB): 2D = an 800×480 supersampled target (3 MB); 3D = two 480×400 eyes with
+            // 16-bit depth (2×1 antialiasing, 1.15 MB each) — or plain 240×400 eyes if they don't fit
             let top_ssaa = c3d::C3D_RenderTargetCreate(480, 800, ctru::GPU_RB_RGBA8, depth24());
-            let top_left = c3d::C3D_RenderTargetCreate(240, 400, ctru::GPU_RB_RGBA8, depth24());
-            let top_right = c3d::C3D_RenderTargetCreate(240, 400, ctru::GPU_RB_RGBA8, depth24());
             let bottom = c3d::C3D_RenderTargetCreate(240, 320, ctru::GPU_RB_RGBA8, depth24());
+            let depth16 = c3d::C3D_DEPTHTYPE { __e: ctru::GPU_RB_DEPTH16 };
+            let mut eyes_aa = !debug("noaa3d");
+            let (mut top_left, mut top_right) = if eyes_aa {
+                (c3d::C3D_RenderTargetCreate(480, 400, ctru::GPU_RB_RGBA8, depth16), c3d::C3D_RenderTargetCreate(480, 400, ctru::GPU_RB_RGBA8, depth16))
+            } else {
+                (std::ptr::null_mut(), std::ptr::null_mut())
+            };
+            if top_left.is_null() || top_right.is_null() {
+                for t in [top_left, top_right] {
+                    if !t.is_null() {
+                        c3d::C3D_RenderTargetDelete(t);
+                    }
+                }
+                eyes_aa = false;
+                top_left = c3d::C3D_RenderTargetCreate(240, 400, ctru::GPU_RB_RGBA8, depth24());
+                top_right = c3d::C3D_RenderTargetCreate(240, 400, ctru::GPU_RB_RGBA8, depth24());
+            }
             if top_ssaa.is_null() || top_left.is_null() || top_right.is_null() || bottom.is_null() {
                 return Err(GfxError::OutOfMemory("render targets (VRAM)".into()));
             }
+            goat_core::info!("3D eyes: {}", if eyes_aa { "480×400, 2×1 antialiased" } else { "240×400" });
             c3d::C3D_RenderTargetSetOutput(bottom, ctru::GFX_BOTTOM, ctru::GFX_LEFT, TRANSFER_FLAGS);
             c3d::C3D_RenderTargetSetOutput(top_ssaa, ctru::GFX_TOP, ctru::GFX_LEFT, TRANSFER_FLAGS_SSAA);
 
-            // shader
-            let size = SHADER.len();
-            let words = ctru::linearAlloc(size) as *mut u32;
-            std::ptr::copy_nonoverlapping(SHADER.as_ptr(), words as *mut u8, size);
-            let dvlb = ctru::DVLB_ParseFile(words, size as u32);
-            if dvlb.is_null() {
-                return Err(GfxError::Backend("bad shader binary".into()));
+            // shaders
+            let mut dvlbs = [std::ptr::null_mut(); PROGRAMS];
+            for (k, bin) in [SHADER, SHADER_REFLECT].iter().enumerate() {
+                let size = bin.len();
+                let words = ctru::linearAlloc(size) as *mut u32;
+                std::ptr::copy_nonoverlapping(bin.as_ptr(), words as *mut u8, size);
+                dvlbs[k] = ctru::DVLB_ParseFile(words, size as u32);
+                if dvlbs[k].is_null() {
+                    return Err(GfxError::Backend("bad shader binary".into()));
+                }
             }
             let mut fixed = Box::new(Fixed {
-                program: std::mem::zeroed(),
+                programs: std::mem::zeroed(),
                 light_env: std::mem::zeroed(),
                 lights: std::mem::zeroed(),
                 specular_luts: HashMap::new(),
@@ -233,16 +276,21 @@ impl Citro3dBackend {
                 fog_luts: HashMap::new(),
             });
             // ctru-sys and citro3d-sys generate the same struct twice: same layout, cast.
-            let prog = &mut fixed.program as *mut c3d::shaderProgram_s as *mut ctru::shaderProgram_s;
-            let _ = ctru::shaderProgramInit(prog);
-            let _ = ctru::shaderProgramSetVsh(prog, (*dvlb).DVLE);
-            c3d::C3D_BindProgram(&mut fixed.program);
-            let vsh = fixed.program.vertexShader as *mut ctru::shaderInstance_s;
-            let loc_projection = ctru::shaderInstanceGetUniformLocation(vsh, c"projection".as_ptr()) as i32;
-            let loc_model_view = ctru::shaderInstanceGetUniformLocation(vsh, c"modelView".as_ptr()) as i32;
-            if loc_projection < 0 || loc_model_view < 0 {
-                return Err(GfxError::Backend("shader uniforms not found".into()));
+            let mut locs = [[-1i32; 3]; PROGRAMS];
+            for k in 0..PROGRAMS {
+                let prog = &mut fixed.programs[k] as *mut c3d::shaderProgram_s as *mut ctru::shaderProgram_s;
+                let _ = ctru::shaderProgramInit(prog);
+                let _ = ctru::shaderProgramSetVsh(prog, (*dvlbs[k]).DVLE);
+                let vsh = fixed.programs[k].vertexShader as *mut ctru::shaderInstance_s;
+                for (j, name) in [c"projection", c"modelView", c"viewInv"].iter().enumerate() {
+                    locs[k][j] = ctru::shaderInstanceGetUniformLocation(vsh, name.as_ptr()) as i32;
+                }
+                if locs[k][0] < 0 || locs[k][1] < 0 {
+                    return Err(GfxError::Backend("shader uniforms not found".into()));
+                }
             }
+            c3d::C3D_BindProgram(&mut fixed.programs[0]);
+            let (loc_projection, loc_model_view) = (locs[0][0], locs[0][1]);
 
             // vertex layout = goat_gfx::Vertex
             let attr = c3d::C3D_GetAttrInfo();
@@ -271,11 +319,16 @@ impl Citro3dBackend {
             let clear_quad = Some(mesh_upload(&quad)?);
 
             Ok(Citro3dBackend {
-                dvlb,
+                dvlbs,
                 fixed,
+                locs,
                 loc_projection,
                 loc_model_view,
+                bound_program: 0,
+                view_proj: None,
+                view_inv: [[0.0; 4]; 3],
                 top_ssaa,
+                eyes_aa,
                 top_left,
                 top_right,
                 bottom,
@@ -284,11 +337,35 @@ impl Citro3dBackend {
                 gpu_meshes: HashMap::new(),
                 textures: Pool::new(),
                 gpu_textures: HashMap::new(),
+                cubes: Default::default(),
                 materials: Pool::new(),
                 current_lut: u32::MAX,
                 view_fog: false,
                 stereo: false,
             })
+        }
+    }
+
+    /// Binds shader program `k` (re-uploading the view's matrices to it).
+    fn use_program(&mut self, k: usize) {
+        if self.bound_program == k {
+            return;
+        }
+        self.bound_program = k;
+        self.loc_projection = self.locs[k][0];
+        self.loc_model_view = self.locs[k][1];
+        // SAFETY: programs live in `fixed` (boxed); uniform uploads of stack values.
+        unsafe {
+            c3d::C3D_BindProgram(&mut self.fixed.programs[k]);
+            if let Some(p) = self.view_proj.as_ref() {
+                c3d::C3D_FVUnifMtx4x4(ctru::GPU_VERTEX_SHADER, self.loc_projection, p);
+            }
+            let inv = self.locs[k][2];
+            if inv >= 0 {
+                for (i, r) in self.view_inv.iter().enumerate() {
+                    c3d::C3D_FVUnifSet(ctru::GPU_VERTEX_SHADER, inv + i as i32, r[0], r[1], r[2], r[3]);
+                }
+            }
         }
     }
 
@@ -316,13 +393,42 @@ impl Citro3dBackend {
     /// The view's lights (view space) into the hardware lights; unused ones off.
     fn set_lights(&mut self, v: &RenderView) {
         let fixed = &mut *self.fixed;
-        let amb = v.lighting.ambient;
+        // Hemisphere ambient on the PICA: ambient = ground color, plus a light from straight up
+        // of (sky - ground): exact facing up / down, a bit darker than a true hemisphere at the
+        // horizon. It takes the first free light slot (skipped when all 8 are in use: the mean).
+        let used = v.lighting.lights.len().min(MAX_LIGHTS);
+        let hemi = v.lighting.ambient_ground.filter(|_| used < MAX_LIGHTS);
+        let amb = match (v.lighting.ambient_ground, hemi) {
+            (Some(g), Some(_)) => g,
+            (Some(g), None) => {
+                let s = v.lighting.ambient;
+                Color::rgb((s.r + g.r) * 0.5, (s.g + g.g) * 0.5, (s.b + g.b) * 0.5)
+            }
+            _ => v.lighting.ambient,
+        };
         // SAFETY: lights / LUTs live in `fixed` (boxed).
         unsafe {
             c3d::C3D_LightEnvAmbient(&mut fixed.light_env, amb.r, amb.g, amb.b);
         }
         for (i, slot) in fixed.lights.iter_mut().enumerate() {
             let light: *mut c3d::C3D_Light = slot;
+            if let (Some(g), true) = (hemi, i == used) {
+                let s = v.lighting.ambient;
+                let up = v.view.transform_vector3(Vec3::Y).normalize_or(Vec3::Y);
+                // SAFETY: as above.
+                unsafe {
+                    c3d::C3D_LightEnable(light, true);
+                    let mut p: c3d::C3D_FVec = std::mem::zeroed();
+                    p.c = [0.0, up.z, up.y, up.x];
+                    c3d::C3D_LightPosition(light, &mut p);
+                    c3d::C3D_LightDiffuse(light, (s.r - g.r).max(0.0), (s.g - g.g).max(0.0), (s.b - g.b).max(0.0));
+                    c3d::C3D_LightSpecular0(light, 0.0, 0.0, 0.0);
+                    c3d::C3D_LightAmbient(light, 0.0, 0.0, 0.0);
+                    c3d::C3D_LightDistAttnEnable(light, false);
+                    c3d::C3D_LightSpotEnable(light, false);
+                }
+                continue;
+            }
             let Some(l) = v.lighting.lights.get(i).filter(|_| i < MAX_LIGHTS) else {
                 // SAFETY: as above.
                 unsafe { c3d::C3D_LightEnable(light, false) };
@@ -438,16 +544,30 @@ impl Citro3dBackend {
     }
 
     fn set_material(&mut self, m: &MaterialDesc, tex: Option<*mut c3d::C3D_Tex>) {
+        let gpu = |id: Option<TextureId>, cube: bool, s: &mut Self| id.filter(|t| s.cubes.contains(&t.index()) == cube).and_then(|t| s.gpu_textures.get_mut(&t.index())).map(|t| &mut *t.tex as *mut c3d::C3D_Tex);
+        let env_map = if m.reflectivity > 0.0 { gpu(m.env_map, true, self) } else { None };
+        let emissive_map = if env_map.is_none() { gpu(m.emissive_texture, false, self) } else { None };
+        self.use_program(if env_map.is_some() { 1 } else { 0 });
         // SAFETY: texenv / light env / blend calls with valid pointers owned by the backend.
         unsafe {
             let tex = if debug("notex") { None } else { tex };
+            // units: standard = base 0 / emissive 1; reflect = cube 0 / base 1
+            let (base_unit, base_src) = if env_map.is_some() { (1, ctru::GPU_TEXTURE1) } else { (0, ctru::GPU_TEXTURE0) };
             if let Some(t) = tex {
-                c3d::C3D_TexBind(0, t);
+                c3d::C3D_TexBind(base_unit, t);
+            }
+            match (env_map, emissive_map) {
+                (Some(c), _) => c3d::C3D_TexBind(0, c),
+                (None, Some(e)) => c3d::C3D_TexBind(1, e),
+                (None, None) => c3d::C3D_TexBind(1, std::ptr::null_mut()),
+            }
+            if env_map.is_some() && tex.is_none() {
+                c3d::C3D_TexBind(1, std::ptr::null_mut());
             }
             let env0 = c3d::C3D_GetTexEnv(0);
             c3d::C3D_TexEnvInit(env0);
             if tex.is_some() {
-                c3d::C3D_TexEnvSrc(env0, c3d::C3D_Both, ctru::GPU_TEXTURE0, ctru::GPU_PRIMARY_COLOR, 0);
+                c3d::C3D_TexEnvSrc(env0, c3d::C3D_Both, base_src, ctru::GPU_PRIMARY_COLOR, 0);
                 c3d::C3D_TexEnvFunc(env0, c3d::C3D_Both, ctru::GPU_MODULATE);
             } else {
                 c3d::C3D_TexEnvSrc(env0, c3d::C3D_Both, ctru::GPU_PRIMARY_COLOR, 0, 0);
@@ -469,7 +589,8 @@ impl Citro3dBackend {
                 c3d::C3D_TexEnvSrc(env2, c3d::C3D_RGB, ctru::GPU_PREVIOUS, ctru::GPU_FRAGMENT_SECONDARY_COLOR, 0);
                 c3d::C3D_TexEnvFunc(env2, c3d::C3D_RGB, ctru::GPU_ADD);
                 let s = m.specular;
-                let e = m.emissive;
+                // an emissive map adds the emission in stage 3 instead
+                let e = if emissive_map.is_some() { Color::BLACK } else { m.emissive };
                 // C3D_Material colors are stored B, G, R (verified in Citra: a blue material showed orange)
                 let mat = c3d::C3D_Material {
                     ambient: [bc.b, bc.g, bc.r],
@@ -486,6 +607,19 @@ impl Citro3dBackend {
                 c3d::C3D_TexEnvSrc(env1, c3d::C3D_Both, ctru::GPU_PREVIOUS, ctru::GPU_CONSTANT, 0);
                 c3d::C3D_TexEnvFunc(env1, c3d::C3D_Both, ctru::GPU_MODULATE);
                 c3d::C3D_TexEnvColor(env1, abgr_u32(bc));
+            }
+            // stage 3: reflection (mix with the cube map) or emission (+ map × emissive color)
+            let env3 = c3d::C3D_GetTexEnv(3);
+            c3d::C3D_TexEnvInit(env3);
+            if env_map.is_some() {
+                let r = m.reflectivity.clamp(0.0, 1.0);
+                c3d::C3D_TexEnvSrc(env3, c3d::C3D_RGB, ctru::GPU_TEXTURE0, ctru::GPU_PREVIOUS, ctru::GPU_CONSTANT);
+                c3d::C3D_TexEnvFunc(env3, c3d::C3D_RGB, ctru::GPU_INTERPOLATE);
+                c3d::C3D_TexEnvColor(env3, abgr_u32(Color::rgba(r, r, r, 1.0)));
+            } else if emissive_map.is_some() {
+                c3d::C3D_TexEnvSrc(env3, c3d::C3D_RGB, ctru::GPU_TEXTURE1, ctru::GPU_CONSTANT, ctru::GPU_PREVIOUS);
+                c3d::C3D_TexEnvFunc(env3, c3d::C3D_RGB, ctru::GPU_MULTIPLY_ADD);
+                c3d::C3D_TexEnvColor(env3, abgr_u32(m.emissive));
             }
             c3d::C3D_CullFace(match m.cull {
                 CullMode::None => ctru::GPU_CULL_NONE,
@@ -521,6 +655,7 @@ impl Citro3dBackend {
             c3d::C3D_TexEnvColor(env0, abgr_u32(color.unwrap_or(Color::BLACK)));
             c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(1));
             c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(2));
+            c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(3));
             c3d::C3D_CullFace(ctru::GPU_CULL_NONE);
             c3d::C3D_DepthTest(true, ctru::GPU_ALWAYS, if color.is_some() { ctru::GPU_WRITE_ALL } else { ctru::GPU_WRITE_DEPTH });
             c3d::C3D_DepthMap(true, -1.0, 0.0);
@@ -577,8 +712,13 @@ impl Citro3dBackend {
                 _ => c3d::C3D_DepthMap(true, -1.0, 0.0),
             }
         }
-        // SAFETY: uniform upload of a stack matrix.
-        unsafe { c3d::C3D_FVUnifMtx4x4(ctru::GPU_VERTEX_SHADER, self.loc_projection, &proj) };
+        // the view's matrices go to the bound program now and to the other one when it is used
+        let inv = v.view.inverse();
+        self.view_inv = [0, 1, 2].map(|r| [inv.x_axis[r], inv.y_axis[r], inv.z_axis[r], 0.0]);
+        self.view_proj = Some(proj);
+        let k = self.bound_program;
+        self.bound_program = usize::MAX;
+        self.use_program(k);
         self.set_lights(v);
         self.set_fog(v);
 
@@ -626,10 +766,14 @@ impl Drop for Citro3dBackend {
         // SAFETY: tear down in reverse order of creation.
         unsafe {
             for t in [self.top_ssaa, self.top_left, self.top_right, self.bottom] {
-                c3d::C3D_RenderTargetDelete(t);
+                if !t.is_null() {
+                    c3d::C3D_RenderTargetDelete(t);
+                }
             }
-            let _ = ctru::shaderProgramFree(&mut self.fixed.program as *mut c3d::shaderProgram_s as *mut ctru::shaderProgram_s);
-            ctru::DVLB_Free(self.dvlb);
+            for k in 0..PROGRAMS {
+                let _ = ctru::shaderProgramFree(&mut self.fixed.programs[k] as *mut c3d::shaderProgram_s as *mut ctru::shaderProgram_s);
+                ctru::DVLB_Free(self.dvlbs[k]);
+            }
             c3d::C3D_Fini();
         }
     }
@@ -734,7 +878,33 @@ impl GraphicsBackend for Citro3dBackend {
             let w = if t.wrap == Wrap::Repeat { ctru::GPU_REPEAT } else { ctru::GPU_CLAMP_TO_EDGE };
             c3d::C3D_TexSetWrap(&mut *tex, w, w);
             let id = self.textures.insert(t.clone_meta());
-            self.gpu_textures.insert(id.index(), Texture { tex });
+            self.gpu_textures.insert(id.index(), Texture { tex, cube: None });
+            Ok(id)
+        }
+    }
+
+    fn create_cubemap(&mut self, faces: &[TextureData; 6]) -> Result<TextureId, GfxError> {
+        let n = faces[0].width;
+        if !(n.is_power_of_two() && (8..=1024).contains(&n)) || faces.iter().any(|f| f.width != n || f.height != n) {
+            return Err(GfxError::Unsupported(format!("3DS cube maps: 6 square power-of-two faces of one size ({n})")));
+        }
+        // SAFETY: C3D_Tex and its face table boxed (stable addresses); each face uploaded once.
+        unsafe {
+            let mut tex: Box<c3d::C3D_Tex> = Box::new(std::mem::zeroed());
+            let mut cube: Box<c3d::C3D_TexCube> = Box::new(std::mem::zeroed());
+            if !c3d::C3D_TexInitCube(&mut *tex, &mut *cube, n as u16, n as u16, ctru::GPU_RGBA8) {
+                return Err(GfxError::OutOfMemory("cube map".into()));
+            }
+            for (i, f) in faces.iter().enumerate() {
+                let tiled = tile_texture(n, n, &f.rgba, TextureFormat::Rgba8);
+                c3d::C3D_TexLoadImage(&mut *tex, tiled.as_ptr() as *const c_void, ctru::GPU_POSITIVE_X + i as ctru::GPU_TEXFACE, 0);
+            }
+            c3d::C3D_TexFlush(&mut *tex);
+            c3d::C3D_TexSetFilter(&mut *tex, ctru::GPU_LINEAR, ctru::GPU_LINEAR);
+            c3d::C3D_TexSetWrap(&mut *tex, ctru::GPU_CLAMP_TO_EDGE, ctru::GPU_CLAMP_TO_EDGE);
+            let id = self.textures.insert(faces[0].clone_meta());
+            self.gpu_textures.insert(id.index(), Texture { tex, cube: Some(cube) });
+            self.cubes.insert(id.index());
             Ok(id)
         }
     }
@@ -775,8 +945,9 @@ impl GraphicsBackend for Citro3dBackend {
                 ctru::gfxSet3D(stereo);
                 if stereo {
                     c3d::C3D_RenderTargetDetachOutput(self.top_ssaa);
-                    c3d::C3D_RenderTargetSetOutput(self.top_left, ctru::GFX_TOP, ctru::GFX_LEFT, TRANSFER_FLAGS);
-                    c3d::C3D_RenderTargetSetOutput(self.top_right, ctru::GFX_TOP, ctru::GFX_RIGHT, TRANSFER_FLAGS);
+                    let flags = if self.eyes_aa { TRANSFER_FLAGS_AA_X } else { TRANSFER_FLAGS };
+                    c3d::C3D_RenderTargetSetOutput(self.top_left, ctru::GFX_TOP, ctru::GFX_LEFT, flags);
+                    c3d::C3D_RenderTargetSetOutput(self.top_right, ctru::GFX_TOP, ctru::GFX_RIGHT, flags);
                 } else {
                     c3d::C3D_RenderTargetDetachOutput(self.top_left);
                     c3d::C3D_RenderTargetDetachOutput(self.top_right);
@@ -784,11 +955,16 @@ impl GraphicsBackend for Citro3dBackend {
                 }
             }
         }
-
         // SAFETY: one frame of citro3d commands.
         unsafe {
             c3d::C3D_FrameBegin(c3d::C3D_FRAME_SYNCDRAW as u8);
-            c3d::C3D_BindProgram(&mut self.fixed.program);
+        }
+        self.bound_program = usize::MAX;
+        self.view_proj = None;
+        self.use_program(0);
+        let trace = debug("logstereo") && self.stereo;
+        if trace {
+            goat_core::info!("stereo frame: begin ok");
         }
         let passes: Vec<(*mut c3d::C3D_RenderTarget, Display, f32)> = if self.stereo {
             vec![(self.top_left, Display::Main, -1.0), (self.top_right, Display::Main, 1.0), (self.bottom, Display::Secondary, 0.0)]
@@ -810,6 +986,9 @@ impl GraphicsBackend for Citro3dBackend {
                     }
                     c3d::C3D_FrameDrawOn(target);
                 }
+                if trace {
+                    goat_core::info!("stereo frame: view on {:?} eye {eye}", display);
+                }
                 if !debug("nodraw") {
                     self.draw_view(target, v, eye, slider, &mut stats);
                 }
@@ -817,6 +996,9 @@ impl GraphicsBackend for Citro3dBackend {
         }
         // SAFETY: ends the frame started above.
         unsafe { c3d::C3D_FrameEnd(0) };
+        if trace {
+            goat_core::info!("stereo frame: end ok");
+        }
         stats
     }
 }
