@@ -14,10 +14,12 @@ use crate::tile_texture;
 
 static SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/standard.shbin"));
 static SHADER_REFLECT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reflect.shbin"));
+static SHADER_OUTLINE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/outline.shbin"));
 
 /// Vertex shader programs: 0 = standard (base texture on unit 0, emissive map on unit 1),
-/// 1 = reflect (cube map on unit 0 from the reflection vector, base texture on unit 1).
-const PROGRAMS: usize = 2;
+/// 1 = reflect (cube map on unit 0 from the reflection vector, base texture on unit 1),
+/// 2 = outline (pushed along the normals, flat color).
+const PROGRAMS: usize = 3;
 
 /// Debug switches set at build time: `GOAT_3DS_DEBUG=nodraw,nodrawcall,unlit,notex,nossaa`
 /// (comma-separated) — for bisecting GPU problems.
@@ -117,8 +119,8 @@ struct Fixed {
 pub struct Citro3dBackend {
     dvlbs: [*mut ctru::DVLB_s; PROGRAMS],
     fixed: Box<Fixed>,
-    /// Uniform locations per program: projection, modelView, viewInv (-1 = none).
-    locs: [[i32; 3]; PROGRAMS],
+    /// Uniform locations per program: projection, modelView, viewInv, outline (-1 = none).
+    locs: [[i32; 4]; PROGRAMS],
     loc_projection: i32,
     loc_model_view: i32,
     /// The program bound now and the view's matrices (re-uploaded when switching program).
@@ -141,6 +143,8 @@ pub struct Citro3dBackend {
     cubes: std::collections::HashSet<u32>,
     materials: Pool<MaterialDesc>,
     current_lut: u32,
+    /// Rim LUT bound on D1 (0 = none).
+    current_rim: u32,
     /// The current view has fog (materials with `fog: false` turn it off for their draws).
     view_fog: bool,
     stereo: bool,
@@ -257,7 +261,7 @@ impl Citro3dBackend {
 
             // shaders
             let mut dvlbs = [std::ptr::null_mut(); PROGRAMS];
-            for (k, bin) in [SHADER, SHADER_REFLECT].iter().enumerate() {
+            for (k, bin) in [SHADER, SHADER_REFLECT, SHADER_OUTLINE].iter().enumerate() {
                 let size = bin.len();
                 let words = ctru::linearAlloc(size) as *mut u32;
                 std::ptr::copy_nonoverlapping(bin.as_ptr(), words as *mut u8, size);
@@ -276,13 +280,13 @@ impl Citro3dBackend {
                 fog_luts: HashMap::new(),
             });
             // ctru-sys and citro3d-sys generate the same struct twice: same layout, cast.
-            let mut locs = [[-1i32; 3]; PROGRAMS];
+            let mut locs = [[-1i32; 4]; PROGRAMS];
             for k in 0..PROGRAMS {
                 let prog = &mut fixed.programs[k] as *mut c3d::shaderProgram_s as *mut ctru::shaderProgram_s;
                 let _ = ctru::shaderProgramInit(prog);
                 let _ = ctru::shaderProgramSetVsh(prog, (*dvlbs[k]).DVLE);
                 let vsh = fixed.programs[k].vertexShader as *mut ctru::shaderInstance_s;
-                for (j, name) in [c"projection", c"modelView", c"viewInv"].iter().enumerate() {
+                for (j, name) in [c"projection", c"modelView", c"viewInv", c"outline"].iter().enumerate() {
                     locs[k][j] = ctru::shaderInstanceGetUniformLocation(vsh, name.as_ptr()) as i32;
                 }
                 if locs[k][0] < 0 || locs[k][1] < 0 {
@@ -340,6 +344,7 @@ impl Citro3dBackend {
                 cubes: Default::default(),
                 materials: Pool::new(),
                 current_lut: u32::MAX,
+                current_rim: u32::MAX,
                 view_fog: false,
                 stereo: false,
             })
@@ -369,15 +374,21 @@ impl Citro3dBackend {
         }
     }
 
-    /// The Blinn-Phong lookup table for a shininess (built once, cached).
-    fn bind_specular_lut(&mut self, shininess: f32) {
-        let key = shininess.round().clamp(1.0, 256.0) as u32;
+    /// The D0 lookup table: Blinn-Phong for a shininess, or (toon) flat bands of L·N — built
+    /// once, cached.
+    fn bind_specular_lut(&mut self, shininess: f32, toon_steps: u8) {
+        let key = if toon_steps > 0 { 1000 + toon_steps as u32 } else { shininess.round().clamp(1.0, 256.0) as u32 };
         if self.current_lut == key {
             return;
         }
         let fixed = &mut *self.fixed;
         let lut = fixed.specular_luts.entry(key).or_insert_with(|| {
-            let mut data = lut_table(|x| x.clamp(0.0, 1.0).powf(key as f32), false);
+            let mut data = if toon_steps > 0 {
+                let n = toon_steps as f32;
+                lut_table(|x| if x <= 0.0 { 0.0 } else { ((x * n).round() / n).clamp(0.0, 1.0) }, true)
+            } else {
+                lut_table(|x| x.clamp(0.0, 1.0).powf(key as f32), false)
+            };
             // SAFETY: plain struct init from a 512-float table.
             unsafe {
                 let mut lut: Box<c3d::C3D_LightLut> = Box::new(std::mem::zeroed());
@@ -385,9 +396,38 @@ impl Citro3dBackend {
                 lut
             }
         });
+        let input = if toon_steps > 0 { ctru::GPU_LUTINPUT_LN } else { ctru::GPU_LUTINPUT_NH };
         // SAFETY: the LUT is boxed and kept in `fixed` (never moves while bound).
-        unsafe { c3d::C3D_LightEnvLut(&mut fixed.light_env, ctru::GPU_LUT_D0, ctru::GPU_LUTINPUT_NH, false, &mut **lut) };
+        // 4th argument = "negative": signed input (toon L·N), else |input| (Blinn N·H)
+        unsafe { c3d::C3D_LightEnvLut(&mut fixed.light_env, ctru::GPU_LUT_D0, input, toon_steps > 0, &mut **lut) };
         self.current_lut = key;
+    }
+
+    /// The D1 lookup table: rim light (1 - N·V)^power, or none.
+    fn bind_rim_lut(&mut self, power: Option<f32>) {
+        let key = power.map(|p| (p * 16.0).round().max(1.0) as u32).unwrap_or(0);
+        if self.current_rim == key {
+            return;
+        }
+        self.current_rim = key;
+        let fixed = &mut *self.fixed;
+        if key == 0 {
+            // SAFETY: unbinding a LUT.
+            unsafe { c3d::C3D_LightEnvLut(&mut fixed.light_env, ctru::GPU_LUT_D1, ctru::GPU_LUTINPUT_NV, false, std::ptr::null_mut()) };
+            return;
+        }
+        let lut = fixed.specular_luts.entry(2000 + key).or_insert_with(|| {
+            let p = key as f32 / 16.0;
+            let mut data = lut_table(|x| (1.0 - x.clamp(0.0, 1.0)).powf(p), false);
+            // SAFETY: plain struct init.
+            unsafe {
+                let mut lut: Box<c3d::C3D_LightLut> = Box::new(std::mem::zeroed());
+                c3d::LightLut_FromArray(&mut *lut, data.as_mut_ptr());
+                lut
+            }
+        });
+        // SAFETY: boxed in `fixed`.
+        unsafe { c3d::C3D_LightEnvLut(&mut fixed.light_env, ctru::GPU_LUT_D1, ctru::GPU_LUTINPUT_NV, false, &mut **lut) };
     }
 
     /// The view's lights (view space) into the hardware lights; unused ones off.
@@ -423,6 +463,8 @@ impl Citro3dBackend {
                     c3d::C3D_LightPosition(light, &mut p);
                     c3d::C3D_LightDiffuse(light, (s.r - g.r).max(0.0), (s.g - g.g).max(0.0), (s.b - g.b).max(0.0));
                     c3d::C3D_LightSpecular0(light, 0.0, 0.0, 0.0);
+                    let s1 = if i == 0 { 1.0 } else { 0.0 };
+                    c3d::C3D_LightSpecular1(light, s1, s1, s1);
                     c3d::C3D_LightAmbient(light, 0.0, 0.0, 0.0);
                     c3d::C3D_LightDistAttnEnable(light, false);
                     c3d::C3D_LightSpotEnable(light, false);
@@ -450,6 +492,9 @@ impl Citro3dBackend {
                 p.c = [w, pos.z, pos.y, pos.x];
                 c3d::C3D_LightPosition(light, &mut p);
                 c3d::C3D_LightColor(light, c.r, c.g, c.b);
+                // rim light (material specular1 × D1(N·V)) through one light only
+                let s1 = if i == 0 { 1.0 } else { 0.0 };
+                c3d::C3D_LightSpecular1(light, s1, s1, s1);
                 c3d::C3D_LightAmbient(light, 0.0, 0.0, 0.0);
                 if l.kind == LightKind::Directional {
                     c3d::C3D_LightDistAttnEnable(light, false);
@@ -591,17 +636,29 @@ impl Citro3dBackend {
                 let s = m.specular;
                 // an emissive map adds the emission in stage 3 instead
                 let e = if emissive_map.is_some() { Color::BLACK } else { m.emissive };
+                let toon = m.toon_steps > 0;
+                let rim = m.rim_color;
+                let has_rim = rim.r + rim.g + rim.b > 0.0;
                 // C3D_Material colors are stored B, G, R (verified in Citra: a blue material showed orange)
+                // toon: the banded diffuse comes through specular0 × D0(L·N) (diffuse itself can't
+                // be shaped by a LUT); rim: specular1 × D1(N·V)
                 let mat = c3d::C3D_Material {
                     ambient: [bc.b, bc.g, bc.r],
-                    diffuse: [bc.b, bc.g, bc.r],
-                    specular0: [s.b, s.g, s.r],
-                    specular1: [0.0; 3],
+                    diffuse: if toon { [0.0; 3] } else { [bc.b, bc.g, bc.r] },
+                    specular0: if toon { [bc.b, bc.g, bc.r] } else { [s.b, s.g, s.r] },
+                    specular1: if has_rim { [rim.b, rim.g, rim.r] } else { [0.0; 3] },
                     emission: [e.b, e.g, e.r],
                 };
                 c3d::C3D_LightEnvBind(&mut self.fixed.light_env);
                 c3d::C3D_LightEnvMaterial(&mut self.fixed.light_env, &mat);
-                self.bind_specular_lut(m.shininess);
+                self.bind_specular_lut(m.shininess, m.toon_steps);
+                self.bind_rim_lut(has_rim.then_some(m.rim_power.max(0.1)));
+                if toon {
+                    // (ambient + banded light) × texture: (primary + secondary) × previous
+                    c3d::C3D_TexEnvSrc(env1, c3d::C3D_RGB, ctru::GPU_FRAGMENT_PRIMARY_COLOR, ctru::GPU_FRAGMENT_SECONDARY_COLOR, ctru::GPU_PREVIOUS);
+                    c3d::C3D_TexEnvFunc(env1, c3d::C3D_RGB, ctru::GPU_ADD_MULTIPLY);
+                    c3d::C3D_TexEnvInit(env2);
+                }
             } else {
                 c3d::C3D_LightEnvBind(std::ptr::null_mut());
                 c3d::C3D_TexEnvSrc(env1, c3d::C3D_Both, ctru::GPU_PREVIOUS, ctru::GPU_CONSTANT, 0);
@@ -647,6 +704,7 @@ impl Citro3dBackend {
     /// Fills the current viewport with the far depth and, with a color, that color
     /// (partial-viewport and depth-only clears; full color clears use C3D_RenderTargetClear).
     fn clear_viewport(&mut self, color: Option<Color>) {
+        self.use_program(0);
         let Some(quad) = &self.clear_quad else { return };
         let (vbo, ibo, count) = (quad.vertices(), quad.indices(), quad.index_count);
         let identity = to_c3d(Mat4::IDENTITY);
@@ -757,6 +815,37 @@ impl Citro3dBackend {
             }
             stats.draw_calls += 1;
             stats.triangles += count as u32 / 3;
+            // toon outline: back faces pushed out along the normals, flat color
+            let outline = self.materials.get(it.material).filter(|m| m.outline_width > 0.0).map(|m| (m.outline_width, m.outline_color, m.fog));
+            if let Some((width, color, fog)) = outline {
+                self.use_program(2);
+                // SAFETY: state + one more draw of the same buffers.
+                unsafe {
+                    c3d::C3D_FVUnifSet(ctru::GPU_VERTEX_SHADER, self.locs[2][3], width, 0.0, 0.0, 0.0);
+                    c3d::C3D_FVUnifMtx4x4(ctru::GPU_VERTEX_SHADER, self.loc_model_view, &mv);
+                    c3d::C3D_LightEnvBind(std::ptr::null_mut());
+                    let env0 = c3d::C3D_GetTexEnv(0);
+                    c3d::C3D_TexEnvInit(env0);
+                    c3d::C3D_TexEnvSrc(env0, c3d::C3D_Both, ctru::GPU_CONSTANT, 0, 0);
+                    c3d::C3D_TexEnvFunc(env0, c3d::C3D_Both, ctru::GPU_REPLACE);
+                    c3d::C3D_TexEnvColor(env0, abgr_u32(Color::rgba(color.r, color.g, color.b, 1.0)));
+                    for k in 1..4 {
+                        c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(k));
+                    }
+                    c3d::C3D_AlphaTest(false, ctru::GPU_ALWAYS, 0);
+                    c3d::C3D_CullFace(ctru::GPU_CULL_FRONT_CCW);
+                    c3d::C3D_DepthTest(true, ctru::GPU_GREATER, ctru::GPU_WRITE_ALL);
+                    c3d::C3D_AlphaBlend(ctru::GPU_BLEND_ADD, ctru::GPU_BLEND_ADD, ctru::GPU_ONE, ctru::GPU_ZERO, ctru::GPU_ONE, ctru::GPU_ZERO);
+                    c3d::C3D_FogGasMode(if self.view_fog && fog { ctru::GPU_FOG } else { ctru::GPU_NO_FOG }, ctru::GPU_PLAIN_DENSITY, false);
+                    let buf = c3d::C3D_GetBufInfo();
+                    c3d::BufInfo_Init(buf);
+                    c3d::BufInfo_Add(buf, vbo, Vertex::SIZE as isize, 4, 0x3210);
+                    c3d::C3D_DrawElements(ctru::GPU_TRIANGLES, count, c3d::C3D_UNSIGNED_SHORT as i32, ibo);
+                }
+                stats.draw_calls += 1;
+                // the next item sets its material again
+                last_material = None;
+            }
         }
         if !full {
             // SAFETY: back to the whole target for the next view.

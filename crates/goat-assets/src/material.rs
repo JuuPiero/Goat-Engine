@@ -8,7 +8,7 @@
 //! Every field is optional. `texture` is relative to the material file (or a root key with a
 //! leading `/`). Colors are `#rrggbb` / `#rrggbbaa` (sRGB) or `[r, g, b, a]` floats.
 //! Also: `"emissive_texture"` (× emissive), `"env_map"` (a `.cubemap.json` or `builtin:sky`) +
-//! `"reflectivity"` 0..1, `"alpha_cutoff"` 0..1 (alpha test) + `"alpha_dither"`.
+//! `"reflectivity"` 0..1, `"alpha_cutoff"` 0..1 (alpha test) + `"alpha_dither"`, toon: `"toon_steps"`, `"rim_color"` +`n//! `"rim_power"`, `"outline_width"` + `"outline_color"`.
 
 use goat_core::Color;
 use goat_gfx::{BlendMode, CullMode, LightingModel, MaterialDesc};
@@ -85,6 +85,16 @@ pub struct MaterialFile {
     pub alpha_cutoff: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha_dither: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub toon_steps: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rim_color: Option<FileColor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rim_power: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outline_width: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outline_color: Option<FileColor>,
 }
 
 impl MaterialFile {
@@ -108,6 +118,11 @@ impl MaterialFile {
             reflectivity: self.reflectivity.unwrap_or(0.0).clamp(0.0, 1.0),
             alpha_cutoff: self.alpha_cutoff.unwrap_or(0.0).clamp(0.0, 1.0),
             alpha_dither: self.alpha_dither.unwrap_or(false),
+            toon_steps: self.toon_steps.unwrap_or(0),
+            rim_color: self.rim_color.map(|c| c.0).unwrap_or(d.rim_color),
+            rim_power: self.rim_power.unwrap_or(d.rim_power),
+            outline_width: self.outline_width.unwrap_or(0.0).max(0.0),
+            outline_color: self.outline_color.map(|c| c.0).unwrap_or(d.outline_color),
             blend,
             cull: match self.cull.as_deref() {
                 Some("none") | Some("off") => CullMode::None,

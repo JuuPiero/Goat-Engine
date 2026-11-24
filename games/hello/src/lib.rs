@@ -421,6 +421,10 @@ impl Game for HelloGame {
                 ctx.world.spawn((Name(format!("Wall Block {i}")), Transform::from_position(Vec3::new(0.0, h * 0.5, i as f32 * 0.65)).with_scale(Vec3::new(0.6, h, 0.6)), Parent(wall), MeshRenderer::new(cube, mat)));
             }
         }
+        // a cel-shaded ball: toon bands, rim light, black outline (materials/toon.mat.json)
+        if let (Ok(sphere), Ok(mat)) = (goat_assets::mesh(ctx, "builtin:sphere"), goat_assets::material(ctx, "materials/toon.mat.json")) {
+            ctx.world.spawn((Name("Toon Ball".into()), Transform::from_position(Vec3::new(0.9, 0.55, 2.2)).with_scale(Vec3::splat(1.1)), MeshRenderer::new(sphere, mat)));
+        }
         // a firework made in Unity, exported by tools/unity-goat-exporter
         match goat_scene::instantiate(ctx, "fx/Firework.prefab.json", None) {
             Ok(fw) => {

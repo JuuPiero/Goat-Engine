@@ -237,6 +237,25 @@ Trong file scene, mỗi entity có:
 - `scripts`: các behaviour đã đăng ký.
 - `model` hoặc `prefab`: con của entity sinh ra từ file đó và **không** lưu lại vào scene. Sửa file prefab thì mọi scene dùng nó đều được cập nhật.
 
+### Material: các hiệu ứng đẹp mà nhẹ
+
+Các trường dưới đây ghi được trong `*.mat.json`, chạy được trên cả desktop lẫn 3DS (trên 3DS dùng phần cứng của PICA):
+
+| Trường | Hiệu ứng |
+|---|---|
+| `emissive` + `emissive_texture` | Tự phát sáng theo một texture |
+| `env_map` (`builtin:sky` hoặc `.cubemap.json`) + `reflectivity` | Phản chiếu cubemap |
+| `alpha_cutoff` (+ `alpha_dither`, chỉ desktop) | Cắt lỗ theo alpha (lá cây, hàng rào) |
+| `toon_steps` | Cel shading (ánh sáng chia bậc) |
+| `rim_color` + `rim_power` | Viền sáng ở mép (fresnel) |
+| `outline_width` + `outline_color` | Viền đen kiểu hoạt hình |
+
+Thêm vào đó:
+- `RenderSettings.ambient_ground`: ambient bán cầu (trên là màu trời, dưới là màu đất).
+- `BlobShadow`: bóng tròn mềm dưới vật.
+- `StaticBatching { bake_lighting }`: gộp vật tĩnh và nướng ánh sáng vào vertex.
+- `LodGroup`: tự chọn mesh theo kích thước vật trên màn hình.
+
 ## Text, physics, audio
 
 ```rust

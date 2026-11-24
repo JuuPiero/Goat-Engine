@@ -176,6 +176,16 @@ pub struct MaterialDesc {
     /// With `alpha_cutoff`: a 4×4 ordered dither around the cutoff for softer edges (fake
     /// alpha-to-coverage). Desktop only; the 3DS keeps the hard cut.
     pub alpha_dither: bool,
+    /// Cel shading: diffuse light in this many flat bands (0 = smooth).
+    pub toon_steps: u8,
+    /// Rim light (fresnel): `rim_color` × (1 - N·V)^`rim_power` added at grazing angles
+    /// (black = off).
+    pub rim_color: Color,
+    pub rim_power: f32,
+    /// Toon outline: the back faces drawn again pushed out along the normals by this many
+    /// world units, in `outline_color` (0 = off).
+    pub outline_width: f32,
+    pub outline_color: Color,
     pub blend: BlendMode,
     pub cull: CullMode,
     pub depth_write: bool,
@@ -199,6 +209,11 @@ impl Default for MaterialDesc {
             reflectivity: 0.0,
             alpha_cutoff: 0.0,
             alpha_dither: false,
+            toon_steps: 0,
+            rim_color: Color::BLACK,
+            rim_power: 3.0,
+            outline_width: 0.0,
+            outline_color: Color::BLACK,
             blend: BlendMode::Opaque,
             cull: CullMode::Back,
             depth_write: true,

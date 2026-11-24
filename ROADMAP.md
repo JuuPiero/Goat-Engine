@@ -28,8 +28,8 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ Ánh sáng nướng vào vertex cho vật tĩnh (`StaticBatching { bake_lighting }`: ambient / bán cầu + mọi đèn, vẽ unlit) + fragment lighting cho vật động. Lightmap UV2 chưa có.
 - ✅ Bóng blob (`BlobShadow`, goat-physics feature `render`: raycast xuống đất, theo độ dốc, nhỏ và nhạt dần theo độ cao)
 - ⬜ Shadow map bằng tính năng shadow của PICA cho 1 đèn
-- ⬜ Viền nhân vật (toon outline bằng back-face extrude), toon shading bằng LUT D0/D1
-- ⬜ Rim light / fresnel bằng LUT fresnel của PICA, phản chiếu cubemap
+- ✅ Toon: viền (`outline_width` / `outline_color`, vẽ lại mặt sau đẩy theo normal; 3DS: shader PICA thứ ba), cel shading (`toon_steps`; 3DS: specular0 × LUT D0 theo L·N)
+- ✅ Rim light (`rim_color` / `rim_power`; 3DS: specular1 × LUT D1 theo N·V), phản chiếu cubemap
 - ⬜ Procedural texture (proctex) cho nước / lửa, fog gas cho khói
 - ⬜ Shadow: blob / projected trên 3DS, shadow map trên desktop
 - ⬜ Post-process trên desktop; trên 3DS chỉ màn hình phẳng (pha màu bằng texenv)

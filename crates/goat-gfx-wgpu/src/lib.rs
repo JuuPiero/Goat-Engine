@@ -107,6 +107,10 @@ struct ObjectUniform {
     specular: [f32; 4],
     emissive: [f32; 4],
     flags: [f32; 4],
+    /// x = toon steps, y = rim power, z = outline width
+    toon: [f32; 4],
+    rim: [f32; 4],
+    outline: [f32; 4],
 }
 
 const UNIFORM_ALIGN: u64 = 256;
@@ -117,6 +121,8 @@ struct PipelineKey {
     cull: u8,
     depth_write: bool,
     depth_test: bool,
+    /// The outline pass (back faces pushed out, flat color).
+    outline: bool,
 }
 
 pub struct WgpuBackend {
@@ -369,11 +375,19 @@ impl WgpuBackend {
         }
     }
 
-    fn pipeline(&mut self, m: &MaterialDesc) -> &wgpu::RenderPipeline {
-        let key = PipelineKey { blend: m.blend as u8, cull: m.cull as u8, depth_write: m.depth_write, depth_test: m.depth_test };
+    fn pipeline(&mut self, m: &MaterialDesc) {
+        self.pipeline_with(m, false);
+        if m.outline_width > 0.0 {
+            self.pipeline_with(m, true);
+        }
+    }
+
+    fn pipeline_with(&mut self, m: &MaterialDesc, outline: bool) {
+        let key = PipelineKey { blend: m.blend as u8, cull: m.cull as u8, depth_write: m.depth_write, depth_test: m.depth_test, outline };
         let (device, layout, shader, format) = (&self.device, &self.pipeline_layout, &self.shader, self.config.format);
-        self.pipelines.entry(key).or_insert_with(|| {
+        let _ = self.pipelines.entry(key).or_insert_with(|| {
             let blend = match m.blend {
+                _ if outline => None,
                 BlendMode::Opaque => None,
                 BlendMode::Alpha => Some(wgpu::BlendState::ALPHA_BLENDING),
                 BlendMode::Additive => Some(wgpu::BlendState {
@@ -387,13 +401,13 @@ impl WgpuBackend {
                 layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: shader,
-                    entry_point: Some("vs_main"),
+                    entry_point: Some(if outline { "vs_outline" } else { "vs_main" }),
                     compilation_options: Default::default(),
                     buffers: &[wgpu::VertexBufferLayout { array_stride: Vertex::SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attrs }],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(if outline { "fs_outline" } else { "fs_main" }),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
                 }),
@@ -401,6 +415,7 @@ impl WgpuBackend {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     front_face: wgpu::FrontFace::Ccw,
                     cull_mode: match m.cull {
+                        _ if outline => Some(wgpu::Face::Front),
                         CullMode::None => None,
                         CullMode::Back => Some(wgpu::Face::Back),
                         CullMode::Front => Some(wgpu::Face::Front),
@@ -409,7 +424,7 @@ impl WgpuBackend {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
-                    depth_write_enabled: m.depth_write,
+                    depth_write_enabled: m.depth_write || outline,
                     depth_compare: if m.depth_test { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Always },
                     stencil: Default::default(),
                     bias: Default::default(),
@@ -418,7 +433,7 @@ impl WgpuBackend {
                 multiview: None,
                 cache: None,
             })
-        })
+        });
     }
 
     fn material_bind_group(&self, m: &MaterialDesc) -> wgpu::BindGroup {
@@ -806,6 +821,9 @@ impl GraphicsBackend for WgpuBackend {
                     base_color: c4(d.base_color, lin),
                     specular: { let s = c4(d.specular, lin); [s[0], s[1], s[2], d.shininess.max(1.0)] },
                     emissive: c4(d.emissive, lin),
+                    toon: [d.toon_steps as f32, d.rim_power.max(0.01), d.outline_width, 0.0],
+                    rim: c4(d.rim_color, lin),
+                    outline: c4(d.outline_color, lin),
                     flags: [if d.lighting == LightingModel::Lit { 1.0 } else { 0.0 }, if d.fog { 1.0 } else { 0.0 }, if d.env_map.is_some() { d.reflectivity } else { 0.0 }, if d.alpha_dither { -d.alpha_cutoff } else { d.alpha_cutoff }],
                 };
                 objects.push((it.mesh, it.material, put(bytemuck::bytes_of(&ou))));
@@ -878,7 +896,7 @@ impl GraphicsBackend for WgpuBackend {
                     if gm.index_count == 0 {
                         continue;
                     }
-                    let key = PipelineKey { blend: mat.desc.blend as u8, cull: mat.desc.cull as u8, depth_write: mat.desc.depth_write, depth_test: mat.desc.depth_test };
+                    let key = PipelineKey { blend: mat.desc.blend as u8, cull: mat.desc.cull as u8, depth_write: mat.desc.depth_write, depth_test: mat.desc.depth_test, outline: false };
                     let Some(pipe) = self.pipelines.get(&key) else { continue };
                     pass.set_pipeline(pipe);
                     pass.set_bind_group(1, &object_bg, &[off]);
@@ -888,6 +906,13 @@ impl GraphicsBackend for WgpuBackend {
                     pass.draw_indexed(0..gm.index_count, 0, 0..1);
                     stats.draw_calls += 1;
                     stats.triangles += gm.index_count / 3;
+                    if mat.desc.outline_width > 0.0 {
+                        if let Some(p) = self.pipelines.get(&PipelineKey { outline: true, ..key }) {
+                            pass.set_pipeline(p);
+                            pass.draw_indexed(0..gm.index_count, 0, 0..1);
+                            stats.draw_calls += 1;
+                        }
+                    }
                 }
             }
         }

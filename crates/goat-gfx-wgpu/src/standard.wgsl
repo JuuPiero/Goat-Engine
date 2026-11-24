@@ -28,6 +28,9 @@ struct Object {
     specular: vec4<f32>,    // rgb, w = shininess
     emissive: vec4<f32>,
     flags: vec4<f32>,       // x = lit (1/0), y = fogged (1/0), z = reflectivity, w = alpha cutoff (< 0: dithered)
+    toon: vec4<f32>,        // x = steps (0 = smooth), y = rim power, z = outline width
+    rim: vec4<f32>,
+    outline: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -120,14 +123,22 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
                     strength *= smoothstep(light.spot.y, light.spot.x, cos_angle);
                 }
             }
-            let ndl = max(dot(n, l), 0.0);
+            var ndl = max(dot(n, l), 0.0);
             let h = normalize(l + v);
-            let spec = select(0.0, pow(max(dot(n, h), 0.0), object.specular.w), ndl > 0.0);
+            var spec = select(0.0, pow(max(dot(n, h), 0.0), object.specular.w), ndl > 0.0);
+            if (object.toon.x > 0.5) {
+                // cel shading: flat bands, a hard highlight
+                ndl = round(ndl * object.toon.x) / object.toon.x;
+                spec = step(0.5, spec);
+            }
             diffuse += light.color.rgb * ndl * strength;
             specular += light.color.rgb * spec * strength;
         }
         rgb = albedo.rgb * diffuse + object.specular.rgb * specular;
     }
+    // rim light (fresnel)
+    let vr = normalize(frame.camera_pos.xyz - i.world_pos);
+    rgb = rgb + object.rim.rgb * pow(1.0 - max(dot(normalize(i.normal), vr), 0.0), object.toon.y);
     // cube map reflection (sampled always: uniform control flow)
     let nr = normalize(i.normal);
     let r = reflect(-normalize(frame.camera_pos.xyz - i.world_pos), nr);
@@ -140,4 +151,23 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         rgb = mix(frame.fog_color.rgb, rgb, visibility);
     }
     return vec4<f32>(rgb, albedo.a);
+}
+
+// Outline pass: back faces pushed out along the normals, one flat color.
+@vertex
+fn vs_outline(v: VsIn) -> VsOut {
+    var o: VsOut;
+    let n = normalize((object.normal_matrix * vec4<f32>(v.normal, 0.0)).xyz);
+    let world = object.model * vec4<f32>(v.position, 1.0) + vec4<f32>(n * object.toon.z, 0.0);
+    o.world_pos = world.xyz;
+    o.clip = frame.view_proj * world;
+    o.normal = n;
+    o.uv = v.uv;
+    o.color = v.color;
+    return o;
+}
+
+@fragment
+fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(object.outline.rgb, 1.0);
 }
