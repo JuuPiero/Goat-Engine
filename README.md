@@ -211,7 +211,10 @@ Thư mục `assets/` của game:
 Asset được gọi bằng **key** là đường dẫn tương đối:
 - `textures/logo.png`, `models/suzanne.glb`, `materials/logo.mat.json`;
 - asset dựng sẵn: `builtin:cube` / `sphere` / `plane` / `default`;
-- một phần của model: `models/a.glb#mesh:0:1`, `#material:2`.
+- một phần của model: `models/a.glb#mesh:0:1`, `#material:2`;
+- theo GUID: `guid:<32 ký tự hex>` (và `guid:...#mesh:0:1`). Mỗi asset có file `<tên file>.meta` = `{ "guid": "..." }`, do editor tạo và giữ nguyên khi đổi tên / di chuyển, như Unity. Nên commit cả file `.meta`.
+
+Đổi tên hay di chuyển asset **bên ngoài editor** (Explorer, `git mv`) cũng không làm vỡ tham chiếu. Editor giữ bảng guid → đường dẫn trong `.goat/guids.json` (cạnh `assets/`, không commit, giống thư mục Library của Unity). Khi thấy một GUID đã sang đường dẫn khác, editor sửa mọi tham chiếu tới đường dẫn cũ và báo trong Console. File bị dời đi mà bỏ lại `.meta` thì editor nhận lại `.meta` cùng tên file. File chép kèm `.meta` thì bản chép nhận GUID mới.
 
 | Loại | Định dạng |
 |---|---|
@@ -236,7 +239,21 @@ Trong file scene, mỗi entity có:
 - `components`: Transform, Camera, MeshRenderer, các loại đèn, RenderSettings, SpriteRenderer…
 - `scripts`: các behaviour đã đăng ký.
 - `model` hoặc `prefab`: con của entity sinh ra từ file đó và **không** lưu lại vào scene. Sửa file prefab thì mọi scene dùng nó đều được cập nhật.
+- `overrides` (chỉ với `prefab`): thay đổi các entity **bên trong** prefab, như property override của Unity:
+  ```json
+  { "id": 5, "prefab": "prefabs/gate.prefab.json", "overrides": [
+      { "target": [3], "name": "Cột phải" },
+      { "target": [2, 1], "components": { "Transform": { "position": [0, 2, 0] }, "PointLight": null } } ] }
+  ```
+  `target` là đường id vào prefab: `[3]` là entity 3 của file prefab, `[2, 1]` là entity 1 của prefab lồng trong entity 2. `components` là JSON merge patch: object được gộp, giá trị khác bị thay, `null` xóa trường / component. `scripts` (nếu có) thay cả danh sách behaviour. Editor tự ghi `overrides` khi bạn sửa một entity con của prefab rồi lưu scene.
+- `parent_target`: entity thêm làm con của một entity bên trong prefab, ví dụ `"parent": 5, "parent_target": [2, 1]`.
 
+**Prefab variant** là file prefab có `base`: lấy các entity của prefab gốc, áp `overrides`, rồi thêm `entities` của chính nó. Id của entity thêm không được trùng id của prefab gốc, nhưng có thể dùng id của prefab gốc làm `parent`:
+```json
+{ "version": 1, "base": "prefabs/post.prefab.json",
+  "overrides": [ { "target": [2], "components": { "Transform": { "position": [0, 3, 0] } } } ],
+  "entities": [ { "id": 10, "name": "Flag", "parent": 1 } ] }
+```
 ### Material: các hiệu ứng đẹp mà nhẹ
 
 Các trường dưới đây ghi được trong `*.mat.json`, chạy được trên cả desktop lẫn 3DS (trên 3DS dùng phần cứng của PICA):

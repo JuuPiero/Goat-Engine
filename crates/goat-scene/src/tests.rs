@@ -125,6 +125,120 @@ fn unknown_behaviour_and_component_are_skipped_not_fatal() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+fn named(world: &World, n: &str) -> Entity {
+    world.query::<&Name>().iter().find(|(_, x)| x.0 == n).map(|(e, _)| e).unwrap_or_else(|| panic!("{n} not spawned"))
+}
+
+/// Adds a prefab nesting post.prefab.json, and a variant of post.
+fn prefab_fixture(name: &str) -> std::path::PathBuf {
+    let dir = fixture(name);
+    std::fs::write(
+        dir.join("prefabs/gate.prefab.json"),
+        r#"{ "version": 1, "entities": [
+            { "id": 1, "name": "Gate" },
+            { "id": 2, "name": "Left", "parent": 1, "prefab": "prefabs/post.prefab.json", "components": { "Transform": { "position": [-1, 0, 0] } } },
+            { "id": 3, "name": "Right", "parent": 1, "prefab": "prefabs/post.prefab.json",
+              "overrides": [ { "target": [2], "name": "Right Cap" } ] }
+        ] }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("prefabs/tall post.prefab.json"),
+        r#"{ "version": 1, "base": "prefabs/post.prefab.json",
+            "overrides": [ { "target": [2], "components": { "Transform": { "position": [0, 3, 0] } } } ],
+            "entities": [ { "id": 10, "name": "Flag", "parent": 1, "components": { "Transform": { "position": [0, 4, 0] } } } ] }"#,
+    )
+    .unwrap();
+    dir
+}
+
+fn spawn_text(dir: &std::path::Path, text: &str) -> (World, NullBackend, AssetServer) {
+    let mut gfx = NullBackend::new();
+    let mut assets = AssetServer::new(AssetIo::new(dir));
+    let mut world = World::new();
+    let file = parse("s", text).unwrap();
+    spawn_file(&mut world, &mut gfx, &mut assets, &registry(), &file, "s", None).unwrap();
+    (world, gfx, assets)
+}
+
+fn local_y(world: &World, n: &str) -> f32 {
+    world.get::<&Transform>(named(world, n)).unwrap().position.y
+}
+
+#[test]
+fn overrides_reach_nested_prefabs_and_variants_extend_their_base() {
+    let dir = prefab_fixture("overrides");
+    let scene = r#"{ "version": 1, "entities": [
+        { "id": 1, "name": "G", "prefab": "prefabs/gate.prefab.json",
+          "overrides": [ { "target": [3, 2], "components": { "Transform": { "position": [0, 2, 0] } } },
+                         { "target": [2, 1], "components": { "MeshRenderer": null } } ] },
+        { "id": 2, "name": "V", "prefab": "prefabs/tall post.prefab.json" }
+    ] }"#;
+    let (world, _gfx, _assets) = spawn_text(&dir, scene);
+    // the gate's own override renamed the right cap, the scene's override moved it
+    assert_eq!(local_y(&world, "Right Cap"), 2.0);
+    // the scene removed the left post's renderer (null patch); the right one keeps it
+    let posts: Vec<Entity> = world.query::<&Name>().iter().filter(|(_, n)| n.0 == "Post").map(|(e, _)| e).collect();
+    assert_eq!(posts.len(), 3);
+    assert_eq!(posts.iter().filter(|&&e| world.get::<&MeshRenderer>(e).is_ok()).count(), 2);
+    // the variant: base cap raised, plus its own flag
+    assert!(world.query::<&Name>().iter().any(|(_, n)| n.0 == "Flag"));
+    let caps: Vec<f32> = world.query::<(&Name, &Transform)>().iter().filter(|(_, (n, _))| n.0 == "Cap").map(|(_, (_, t))| t.position.y).collect();
+    assert!(caps.contains(&3.0), "{caps:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn edits_inside_instances_save_as_overrides() {
+    let dir = prefab_fixture("save-overrides");
+    set_track_overrides(true);
+    let scene = r#"{ "version": 1, "entities": [
+        { "id": 1, "name": "G", "prefab": "prefabs/gate.prefab.json", "overrides": [ { "target": [2, 2], "name": "Left Cap" } ] }
+    ] }"#;
+    let (mut world, mut gfx, mut assets) = spawn_text(&dir, scene);
+    // edit: move the right cap, rename the gate root, add a child under the left post
+    world.get::<&mut Transform>(named(&world, "Right Cap")).unwrap().position.y = 5.0;
+    world.get::<&mut Name>(named(&world, "Gate")).unwrap().0 = "Arch".into();
+    let left_post = world.query::<(&Name, &Parent)>().iter().find(|(_, (n, p))| n.0 == "Post" && world.get::<&Name>(p.0).is_ok_and(|x| x.0 == "Left")).map(|(e, _)| e).unwrap();
+    world.spawn((Name("Lantern".into()), Transform::from_position(goat_core::math::Vec3::new(0.0, 0.5, 0.0)), GlobalTransform::default(), Parent(left_post)));
+
+    let reg = registry();
+    let saved = save_world(&world, &assets, &reg);
+    // only the instance and the added lantern are stored
+    assert_eq!(saved.entities.len(), 2, "{}", serde_json::to_string_pretty(&saved).unwrap());
+    let g = &saved.entities[0];
+    let targets: Vec<Vec<u64>> = g.overrides.iter().map(|o| o.target.clone()).collect();
+    assert_eq!(targets, vec![vec![2, 2], vec![1], vec![3, 2]]);
+    assert_eq!(g.overrides[0].name.as_deref(), Some("Left Cap"));
+    assert_eq!(g.overrides[1].name.as_deref(), Some("Arch"));
+    assert_eq!(g.overrides[2].components["Transform"]["position"][1], 5.0);
+    let lantern = &saved.entities[1];
+    assert_eq!((lantern.parent, lantern.parent_target.clone()), (Some(g.id), vec![2, 1]));
+
+    // reload what was saved: the edits come back, and saving again is stable
+    let mut world2 = World::new();
+    spawn_file(&mut world2, &mut gfx, &mut assets, &reg, &saved, "saved", None).unwrap();
+    assert_eq!(local_y(&world2, "Right Cap"), 5.0);
+    assert!(world2.get::<&Name>(named(&world2, "Arch")).is_ok());
+    let lantern_parent = world2.get::<&Parent>(named(&world2, "Lantern")).unwrap().0;
+    assert_eq!(world2.get::<&Name>(lantern_parent).unwrap().0, "Post");
+    let saved2 = save_world(&world2, &assets, &reg);
+    assert_eq!(serde_json::to_string(&saved).unwrap(), serde_json::to_string(&saved2).unwrap());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn variants_refuse_colliding_ids_and_guid_keys_load() {
+    let dir = prefab_fixture("variant-guid");
+    std::fs::write(dir.join("prefabs/bad.prefab.json"), r#"{ "version": 1, "base": "prefabs/post.prefab.json", "entities": [ { "id": 2, "name": "Clash" } ] }"#).unwrap();
+    std::fs::write(dir.join("prefabs/post.prefab.json.meta"), r#"{ "guid": "00112233445566778899aabbccddeeff" }"#).unwrap();
+    let assets = AssetServer::new(AssetIo::new(&dir));
+    assert!(resolve_file(&assets, "prefabs/bad.prefab.json").is_err());
+    let (world, _, _) = spawn_text(&dir, r#"{ "version": 1, "entities": [ { "id": 1, "name": "ByGuid", "prefab": "guid:00112233445566778899aabbccddeeff" } ] }"#);
+    assert!(world.query::<&Name>().iter().any(|(_, n)| n.0 == "Cap"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn newer_versions_are_refused() {
     assert!(parse("x", r#"{ "version": 99, "entities": [] }"#).is_err());

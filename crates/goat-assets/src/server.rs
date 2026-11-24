@@ -101,6 +101,7 @@ impl AssetServer {
 
     /// CPU pixels of a texture file with its import settings applied.
     pub fn texture_data(&self, key: &str) -> Result<TextureData, AssetError> {
+        let key: &str = &self.io.canonical(key);
         if key == "builtin:white" {
             // 8×8 white, 8 pixels per unit by convention: tinted sprites / UI rectangles
             return Ok(TextureData::checker(8, 1, goat_core::Color::WHITE, goat_core::Color::WHITE));
@@ -130,6 +131,7 @@ impl AssetServer {
     }
 
     pub fn texture(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<TextureId, AssetError> {
+        let key: &str = &self.io.canonical(key);
         if let Some(id) = self.textures.get(key) {
             return Ok(*id);
         }
@@ -157,6 +159,7 @@ impl AssetServer {
     /// "pz.png", "nz.png"] }`, relative to the file) or `builtin:sky` (a soft blue sky over a
     /// darker ground, for quick shiny materials).
     pub fn cubemap(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<TextureId, AssetError> {
+        let key: &str = &self.io.canonical(key);
         if let Some(id) = self.textures.get(key) {
             return Ok(*id);
         }
@@ -182,6 +185,7 @@ impl AssetServer {
 
     /// `builtin:default`, a `.mat.json` file, or `<model>#material:<i>`.
     pub fn material(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<MaterialId, AssetError> {
+        let key: &str = &self.io.canonical(key);
         if let Some(id) = self.materials.get(key) {
             return Ok(*id);
         }
@@ -228,6 +232,7 @@ impl AssetServer {
 
     /// `builtin:cube|sphere|plane`, or `<model>#mesh:<mesh>:<primitive>`.
     pub fn mesh(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<MeshId, AssetError> {
+        let key: &str = &self.io.canonical(key);
         if let Some(id) = self.meshes.get(key) {
             return Ok(*id);
         }
@@ -252,6 +257,7 @@ impl AssetServer {
 
     /// Loads a glTF / GLB and uploads its meshes and materials.
     pub fn model(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<&LoadedModel, AssetError> {
+        let key: &str = &self.io.canonical(key);
         let key = file_of(key);
         if !self.models.contains_key(key) {
             let data = load_model(&self.io, key)?;
@@ -289,6 +295,7 @@ impl AssetServer {
     /// Full vertices of a mesh on the CPU (static batching): `builtin:*` or
     /// `<model>#mesh:<mesh>:<primitive>` (re-read from the model file).
     pub fn mesh_data(&self, key: &str) -> Result<MeshData, AssetError> {
+        let key: &str = &self.io.canonical(key);
         match key {
             "builtin:cube" => return Ok(MeshData::cube(1.0)),
             "builtin:sphere" => return Ok(MeshData::sphere(0.5, 16, 24)),
@@ -308,6 +315,7 @@ impl AssetServer {
     /// `<model>#mesh:<mesh>:<primitive>`, or a whole `<model>` (every node's meshes in the
     /// model's space). Model files are read again (their GPU meshes keep no CPU copy).
     pub fn mesh_geometry(&self, key: &str) -> Result<(Vec<goat_core::math::Vec3>, Vec<[u32; 3]>), AssetError> {
+        let key: &str = &self.io.canonical(key);
         use goat_core::math::{Mat4, Vec3};
         let mut points = Vec::new();
         let mut tris = Vec::new();
@@ -369,6 +377,7 @@ impl AssetServer {
 
     /// Spawns a model's nodes as children of an existing entity and tags it [`ModelInstance`].
     pub fn spawn_model_into(&mut self, world: &mut World, gfx: &mut dyn GraphicsBackend, key: &str, root: Entity) -> Result<(), AssetError> {
+        let key: &str = &self.io.canonical(key);
         let fallback = self.material(gfx, "builtin:default")?;
         let model = self.model(gfx, key)?;
         let file = file_of(key).to_string();

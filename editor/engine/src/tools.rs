@@ -155,15 +155,12 @@ impl EditorCore {
                 None => Err("no asset server".into()),
             }
         } else if lower.ends_with(".prefab.json") {
-            let text = self.io.read_string(key).map_err(|e| e.to_string())?;
-            let file = goat_scene::parse(key, &text).map_err(|e| e.to_string())?;
             let registry = self.edit.resources.take::<SceneRegistry>().unwrap_or_default();
             let r = match self.edit.resources.get_mut::<AssetServer>() {
-                Some(a) => goat_scene::spawn_file(&mut self.edit.world, gfx, a, &registry, &file, key, Some(root)).map(|_| ()).map_err(|e| e.to_string()),
+                Some(a) => goat_scene::spawn_prefab_instance(&mut self.edit.world, gfx, a, &registry, key, root).map_err(|e| e.to_string()),
                 None => Err("no asset server".into()),
             };
             self.edit.resources.put_back(registry);
-            let _ = self.edit.world.insert_one(root, goat_scene::PrefabInstance { key: key.into() });
             r
         } else {
             Err(format!("{key}: only models and prefabs can be dropped into a scene"))

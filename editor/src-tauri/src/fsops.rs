@@ -11,6 +11,45 @@ use serde::Serialize;
 use serde_json::Value;
 
 pub const SIDECAR: &str = ".import.json";
+/// `<file>.meta`: `{ "guid": "<32 hex>" }`, the file's identity (kept through renames / moves).
+pub const META: &str = goat_assets::META_EXT;
+
+/// Files that travel with an asset and are hidden in the Asset panel.
+fn companions(path: &Path) -> [PathBuf; 2] {
+    [PathBuf::from(format!("{}{SIDECAR}", path.display())), PathBuf::from(format!("{}{META}", path.display()))]
+}
+
+fn is_companion(name: &str) -> bool {
+    name.ends_with(SIDECAR) || name.ends_with(META)
+}
+
+/// A new random GUID (32 hex chars).
+pub fn new_guid() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let half = |salt: u64| {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u128(nanos);
+        h.write_u64(n);
+        h.write_u64(salt);
+        h.write_u32(std::process::id());
+        h.finish()
+    };
+    format!("{:016x}{:016x}", half(1), half(2))
+}
+
+/// What [`Project::sync_guids`] found.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct GuidSync {
+    /// Files moved / renamed outside the editor: (old key, new key); references were updated.
+    pub moved: Vec<(String, String)>,
+    /// Files that got a new `.meta`.
+    pub created: usize,
+    /// `.meta` files whose asset is gone (deleted).
+    pub orphans_removed: usize,
+}
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Entry {
@@ -95,7 +134,7 @@ impl Project {
         for e in std::fs::read_dir(self.abs(dir)).map_err(err)? {
             let e = e.map_err(err)?;
             let name = e.file_name().to_string_lossy().into_owned();
-            if name.ends_with(SIDECAR) || name.starts_with('.') {
+            if is_companion(&name) || name.starts_with('.') {
                 continue;
             }
             let md = e.metadata().map_err(err)?;
@@ -201,9 +240,25 @@ impl Project {
     fn rename_path(&self, from: &str, to: &str) -> Result<(), String> {
         let (a, b) = (self.abs(from), self.abs(to));
         std::fs::rename(&a, &b).map_err(|e| format!("{from}: {e}"))?;
-        let sidecar = PathBuf::from(format!("{}{SIDECAR}", a.display()));
-        if sidecar.exists() {
-            std::fs::rename(&sidecar, format!("{}{SIDECAR}", b.display())).map_err(err)?;
+        for (src, dst) in companions(&a).into_iter().zip(companions(&b)) {
+            if src.exists() {
+                std::fs::rename(&src, dst).map_err(err)?;
+            }
+        }
+        // keep the GUID index in step (so the next sync doesn't see a move)
+        let mut index = self.load_index();
+        let mut changed = false;
+        for v in index.values_mut() {
+            if v == from {
+                *v = to.to_string();
+                changed = true;
+            } else if let Some(rest) = v.strip_prefix(&format!("{from}/")) {
+                *v = format!("{to}/{rest}");
+                changed = true;
+            }
+        }
+        if changed {
+            self.save_index(&index);
         }
         Ok(())
     }
@@ -221,6 +276,8 @@ impl Project {
             }
             out.push(key);
         }
+        // copies are new assets: new GUIDs (also for .meta files copied inside folders)
+        self.sync_guids()?;
         Ok(out)
     }
 
@@ -238,13 +295,144 @@ impl Project {
         let mut paths = Vec::new();
         for k in keys {
             let p = self.abs(k);
-            let sidecar = PathBuf::from(format!("{}{SIDECAR}", p.display()));
-            if sidecar.exists() {
-                paths.push(sidecar);
-            }
+            paths.extend(companions(&p).into_iter().filter(|c| c.exists()));
             paths.push(p);
         }
         trash::delete_all(paths).map_err(err)
+    }
+
+    // ------------------------------------------------------------------ GUIDs
+
+    /// The GUID index of the last sync (`<project>/.goat/guids.json`: guid → key). Local editor
+    /// state, like Unity's Library folder.
+    fn index_path(&self) -> PathBuf {
+        self.assets.parent().unwrap_or(&self.assets).join(".goat").join("guids.json")
+    }
+
+    fn load_index(&self) -> std::collections::BTreeMap<String, String> {
+        std::fs::read_to_string(self.index_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    }
+
+    fn save_index(&self, index: &std::collections::BTreeMap<String, String>) {
+        let p = self.index_path();
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let text = serde_json::to_string_pretty(index).unwrap_or_default();
+        if std::fs::read_to_string(&p).ok().as_deref() != Some(text.as_str()) {
+            let _ = std::fs::write(p, text);
+        }
+    }
+
+    /// The GUID of an asset (from its `.meta`).
+    pub fn guid_of(&self, key: &str) -> Option<String> {
+        std::fs::read_to_string(format!("{}{META}", self.abs(key).display())).ok().and_then(|t| goat_assets::parse_meta_guid(&t))
+    }
+
+    fn write_meta(&self, key: &str, guid: &str) -> Result<(), String> {
+        std::fs::write(format!("{}{META}", self.abs(key).display()), format!("{{ \"guid\": \"{guid}\" }}\n")).map_err(err)
+    }
+
+    /// Brings the `.meta` files and the GUID index up to date, like Unity's asset refresh:
+    /// - files without a `.meta` get one (a file moved outside the editor *without* its `.meta`
+    ///   takes the orphaned `.meta` of the same file name, when exactly one matches);
+    /// - a `.meta` whose GUID another file already has (copied outside the editor) gets a new GUID;
+    /// - `.meta` files without their asset are removed;
+    /// - files whose GUID now sits at another path were moved / renamed outside the editor:
+    ///   every reference to the old key is rewritten ([`Project::update_references`]).
+    pub fn sync_guids(&self) -> Result<GuidSync, String> {
+        let mut out = GuidSync::default();
+        let old_index = self.load_index();
+        let old_path_of: std::collections::HashMap<&str, &str> = old_index.iter().map(|(g, k)| (g.as_str(), k.as_str())).collect();
+        // every file + every .meta (keys), hidden folders skipped
+        let mut files = Vec::new();
+        let mut metas = Vec::new();
+        fn walk(p: &Project, dir: &str, files: &mut Vec<String>, metas: &mut Vec<String>) {
+            let Ok(rd) = std::fs::read_dir(p.abs(dir)) else { return };
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') {
+                    continue;
+                }
+                let key = if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") };
+                if e.path().is_dir() {
+                    walk(p, &key, files, metas);
+                } else if name.ends_with(META) {
+                    metas.push(key);
+                } else if !name.ends_with(SIDECAR) {
+                    files.push(key);
+                }
+            }
+        }
+        walk(self, "", &mut files, &mut metas);
+        files.sort();
+        let file_set: std::collections::HashSet<&str> = files.iter().map(String::as_str).collect();
+        // orphaned metas, by file name (to re-attach moved files)
+        let mut orphans: Vec<(String, String)> = Vec::new(); // (meta key, its file name)
+        for m in &metas {
+            let file = &m[..m.len() - META.len()];
+            if !file_set.contains(file) {
+                orphans.push((m.clone(), file.rsplit('/').next().unwrap_or(file).to_string()));
+            }
+        }
+        let mut index = std::collections::BTreeMap::new();
+        for key in &files {
+            let mut guid = self.guid_of(key);
+            if guid.is_none() {
+                let name = key.rsplit('/').next().unwrap_or(key);
+                let matches: Vec<usize> = orphans.iter().enumerate().filter(|(_, (_, n))| n == name).map(|(i, _)| i).collect();
+                if matches.len() == 1 {
+                    let (meta, _) = orphans.remove(matches[0]);
+                    let target = format!("{}{META}", self.abs(key).display());
+                    std::fs::rename(self.abs(&meta), &target).map_err(err)?;
+                    guid = self.guid_of(key);
+                }
+            }
+            let taken = guid.as_ref().is_some_and(|g| index.contains_key(g));
+            let guid = match guid {
+                // a duplicate GUID: the copy that isn't where the index had it gets a new one
+                Some(g) if taken => {
+                    let mine_by_index = old_path_of.get(g.as_str()) == Some(&key.as_str());
+                    if mine_by_index {
+                        // the earlier holder is the copy: swap
+                        let other: String = index.remove(&g).unwrap();
+                        let fresh = new_guid();
+                        self.write_meta(&other, &fresh)?;
+                        index.insert(fresh, other);
+                        g
+                    } else {
+                        let fresh = new_guid();
+                        self.write_meta(key, &fresh)?;
+                        out.created += 1;
+                        fresh
+                    }
+                }
+                Some(g) => g,
+                None => {
+                    let fresh = new_guid();
+                    self.write_meta(key, &fresh)?;
+                    out.created += 1;
+                    fresh
+                }
+            };
+            index.insert(guid, key.clone());
+        }
+        for (meta, _) in orphans {
+            std::fs::remove_file(self.abs(&meta)).map_err(err)?;
+            out.orphans_removed += 1;
+        }
+        for (g, new_key) in &index {
+            if let Some(old) = old_path_of.get(g.as_str()) {
+                if *old != new_key && !file_set.contains(*old) {
+                    out.moved.push((old.to_string(), new_key.clone()));
+                }
+            }
+        }
+        if !out.moved.is_empty() {
+            self.update_references(&out.moved)?;
+        }
+        self.save_index(&index);
+        Ok(out)
     }
 
     /// Rewrites references after `(old key, new key)` renames (files or folders):
@@ -360,8 +548,10 @@ mod tests {
     use super::*;
 
     fn project(name: &str) -> Project {
-        let dir = std::env::temp_dir().join(format!("goat-editor-fs-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let base = std::env::temp_dir().join(format!("goat-editor-fs-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // <project>/assets: the GUID index goes to <project>/.goat
+        let dir = base.join("assets");
         for d in ["textures", "materials", "prefabs", "models"] {
             std::fs::create_dir_all(dir.join(d)).unwrap();
         }
@@ -422,5 +612,51 @@ mod tests {
         assert!(p.abs("textures/a 1.png.import.json").exists());
         assert_eq!(p.free_key("textures", "a 1.png"), "textures/a 2.png");
         assert_eq!(relative_key("a/b/c.mat.json", "a/x/y.png"), "../x/y.png");
+    }
+
+    #[test]
+    fn guids_follow_files_moved_outside_the_editor() {
+        let p = project("guid");
+        let first = p.sync_guids().unwrap();
+        assert_eq!((first.created, first.moved.len()), (4, 0));
+        let guid = p.guid_of("models/m.glb").unwrap();
+        assert_eq!(guid.len(), 32);
+        assert!(p.list("models").unwrap().iter().all(|e| !e.name.ends_with(".meta")));
+        assert_eq!(p.sync_guids().unwrap(), GuidSync::default());
+
+        // renamed in the file manager together with its .meta
+        std::fs::rename(p.abs("models/m.glb"), p.abs("models/robot.glb")).unwrap();
+        std::fs::rename(p.abs("models/m.glb.meta"), p.abs("models/robot.glb.meta")).unwrap();
+        let s = p.sync_guids().unwrap();
+        assert_eq!(s.moved, vec![("models/m.glb".to_string(), "models/robot.glb".to_string())]);
+        let prefab = read(&p, "prefabs/p.prefab.json");
+        assert_eq!(prefab["entities"][0]["components"]["MeshRenderer"]["mesh"], "models/robot.glb#mesh:0:0");
+
+        // moved alone (its .meta left behind): the orphaned .meta of the same name re-attaches
+        std::fs::rename(p.abs("models/robot.glb"), p.abs("prefabs/robot.glb")).unwrap();
+        let s = p.sync_guids().unwrap();
+        assert_eq!((s.moved.len(), s.created, s.orphans_removed), (1, 0, 0));
+        assert_eq!(p.guid_of("prefabs/robot.glb").as_deref(), Some(guid.as_str()));
+        assert_eq!(read(&p, "prefabs/p.prefab.json")["entities"][0]["model"], "prefabs/robot.glb");
+
+        // copied with its .meta: the copy gets a new GUID, the original keeps its own
+        std::fs::copy(p.abs("prefabs/robot.glb"), p.abs("models/copy.glb")).unwrap();
+        std::fs::copy(p.abs("prefabs/robot.glb.meta"), p.abs("models/copy.glb.meta")).unwrap();
+        let s = p.sync_guids().unwrap();
+        assert!(s.moved.is_empty());
+        assert_eq!(p.guid_of("prefabs/robot.glb").as_deref(), Some(guid.as_str()));
+        assert_ne!(p.guid_of("models/copy.glb").as_deref(), Some(guid.as_str()));
+
+        // deleted outside: its .meta goes too
+        std::fs::remove_file(p.abs("models/copy.glb")).unwrap();
+        assert_eq!(p.sync_guids().unwrap().orphans_removed, 1);
+
+        // renames in the editor keep the GUID and the index (no "move" seen afterwards)
+        p.rename("prefabs/robot.glb", "bot.glb").unwrap();
+        assert_eq!(p.guid_of("prefabs/bot.glb").as_deref(), Some(guid.as_str()));
+        assert!(p.sync_guids().unwrap().moved.is_empty());
+        // duplicates in the editor get their own GUID
+        let d = p.duplicate(&["prefabs/bot.glb".into()]).unwrap();
+        assert_ne!(p.guid_of(&d[0]), p.guid_of("prefabs/bot.glb"));
     }
 }

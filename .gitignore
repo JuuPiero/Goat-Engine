@@ -4,3 +4,5 @@ target/
 *.elf
 /out/
 goat.local.toml
+# editor-local state (GUID index...), like Unity's Library
+.goat/

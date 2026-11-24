@@ -60,16 +60,101 @@ pub fn default_root() -> PathBuf {
 }
 
 /// Reads files under a root folder.
+///
+/// Keys may also name a file by its GUID, `guid:<32 hex>` (optionally `#sub-asset`): every
+/// asset has a `<file>.meta` (`{ "guid": "..." }`, written by the editor) and the GUID stays
+/// the same when the file is renamed or moved. The GUID index is built on first use by scanning
+/// the `.meta` files (on disk and in memory).
 #[derive(Clone, Debug, Default)]
 pub struct AssetIo {
     pub root: PathBuf,
     /// Files served from memory first (the web / the editor's engine, which has no file system).
     pub memory: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<Vec<u8>>>>>,
+    guids: std::sync::Arc<std::sync::RwLock<Option<std::collections::HashMap<String, String>>>>,
+}
+
+/// Extension of the GUID files next to assets.
+pub const META_EXT: &str = ".meta";
+
+/// The GUID of a `.meta` file's text.
+pub fn parse_meta_guid(text: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    let g = v.get("guid")?.as_str()?.to_ascii_lowercase();
+    (g.len() == 32 && g.bytes().all(|b| b.is_ascii_hexdigit())).then_some(g)
 }
 
 impl AssetIo {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        AssetIo { root: root.into(), memory: Default::default() }
+        AssetIo { root: root.into(), ..Default::default() }
+    }
+
+    /// The path key of `key`: `guid:<hex>[#sub]` → `dir/file.ext[#sub]`; other keys unchanged.
+    /// An unknown GUID stays as is (reading it then fails with its name).
+    pub fn canonical(&self, key: &str) -> String {
+        let Some(rest) = key.strip_prefix("guid:") else { return key.to_string() };
+        let (guid, sub) = match rest.split_once('#') {
+            Some((g, s)) => (g, Some(s)),
+            None => (rest, None),
+        };
+        match self.path_of_guid(guid) {
+            Some(path) => match sub {
+                Some(s) => format!("{path}#{s}"),
+                None => path,
+            },
+            None => key.to_string(),
+        }
+    }
+
+    /// The file key of a GUID.
+    pub fn path_of_guid(&self, guid: &str) -> Option<String> {
+        let guid = guid.to_ascii_lowercase();
+        if let Some(found) = self.guids.read().ok().and_then(|g| g.as_ref().map(|m| m.get(&guid).cloned())) {
+            if found.is_some() {
+                return found;
+            }
+        }
+        // (re)scan: files may have been added since
+        let index = self.scan_guids();
+        let found = index.get(&guid).cloned();
+        if let Ok(mut g) = self.guids.write() {
+            *g = Some(index);
+        }
+        found
+    }
+
+    /// The GUID of a file key (its `.meta`), if it has one.
+    pub fn guid_of(&self, key: &str) -> Option<String> {
+        self.read_string(&format!("{}{META_EXT}", file_of(key))).ok().and_then(|t| parse_meta_guid(&t))
+    }
+
+    fn scan_guids(&self) -> std::collections::HashMap<String, String> {
+        let mut out = std::collections::HashMap::new();
+        if let Ok(m) = self.memory.read() {
+            for (k, v) in m.iter() {
+                if let Some(file) = k.strip_suffix(META_EXT) {
+                    if let Some(g) = std::str::from_utf8(v).ok().and_then(parse_meta_guid) {
+                        out.insert(g, file.to_string());
+                    }
+                }
+            }
+        }
+        fn walk(dir: &Path, prefix: &str, out: &mut std::collections::HashMap<String, String>) {
+            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let key = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, &key, out);
+                } else if let Some(file) = key.strip_suffix(META_EXT) {
+                    if let Some(g) = std::fs::read_to_string(&p).ok().and_then(|t| parse_meta_guid(&t)) {
+                        out.entry(g).or_insert_with(|| file.to_string());
+                    }
+                }
+            }
+        }
+        walk(&self.root, "", &mut out);
+        out
     }
     /// Adds / replaces a file served from memory.
     pub fn put(&self, key: &str, bytes: Vec<u8>) {
@@ -86,6 +171,13 @@ impl AssetIo {
         p
     }
     pub fn read(&self, key: &str) -> Result<Vec<u8>, AssetError> {
+        if key.starts_with("guid:") {
+            let path = self.canonical(key);
+            if path.starts_with("guid:") {
+                return Err(AssetError::Format(key.to_string(), "no asset has this GUID".into()));
+            }
+            return self.read(&path);
+        }
         if let Some(b) = self.memory.read().ok().and_then(|m| m.get(key).cloned()) {
             return Ok(b.as_ref().clone());
         }
@@ -98,12 +190,20 @@ impl AssetIo {
         Ok(text.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(text))
     }
     pub fn exists(&self, key: &str) -> bool {
+        if key.starts_with("guid:") {
+            let path = self.canonical(key);
+            return !path.starts_with("guid:") && self.exists(&path);
+        }
         self.memory.read().is_ok_and(|m| m.contains_key(key)) || self.path(key).is_file()
     }
 }
 
 /// `dir/of/key` + a relative reference (`../textures/a.png`) → a key.
 pub fn resolve_relative(base_key: &str, reference: &str) -> String {
+    // GUID / built-in references are absolute
+    if reference.starts_with("guid:") || reference.starts_with("builtin:") {
+        return reference.to_string();
+    }
     let mut parts: Vec<&str> = base_key.split('/').collect();
     parts.pop(); // the file name
     for part in reference.split('/') {
@@ -134,5 +234,24 @@ mod tests {
         assert_eq!(super::resolve_relative("models/robot.gltf", "robot.bin"), "models/robot.bin");
         assert_eq!(super::resolve_relative("models/robot.gltf", "../textures/a.png"), "textures/a.png");
         assert_eq!(super::file_of("models/a.glb#mesh:0:1"), "models/a.glb");
+    }
+
+    #[test]
+    fn guid_keys_resolve_through_meta_files() {
+        let io = super::AssetIo::new("does-not-exist");
+        io.put("textures/a.png", vec![1, 2, 3]);
+        io.put("textures/a.png.meta", br#"{ "guid": "0123456789ABCDEF0123456789abcdef" }"#.to_vec());
+        let g = "guid:0123456789abcdef0123456789abcdef";
+        assert_eq!(io.canonical(g), "textures/a.png");
+        assert_eq!(io.canonical(&format!("{g}#mesh:0")), "textures/a.png#mesh:0");
+        assert_eq!(io.read(g).unwrap(), vec![1, 2, 3]);
+        assert!(io.exists(g));
+        assert_eq!(io.guid_of("textures/a.png#sub").as_deref(), Some("0123456789abcdef0123456789abcdef"));
+        // files added later are found by a rescan
+        io.put("b.txt", vec![9]);
+        io.put("b.txt.meta", br#"{"guid":"ffffffffffffffffffffffffffffffff"}"#.to_vec());
+        assert_eq!(io.read("guid:ffffffffffffffffffffffffffffffff").unwrap(), vec![9]);
+        assert!(io.read("guid:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").is_err());
+        assert_eq!(super::parse_meta_guid("{\"guid\": \"short\"}"), None);
     }
 }

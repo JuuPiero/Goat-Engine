@@ -115,6 +115,8 @@ impl EditorCore {
     pub fn new(io: AssetIo) -> Self {
         let mut edit = Engine::new(EditGame);
         edit.editing = true;
+        // edits of objects inside prefab instances are saved as overrides
+        goat_scene::set_track_overrides(true);
         edit.resources.insert(AssetServer::new(io.clone()));
         let camera = edit.world.spawn((
             Name("Editor Camera".into()),

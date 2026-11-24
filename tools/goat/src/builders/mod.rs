@@ -88,6 +88,11 @@ pub(crate) fn stage_assets(config: &Config, dest: &Path) -> Result<(), String> {
             let js = goat_script_js::compile_typescript(&key, &text).map_err(|e| format!("{key}: {e}"))?;
             std::fs::write(f.with_extension("js"), js).map_err(|e| format!("{}: {e}", f.display()))?;
             std::fs::remove_file(f).map_err(|e| e.to_string())?;
+            // the script keeps its GUID under its built name
+            let meta = std::path::PathBuf::from(format!("{name}.meta"));
+            if meta.is_file() {
+                let _ = std::fs::rename(&meta, format!("{}.meta", f.with_extension("js").display()));
+            }
             compiled += 1;
         } else if name.ends_with(".cs") || name.ends_with(".d.ts") {
             std::fs::remove_file(f).map_err(|e| e.to_string())?;

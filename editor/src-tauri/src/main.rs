@@ -216,15 +216,44 @@ fn csharp_worker(app: tauri::AppHandle, root: PathBuf) -> std::sync::mpsc::Sende
     tx
 }
 
+/// Keeps `.meta` files / the GUID index in step with the disk (debounced), reporting files
+/// moved outside the editor (their references are rewritten) to the Console.
+fn guid_worker(app: tauri::AppHandle, root: PathBuf) -> std::sync::mpsc::Sender<()> {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let project = Project::new(root);
+        let run = |app: &tauri::AppHandle| match project.sync_guids() {
+            Ok(s) => {
+                for (from, to) in &s.moved {
+                    let _ = app.emit("script-log", ScriptLog { level: "info", text: format!("Assets: {from} moved to {to} outside the editor — references updated") });
+                }
+            }
+            Err(e) => {
+                let _ = app.emit("script-log", ScriptLog { level: "warn", text: format!("Assets: GUID sync failed: {e}") });
+            }
+        };
+        run(&app);
+        while rx.recv().is_ok() {
+            while rx.recv_timeout(std::time::Duration::from_millis(400)).is_ok() {}
+            run(&app);
+        }
+    });
+    tx
+}
+
 fn watch(app: tauri::AppHandle, root: PathBuf) -> Option<notify::RecommendedWatcher> {
     use notify::{EventKind, RecursiveMode, Watcher};
     let cs = csharp_worker(app.clone(), root.clone());
+    let guids = guid_worker(app.clone(), root.clone());
     let mut w = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(ev) = res {
             if matches!(ev.kind, EventKind::Create(_) | EventKind::Modify(_)) {
                 for p in ev.paths.iter().filter(|p| p.extension().is_some_and(|e| e == "cs")) {
                     let _ = cs.send(p.clone());
                 }
+            }
+            if matches!(ev.kind, EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_))) {
+                let _ = guids.send(());
             }
             let _ = app.emit("assets-changed", ());
         }
