@@ -15,7 +15,7 @@ goat-assets.workspace = true
 goat-scene.workspace = true
 serde.workspace = true
 goat-text = { workspace = true, features = ["scene"] }
-goat-physics = { workspace = true, features = ["scene", "script"] }
+goat-physics = { workspace = true, features = ["scene", "script", "render"] }
 goat-physics2d = { workspace = true, features = ["scene", "script"] }
 goat-input.workspace = true
 goat-script.workspace = true

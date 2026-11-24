@@ -20,6 +20,7 @@ pub fn plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(goat_sprites::SpritePlugin::default()),
         Box::new(goat_text::TextPlugin::default()),
         Box::new(goat_physics::PhysicsPlugin),
+        Box::new(goat_physics::BlobShadowPlugin::default()),
         Box::new(goat_physics2d::Physics2DPlugin),
         Box::new(goat_audio::AudioPlugin::default()),
         Box::new(goat_animation::AnimationPlugin::default()),
@@ -133,6 +134,8 @@ impl Behaviour for BallSpawner {
             MeshRenderer::new(self.mesh, material),
             goat_physics::RigidBody::dynamic(),
             goat_physics::Collider::new(goat_physics::Shape::Sphere(0.5)).with_restitution(0.6),
+            // a soft shadow under each falling ball
+            goat_physics::BlobShadow { size: 1.1, ..Default::default() },
         ));
         self.balls.push(e);
     }
@@ -315,6 +318,7 @@ impl Game for HelloGame {
             Name("Ball".into()),
             Transform::from_position(Vec3::new(2.2, 0.8, -0.8)),
             MeshRenderer::new(sphere, shiny),
+            goat_physics::BlobShadow { size: 1.3, opacity: 0.7, ..Default::default() },
             Scripts::new().with(Bob { base: 0.0, phase: 0.0 }),
         ));
         world.spawn((

@@ -15,12 +15,19 @@ serde.workspace = true
 goat-scene = { workspace = true, optional = true }
 goat-script = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+goat-gfx = { workspace = true, optional = true }
+goat-sprites = { workspace = true, optional = true }
 
 [features]
 # RigidBody / Collider in scene files
 scene = ["dep:goat-scene"]
 # Physics.* / Rigidbody.* / CharacterController.* calls for scripts
 script = ["dep:goat-script", "dep:serde_json"]
+# BlobShadow (a soft disc on the ground under objects)
+render = ["dep:goat-gfx", "dep:goat-sprites"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 rapier3d = { version = "0.22", features = ["wasm-bindgen"] }
+
+[dev-dependencies]
+goat-gfx.workspace = true

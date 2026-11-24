@@ -2369,9 +2369,11 @@ version = "0.1.0"
 dependencies = [
  "goat-assets",
  "goat-core",
+ "goat-gfx",
  "goat-runtime",
  "goat-scene",
  "goat-script",
+ "goat-sprites",
  "hecs",
  "rapier3d",
  "serde",

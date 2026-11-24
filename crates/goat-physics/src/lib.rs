@@ -17,6 +17,8 @@
 //!
 //! Collider sizes are scaled by the entity's world scale when the body is created.
 
+#[cfg(feature = "render")]
+pub mod blob;
 mod character;
 mod joint;
 #[cfg(feature = "script")]
@@ -24,6 +26,8 @@ pub mod script;
 
 pub use character::{CharacterController, CollisionFlags};
 pub use joint::{Joint, JointKind};
+#[cfg(feature = "render")]
+pub use blob::{BlobShadow, BlobShadowPlugin};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -309,6 +313,23 @@ impl Physics {
     /// The first collider hit by a ray (`direction` needn't be normalized).
     pub fn raycast(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Option<RayHit> {
         self.raycast_layers(origin, direction, max_distance, u32::MAX)
+    }
+
+    /// A raycast that ignores `exclude`'s own colliders (rays cast from inside an object).
+    pub fn raycast_excluding(&self, origin: Vec3, direction: Vec3, max_distance: f32, mask: u32, exclude: Entity) -> Option<RayHit> {
+        let dir = direction.normalize_or_zero();
+        if dir == Vec3::ZERO {
+            return None;
+        }
+        let ray = Ray::new(point![origin.x, origin.y, origin.z], v(dir));
+        let mut filter = QueryFilter::default().exclude_sensors().groups(InteractionGroups::new(Group::ALL, Group::from_bits_truncate(mask)));
+        if let Some(t) = self.tracked.get(&exclude) {
+            filter = filter.exclude_rigid_body(t.body);
+        }
+        let (handle, hit) = self.queries.cast_ray_and_get_normal(&self.bodies, &self.colliders, &ray, max_distance, true, filter)?;
+        let entity = entity_of(self.colliders.get(handle)?)?;
+        let toi = hit.time_of_impact;
+        Some(RayHit { entity, point: origin + dir * toi, normal: gv(&hit.normal), distance: toi })
     }
 
     /// A raycast against the layers in `mask` only (Unity's layerMask).

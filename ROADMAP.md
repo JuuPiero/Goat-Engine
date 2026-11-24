@@ -26,7 +26,8 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ Khử răng cưa khi bật 3D: mỗi mắt render 480×400 (depth 16-bit) rồi display transfer thu 2×1; tất cả target cấp sẵn lúc khởi động (VRAM 6 MB vừa đủ)
 - ✅ Alpha test cho lá cây / rào (`alpha_cutoff`), desktop thêm dither Bayer 4×4 (`alpha_dither`) như alpha-to-coverage giả
 - ✅ Ánh sáng nướng vào vertex cho vật tĩnh (`StaticBatching { bake_lighting }`: ambient / bán cầu + mọi đèn, vẽ unlit) + fragment lighting cho vật động. Lightmap UV2 chưa có.
-- ⬜ Bóng: blob shadow (quad + texture), shadow map bằng tính năng shadow của PICA cho 1 đèn
+- ✅ Bóng blob (`BlobShadow`, goat-physics feature `render`: raycast xuống đất, theo độ dốc, nhỏ và nhạt dần theo độ cao)
+- ⬜ Shadow map bằng tính năng shadow của PICA cho 1 đèn
 - ⬜ Viền nhân vật (toon outline bằng back-face extrude), toon shading bằng LUT D0/D1
 - ⬜ Rim light / fresnel bằng LUT fresnel của PICA, phản chiếu cubemap
 - ⬜ Procedural texture (proctex) cho nước / lửa, fog gas cho khói
