@@ -23,8 +23,8 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 
 **Đẹp mà vẫn nhanh trên 3DS** (theo yêu cầu, làm dần):
 - ✅ SSAA 2×2 khi tắt 3D (render 800×480, thu bằng display transfer — không tốn shader)
-- ⬜ Khử răng cưa khi bật 3D: MSAA-lite bằng display transfer 2×1 mỗi mắt nếu đủ VRAM, hoặc FXAA-lite trên màn dưới
-- ⬜ Alpha-to-coverage giả cho lá cây / rào (alpha test + dither)
+- ✅ Khử răng cưa khi bật 3D: mỗi mắt render 480×400 (depth 16-bit) rồi display transfer thu 2×1; tất cả target cấp sẵn lúc khởi động (VRAM 6 MB vừa đủ)
+- ✅ Alpha test cho lá cây / rào (`alpha_cutoff`), desktop thêm dither Bayer 4×4 (`alpha_dither`) như alpha-to-coverage giả
 - ⬜ Lightmap / vertex lighting nướng sẵn (bake trên PC) + fragment lighting cho vật động
 - ⬜ Bóng: blob shadow (quad + texture), shadow map bằng tính năng shadow của PICA cho 1 đèn
 - ⬜ Viền nhân vật (toon outline bằng back-face extrude), toon shading bằng LUT D0/D1

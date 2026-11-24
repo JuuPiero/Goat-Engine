@@ -170,6 +170,12 @@ pub struct MaterialDesc {
     pub env_map: Option<TextureId>,
     /// 0 = no reflection, 1 = a mirror (the reflection replaces the lit color).
     pub reflectivity: f32,
+    /// Alpha test: pixels with alpha below this are discarded (leaves, fences, hair cards);
+    /// 0 = off. Works with opaque blending: no sorting, depth written.
+    pub alpha_cutoff: f32,
+    /// With `alpha_cutoff`: a 4×4 ordered dither around the cutoff for softer edges (fake
+    /// alpha-to-coverage). Desktop only; the 3DS keeps the hard cut.
+    pub alpha_dither: bool,
     pub blend: BlendMode,
     pub cull: CullMode,
     pub depth_write: bool,
@@ -191,6 +197,8 @@ impl Default for MaterialDesc {
             emissive_texture: None,
             env_map: None,
             reflectivity: 0.0,
+            alpha_cutoff: 0.0,
+            alpha_dither: false,
             blend: BlendMode::Opaque,
             cull: CullMode::Back,
             depth_write: true,

@@ -263,6 +263,20 @@ impl Game for HelloGame {
         let marker = gfx.create_material(&MaterialDesc { texture: Some(marker_tex), lighting: goat_runtime::gfx::LightingModel::Unlit, ..Default::default() }).expect("material");
         let glass = gfx.create_material(&MaterialDesc { base_color: Color::rgba(0.4, 1.0, 0.6, 0.55), blend: BlendMode::Alpha, depth_write: false, ..Default::default() }).expect("material");
 
+        // a lattice fence: a texture with round holes, cut out by the alpha test (dithered on desktop)
+        let fence_tex = {
+            let n = 64u32;
+            let rgba: Vec<u8> = (0..n * n)
+                .flat_map(|i| {
+                    let (x, y) = ((i % n) as f32 % 16.0 - 7.5, (i / n) as f32 % 16.0 - 7.5);
+                    let d = (x * x + y * y).sqrt();
+                    let a = ((d - 4.5) / 2.0).clamp(0.0, 1.0);
+                    [120, 84, 52, (a * 255.0) as u8]
+                })
+                .collect();
+            gfx.create_texture(&TextureData { width: n, height: n, rgba, filter: goat_runtime::gfx::Filter::Linear, wrap: goat_runtime::gfx::Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8 }).expect("texture")
+        };
+        let fence = gfx.create_material(&MaterialDesc { texture: Some(fence_tex), alpha_cutoff: 0.5, alpha_dither: true, cull: goat_runtime::gfx::CullMode::None, specular: Color::BLACK, ..Default::default() }).expect("material");
         let world = &mut *ctx.world;
         let sky = Color::hex(0x1d2330);
         world.spawn((
@@ -290,6 +304,7 @@ impl Game for HelloGame {
             MeshRenderer::new(cube, marker),
         ));
         world.spawn((Name("Ground".into()), Transform::default(), MeshRenderer::new(plane, ground)));
+        world.spawn((Name("Fence".into()), Transform::from_position(Vec3::new(-1.5, 0.6, 1.6)).with_scale(Vec3::new(2.4, 1.2, 0.04)), MeshRenderer::new(cube, fence)));
         world.spawn((
             Name("Crate".into()),
             Transform::from_position(Vec3::new(0.0, 0.7, 0.0)).with_scale(Vec3::splat(1.2)),

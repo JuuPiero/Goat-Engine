@@ -802,7 +802,7 @@ impl GraphicsBackend for WgpuBackend {
                     base_color: c4(d.base_color, lin),
                     specular: { let s = c4(d.specular, lin); [s[0], s[1], s[2], d.shininess.max(1.0)] },
                     emissive: c4(d.emissive, lin),
-                    flags: [if d.lighting == LightingModel::Lit { 1.0 } else { 0.0 }, if d.fog { 1.0 } else { 0.0 }, if d.env_map.is_some() { d.reflectivity } else { 0.0 }, 0.0],
+                    flags: [if d.lighting == LightingModel::Lit { 1.0 } else { 0.0 }, if d.fog { 1.0 } else { 0.0 }, if d.env_map.is_some() { d.reflectivity } else { 0.0 }, if d.alpha_dither { -d.alpha_cutoff } else { d.alpha_cutoff }],
                 };
                 objects.push((it.mesh, it.material, put(bytemuck::bytes_of(&ou))));
             }

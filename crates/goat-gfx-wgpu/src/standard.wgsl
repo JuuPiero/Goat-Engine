@@ -27,7 +27,7 @@ struct Object {
     base_color: vec4<f32>,
     specular: vec4<f32>,    // rgb, w = shininess
     emissive: vec4<f32>,
-    flags: vec4<f32>,       // x = lit (1/0), y = fogged (1/0), z = reflectivity
+    flags: vec4<f32>,       // x = lit (1/0), y = fogged (1/0), z = reflectivity, w = alpha cutoff (< 0: dithered)
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -72,9 +72,28 @@ fn attenuation(d: f32, range: f32) -> f32 {
     return w * w;
 }
 
+// 4×4 Bayer thresholds (0..1)
+fn bayer(p: vec2<f32>) -> f32 {
+    let m = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    let x = u32(p.x) % 4u;
+    let y = u32(p.y) % 4u;
+    return (m[y * 4u + x] + 0.5) / 16.0;
+}
+
 @fragment
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     let albedo = textureSample(base_tex, base_sampler, i.uv) * i.color * object.base_color;
+    // alpha test (dithered: the cutoff spreads over ±0.25 with a screen pattern)
+    let cutoff = abs(object.flags.w);
+    if (cutoff > 0.0) {
+        var c = cutoff;
+        if (object.flags.w < 0.0) {
+            c = cutoff + (bayer(i.clip.xy) - 0.5) * 0.5;
+        }
+        if (albedo.a < c) {
+            discard;
+        }
+    }
     var rgb = albedo.rgb;
     if (object.flags.x > 0.5) {
         let n = normalize(i.normal);

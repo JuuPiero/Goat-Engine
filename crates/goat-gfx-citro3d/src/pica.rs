@@ -633,6 +633,12 @@ impl Citro3dBackend {
                 BlendMode::Additive => (ctru::GPU_SRC_ALPHA, ctru::GPU_ONE),
             };
             c3d::C3D_AlphaBlend(ctru::GPU_BLEND_ADD, ctru::GPU_BLEND_ADD, src, dst, src, dst);
+            // alpha test (cut-outs); dithering isn't available here
+            if m.alpha_cutoff > 0.0 {
+                c3d::C3D_AlphaTest(true, ctru::GPU_GEQUAL, (m.alpha_cutoff.clamp(0.0, 1.0) * 255.0) as i32);
+            } else {
+                c3d::C3D_AlphaTest(false, ctru::GPU_ALWAYS, 0);
+            }
             let fog = if self.view_fog && m.fog { ctru::GPU_FOG } else { ctru::GPU_NO_FOG };
             c3d::C3D_FogGasMode(fog, ctru::GPU_PLAIN_DENSITY, false);
         }
@@ -656,6 +662,7 @@ impl Citro3dBackend {
             c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(1));
             c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(2));
             c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(3));
+            c3d::C3D_AlphaTest(false, ctru::GPU_ALWAYS, 0);
             c3d::C3D_CullFace(ctru::GPU_CULL_NONE);
             c3d::C3D_DepthTest(true, ctru::GPU_ALWAYS, if color.is_some() { ctru::GPU_WRITE_ALL } else { ctru::GPU_WRITE_DEPTH });
             c3d::C3D_DepthMap(true, -1.0, 0.0);
