@@ -396,7 +396,7 @@ impl Game for HelloGame {
                     Name("Shrine Label".into()),
                     Transform::from_position(Vec3::new(0.0, 1.9, 0.0)),
                     Parent(shrine),
-                    goat_text::Text::new("Đền Dê Vàng", hud::FONT, 0.26).with_align(goat_text::Align::Center, goat_text::VAlign::Bottom).with_color(Color::hex(0xffd36b)),
+                    goat_text::Text::new("Đền <color=#ffffff>Dê</color> <i>Vàng</i>", hud::FONT, 0.26).with_align(goat_text::Align::Center, goat_text::VAlign::Bottom).with_color(Color::hex(0xffd36b)).with_outline(Color::hex(0x3a1d00), 0.05).with_shadow(Color::rgba(0.0, 0.0, 0.0, 0.5), [0.06, 0.08]).rich(),
                     Scripts::new().with(FaceCamera),
                 ));
                 // the shrine hums: a looping 3D sound, louder as the camera passes by

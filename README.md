@@ -259,6 +259,8 @@ Thêm vào đó:
 
 ## Text, physics, audio
 
+Chữ có thể có viền (`.with_outline(màu, 0.06)`), bóng (`.with_shadow(màu, [0.05, 0.05])`) và rich text (`.rich()`: `<color=#ff8800>`, `<size=1.5>`, `<b>`, `<i>`). Trong scene, các key tương ứng là `rich` / `outline` / `shadow` của `Text` và `UiText`.
+
 ```rust
 // Text: font TTF trong assets, tiếng Việt OK; size = chiều cao em theo đơn vị thế giới (HUD 1 px/đơn vị: pixel)
 world.spawn((Transform::from_position(pos), Text::new("Xin chào!", "fonts/BeVietnamPro-Regular.ttf", 15.0).with_align(Align::Center, VAlign::Middle)));

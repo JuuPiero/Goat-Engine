@@ -158,6 +158,12 @@ pub struct UiText {
     pub align: Align,
     pub valign: VAlign,
     pub visible: bool,
+    /// Rich text tags (`<color=#hex>`, `<size=1.5>`, `<b>`, `<i>`).
+    pub rich: bool,
+    /// Outline color + width (fraction of the size).
+    pub outline: Option<(Color, f32)>,
+    /// Drop shadow color + offset (fractions of the size, x right / y down).
+    pub shadow: Option<(Color, [f32; 2])>,
 }
 
 impl Default for UiText {
@@ -168,7 +174,7 @@ impl Default for UiText {
 
 impl UiText {
     pub fn new(text: impl Into<String>, font: impl Into<String>, size: f32) -> Self {
-        UiText { text: text.into(), font: font.into(), size, color: Color::WHITE, align: Align::Center, valign: VAlign::Middle, visible: true }
+        UiText { text: text.into(), font: font.into(), size, color: Color::WHITE, align: Align::Center, valign: VAlign::Middle, visible: true, rich: false, outline: None, shadow: None }
     }
 }
 
@@ -279,6 +285,8 @@ struct TextKey {
     align: (u8, u8),
     /// Fonts::generation (an atlas refill moves glyphs).
     atlas: u32,
+    /// rich / outline / shadow settings
+    effects: String,
 }
 
 impl Default for UiPlugin {
@@ -880,11 +888,12 @@ impl Plugin for UiPlugin {
                                 numbers: [t.size, c.r, c.g, c.b, c.a, (b.x - a.x).max(1.0), pos.x, pos.y, pos.z].map(f32::to_bits),
                                 align: (t.align as u8, t.valign as u8),
                                 atlas: fonts.generation(),
+                                effects: format!("{}{:?}{:?}", t.rich, t.outline, t.shadow),
                             };
                             match self.text_cache.get(&e) {
                                 Some((k, q)) if *k == key => own.extend(q.iter().cloned()),
                                 _ => {
-                                    let text = Text { color: t.color, align: t.align, valign: t.valign, max_width: Some((b.x - a.x).max(1.0)), layer: UI_LAYER, sorting_order: canvas.sorting_order, ..Text::new(t.text.clone(), t.font.clone(), t.size) };
+                                    let text = Text { color: t.color, align: t.align, valign: t.valign, max_width: Some((b.x - a.x).max(1.0)), layer: UI_LAYER, sorting_order: canvas.sorting_order, rich: t.rich, outline: t.outline, shadow: t.shadow, ..Text::new(t.text.clone(), t.font.clone(), t.size) };
                                     let m = Mat4::from_translation(pos);
                                     let q: Vec<Quad> = fonts
                                         .quads(assets, ctx.gfx, &text, &m)

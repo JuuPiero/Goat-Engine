@@ -38,7 +38,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ Plugin (cách subsystem gắn vào frame: build / fixed_update / update / late_update), fixed timestep, `Behaviour::fixed_update` / `late_update`
 - ✅ Layer + culling mask, sorting order, camera clear "depth only", mesh động (`update_mesh`, double-buffer trên 3DS), fog tắt được theo material
 - ✅ Text (`goat-text`): font TTF/OTF vẽ lúc chạy vào atlas động (mọi ngôn ngữ, có tiếng Việt), căn lề, xuống dòng, kerning, chữ trong thế giới 3D và trên HUD
-- ⬜ Text SDF (viền, bóng chữ), rich text
+- ✅ Viền chữ, bóng chữ, rich text (`<color>`, `<size>`, `<b>`, `<i>`) cho Text và UiText, giống nhau trên mọi backend. Font SDF thật chưa có.
 
 ## Giai đoạn 2 — Tài nguyên & dữ liệu 🔨
 - ✅ `goat-assets`: thư mục `assets/` của game (romfs trong .3dsx trên 3DS, cạnh file exe trên desktop), asset key theo đường dẫn, `AssetServer` cache + tra ngược handle → key

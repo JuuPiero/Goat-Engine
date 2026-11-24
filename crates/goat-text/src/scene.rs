@@ -32,6 +32,27 @@ struct TextJson {
     sorting_order: i32,
     #[serde(default = "yes")]
     visible: bool,
+    /// `<color=#hex>`, `<size=1.5>`, `<b>`, `<i>` tags.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    rich: bool,
+    /// `{ "color": "#000000", "width": 0.06 }`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outline: Option<OutlineJson>,
+    /// `{ "color": "#00000080", "offset": [0.05, 0.05] }`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shadow: Option<ShadowJson>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct OutlineJson {
+    pub color: FileColor,
+    pub width: f32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct ShadowJson {
+    pub color: FileColor,
+    pub offset: [f32; 2],
 }
 
 fn one() -> f32 {
@@ -74,6 +95,9 @@ fn save(ctx: &SaveContext, e: Entity) -> Option<Value> {
         layer: t.layer,
         sorting_order: t.sorting_order,
         visible: t.visible,
+        rich: t.rich,
+        outline: t.outline.map(|(c, w)| OutlineJson { color: FileColor(c), width: w }),
+        shadow: t.shadow.map(|(c, o)| ShadowJson { color: FileColor(c), offset: o }),
     })
     .ok()
 }
@@ -100,6 +124,9 @@ fn load(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
         layer: j.layer.min(31),
         sorting_order: j.sorting_order,
         visible: j.visible,
+        rich: j.rich,
+        outline: j.outline.map(|o| (o.color.0, o.width)),
+        shadow: j.shadow.map(|s| (s.color.0, s.offset)),
     };
     ctx.world.insert_one(e, t).map_err(|_| "entity vanished".to_string())
 }

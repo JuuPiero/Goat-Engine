@@ -62,6 +62,12 @@ pub struct Text {
     pub layer: u8,
     pub sorting_order: i32,
     pub visible: bool,
+    /// Parse tags: `<color=#ff8800>`, `<size=1.5>` (× size), `<b>`, `<i>` and their `</…>`.
+    pub rich: bool,
+    /// An outline: color and width (fraction of the size, e.g. 0.06).
+    pub outline: Option<(Color, f32)>,
+    /// A drop shadow: color and offset (fractions of the size, x right / y down).
+    pub shadow: Option<(Color, [f32; 2])>,
 }
 
 impl Text {
@@ -78,7 +84,22 @@ impl Text {
             layer: 0,
             sorting_order: 0,
             visible: true,
+            rich: false,
+            outline: None,
+            shadow: None,
         }
+    }
+    pub fn rich(mut self) -> Self {
+        self.rich = true;
+        self
+    }
+    pub fn with_outline(mut self, color: Color, width: f32) -> Self {
+        self.outline = Some((color, width));
+        self
+    }
+    pub fn with_shadow(mut self, color: Color, offset: [f32; 2]) -> Self {
+        self.shadow = Some((color, offset));
+        self
     }
     pub fn with_color(mut self, c: Color) -> Self {
         self.color = c;
@@ -218,10 +239,71 @@ fn wrap_lines(atlas: &mut FontAtlas, text: &str, max_px: Option<f32>) -> Vec<Str
     out
 }
 
+/// Style of one character of a rich text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Style {
+    color: Color,
+    size: f32,
+    bold: bool,
+    italic: bool,
+}
+
+/// Plain text + the style of each of its characters (tags removed; unknown tags stay as text).
+fn parse_rich(text: &str, base: Color) -> (String, Vec<Style>) {
+    let mut plain = String::with_capacity(text.len());
+    let mut styles = Vec::with_capacity(text.len());
+    let mut stack: Vec<Style> = vec![Style { color: base, size: 1.0, bold: false, italic: false }];
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        if c == '<' {
+            if let Some(end) = rest.find('>') {
+                let tag = &rest[1..end];
+                let cur = *stack.last().unwrap();
+                let mut handled = true;
+                match tag {
+                    "b" => stack.push(Style { bold: true, ..cur }),
+                    "i" => stack.push(Style { italic: true, ..cur }),
+                    "/b" | "/i" | "/color" | "/size" => {
+                        if stack.len() > 1 {
+                            stack.pop();
+                        }
+                    }
+                    _ => {
+                        if let Some(v) = tag.strip_prefix("color=") {
+                            match goat_core::parse_hex(v.trim_matches('"')) {
+                                Some(col) => stack.push(Style { color: Color::rgba(col.r, col.g, col.b, col.a * base.a), ..cur }),
+                                None => handled = false,
+                            }
+                        } else if let Some(v) = tag.strip_prefix("size=") {
+                            match v.trim_matches('"').trim_end_matches('%').parse::<f32>() {
+                                Ok(x) => stack.push(Style { size: if v.ends_with('%') { x / 100.0 } else { x }, ..cur }),
+                                Err(_) => handled = false,
+                            }
+                        } else {
+                            handled = false;
+                        }
+                    }
+                }
+                if handled {
+                    rest = &rest[end + 1..];
+                    continue;
+                }
+            }
+        }
+        plain.push(c);
+        styles.push(*stack.last().unwrap());
+        rest = &rest[c.len_utf8()..];
+    }
+    (plain, styles)
+}
+
 /// Glyph quads of one text (None = the atlas filled up: clear it and lay out again).
 fn layout(atlas: &mut FontAtlas, t: &Text, world: &Mat4, texture: TextureId) -> Option<Vec<Quad>> {
     let scale = t.size / RASTER_PX;
-    let lines = wrap_lines(atlas, &t.text, t.max_width.map(|w| w / scale));
+    let (plain, styles) = if t.rich { parse_rich(&t.text, t.color) } else { (t.text.clone(), Vec::new()) };
+    let plain_chars: Vec<char> = plain.chars().collect();
+    let base = Style { color: t.color, size: 1.0, bold: false, italic: false };
+    let lines = wrap_lines(atlas, &plain, t.max_width.map(|w| w / scale));
     let line_h = atlas.line_height * t.line_spacing;
     let total_h = line_h * lines.len() as f32;
     let top = match t.valign {
@@ -230,10 +312,31 @@ fn layout(atlas: &mut FontAtlas, t: &Text, world: &Mat4, texture: TextureId) -> 
         VAlign::Bottom => total_h,
     };
     let normal = world.transform_vector3(Vec3::Z).normalize_or(Vec3::Z);
-    let c = t.color;
-    let mut quads = Vec::new();
+    // the fill, then what goes behind it (outline, shadow): built in raster pixels
+    let mut glyphs: Vec<([Vec3; 4], [[f32; 2]; 4], Style)> = Vec::new();
+    let mut cursor = 0usize;
     for (li, line) in lines.iter().enumerate() {
-        let width = atlas.measure(line);
+        // styles of this line's characters (wrapping drops spaces: walk the plain text)
+        let line_styles: Vec<Style> = line
+            .chars()
+            .map(|ch| {
+                while cursor < plain_chars.len() && plain_chars[cursor] != ch {
+                    cursor += 1;
+                }
+                let s = styles.get(cursor).copied().unwrap_or(base);
+                cursor += 1;
+                s
+            })
+            .collect();
+        let mut width = 0.0;
+        let mut prev = None;
+        for (ch, st) in line.chars().zip(&line_styles) {
+            if let Some(p) = prev {
+                width += atlas.font.horizontal_kern(p, ch, RASTER_PX).unwrap_or(0.0) * st.size;
+            }
+            width += atlas.font.metrics(ch, RASTER_PX).advance_width * st.size;
+            prev = Some(ch);
+        }
         let mut pen = match t.align {
             Align::Left => 0.0,
             Align::Center => -width * 0.5,
@@ -241,38 +344,70 @@ fn layout(atlas: &mut FontAtlas, t: &Text, world: &Mat4, texture: TextureId) -> 
         };
         let baseline = top - atlas.ascent - li as f32 * line_h;
         let mut prev = None;
-        for ch in line.chars() {
+        for (ch, st) in line.chars().zip(line_styles) {
             if let Some(p) = prev {
-                pen += atlas.font.horizontal_kern(p, ch, RASTER_PX).unwrap_or(0.0);
+                pen += atlas.font.horizontal_kern(p, ch, RASTER_PX).unwrap_or(0.0) * st.size;
             }
             let g = atlas.glyph(ch)?;
             let (gx, gy, gw, gh) = g.rect;
             if gw > 0 && gh > 0 {
-                let (x0, y0) = (pen + g.xmin, baseline + g.ymin);
-                let (x1, y1) = (x0 + gw as f32, y0 + gh as f32);
-                let local = [Vec3::new(x0, y0, 0.0), Vec3::new(x1, y0, 0.0), Vec3::new(x1, y1, 0.0), Vec3::new(x0, y1, 0.0)].map(|p| p * scale);
+                let k = st.size;
+                let (x0, y0) = (pen + g.xmin * k, baseline + g.ymin * k);
+                let (x1, y1) = (x0 + gw as f32 * k, y0 + gh as f32 * k);
+                // italic: lean the glyph right above the baseline
+                let lean = |y: f32| if st.italic { (y - baseline) * 0.2 } else { 0.0 };
+                let corners = [Vec3::new(x0 + lean(y0), y0, 0.0), Vec3::new(x1 + lean(y0), y0, 0.0), Vec3::new(x1 + lean(y1), y1, 0.0), Vec3::new(x0 + lean(y1), y1, 0.0)];
                 let a = ATLAS as f32;
                 let (u0, u1) = (gx as f32 / a, (gx + gw) as f32 / a);
                 let (v_top, v_bottom) = (gy as f32 / a, (gy + gh) as f32 / a);
-                quads.push(Quad {
-                    sorting_order: t.sorting_order,
-                    layer: t.layer,
-                    texture,
-                    blend: BlendMode::Alpha,
-                    z: world.w_axis.z,
-                    corners: local.map(|p| world.transform_point3(p)),
-                    normal,
-                    uv: [[u0, v_bottom], [u1, v_bottom], [u1, v_top], [u0, v_top]],
-                    color: [c.r, c.g, c.b, c.a],
-                });
+                let uv = [[u0, v_bottom], [u1, v_bottom], [u1, v_top], [u0, v_top]];
+                glyphs.push((corners, uv, st));
+                if st.bold {
+                    // fake bold: the glyph again, nudged right
+                    let d = Vec3::new(RASTER_PX * 0.035 * k, 0.0, 0.0);
+                    glyphs.push((corners.map(|p| p + d), uv, st));
+                }
             }
-            pen += g.advance;
+            pen += g.advance * st.size;
             prev = Some(ch);
         }
     }
+    let mut quads = Vec::with_capacity(glyphs.len() * (1 + t.outline.map_or(0, |_| 8) + t.shadow.map_or(0, |_| 1)));
+    let emit = |corners: &[Vec3; 4], uv: [[f32; 2]; 4], c: Color, offset: Vec3, quads: &mut Vec<Quad>| {
+        quads.push(Quad {
+            sorting_order: t.sorting_order,
+            layer: t.layer,
+            texture,
+            blend: BlendMode::Alpha,
+            z: world.w_axis.z,
+            corners: corners.map(|p| world.transform_point3((p + offset) * scale)),
+            normal,
+            uv,
+            color: [c.r, c.g, c.b, c.a],
+        });
+    };
+    // back to front: shadow, outline, fill (the batcher keeps the order of equal keys)
+    if let Some((c, [dx, dy])) = t.shadow {
+        let o = Vec3::new(dx * RASTER_PX, -dy * RASTER_PX, 0.0);
+        for (corners, uv, st) in &glyphs {
+            emit(corners, *uv, Color::rgba(c.r, c.g, c.b, c.a * st.color.a), o, &mut quads);
+        }
+    }
+    if let Some((c, w)) = t.outline {
+        let r = w * RASTER_PX;
+        for k in 0..8 {
+            let a = k as f32 * std::f32::consts::FRAC_PI_4;
+            let o = Vec3::new(a.cos() * r, a.sin() * r, 0.0);
+            for (corners, uv, st) in &glyphs {
+                emit(corners, *uv, Color::rgba(c.r, c.g, c.b, c.a * st.color.a), o, &mut quads);
+            }
+        }
+    }
+    for (corners, uv, st) in &glyphs {
+        emit(corners, *uv, st.color, Vec3::ZERO, &mut quads);
+    }
     Some(quads)
 }
-
 /// Loaded fonts by asset key (a resource).
 #[derive(Default)]
 pub struct Fonts {
@@ -429,5 +564,22 @@ mod tests {
         let max = a.measure("ab cd") + 1.0;
         let wrapped = wrap_lines(&mut a, "ab cd ef", Some(max));
         assert_eq!(wrapped, vec!["ab cd".to_string(), "ef".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod rich_tests {
+    use super::*;
+
+    #[test]
+    fn tags_become_styles() {
+        let (plain, st) = parse_rich("Hi <color=#ff0000>red <b>bold</b></color> <size=2>big</size> <nope>", Color::WHITE);
+        assert_eq!(plain, "Hi red bold big <nope>");
+        assert_eq!(st[0].color, Color::WHITE);
+        assert_eq!(st[3].color, Color::rgb(1.0, 0.0, 0.0));
+        assert!(st[7].bold && st[7].color == Color::rgb(1.0, 0.0, 0.0));
+        assert!(!st[11].bold && st[11].color == Color::WHITE);
+        assert_eq!(st[12].size, 2.0);
+        assert_eq!(st[15].size, 1.0);
     }
 }
