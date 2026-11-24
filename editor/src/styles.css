@@ -284,3 +284,5 @@ button.primary { background: #2c5aa0; border-color: #3a6cc0; }
 .settings-body { flex: 1; padding: 10px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
 .settings-body .field { grid-template-columns: 170px 1fr; }
 .settings-body .vec input { width: 0; flex: 1; }
+
+.game-size { background: var(--input, #1b1e24); color: inherit; border: 1px solid var(--line); border-radius: 3px; padding: 1px 4px; flex: 0 0 auto; width: 190px; }

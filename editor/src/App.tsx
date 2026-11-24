@@ -58,6 +58,11 @@ export function App() {
     if (!project) return;
     void api.search('.scene.json').then((list) => (sceneFiles = list.map((e) => e.key).filter((k) => k.endsWith('.scene.json')).sort()));
   }, [project, revision]);
+  // Play / opening a scene brings the Scene / Game view to the front (Unity focuses the Game view)
+  const openScenePath = useStore((s) => s.scene);
+  useEffect(() => {
+    if (playing || openScenePath) dv.current?.getPanel('viewport')?.api.setActive();
+  }, [playing, openScenePath]);
   // opening a controller shows the Animator window (next to the Scene view, like Unity)
   useEffect(() => {
     const d = dv.current;

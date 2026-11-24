@@ -10,6 +10,40 @@ import { getState, log, setState, useStore } from '../store';
 
 type LogLevel = 'info' | 'warn' | 'error';
 
+/// Game view sizes (Unity's aspect / resolution menu). 3ds = the two 3DS screens (chosen when
+/// Play starts); an aspect fits the largest box into the view; a resolution renders that many
+/// pixels, scaled down to fit.
+const GAME_SIZES: { id: string; label: string; aspect?: number; px?: [number, number] }[] = [
+  { id: '3ds', label: 'Nintendo 3DS (400×240 + 320×240)' },
+  { id: 'free', label: 'Free Aspect' },
+  { id: '16:9', label: '16:9 Landscape', aspect: 16 / 9 },
+  { id: '16:10', label: '16:10 Landscape', aspect: 16 / 10 },
+  { id: '4:3', label: '4:3 Landscape', aspect: 4 / 3 },
+  { id: '9:16', label: '9:16 Portrait', aspect: 9 / 16 },
+  { id: '1920x1080', label: 'Full HD (1920×1080)', px: [1920, 1080] },
+  { id: '1280x720', label: 'HD (1280×720)', px: [1280, 720] },
+  { id: '800x480', label: 'WVGA (800×480)', px: [800, 480] },
+];
+const SIZE_KEY = 'goat.editor.gameSize';
+function savedSize() {
+  try {
+    return localStorage.getItem(SIZE_KEY) ?? '3ds';
+  } catch {
+    return '3ds';
+  }
+}
+
+/// Where the canvas sits in a w×h view for a game size (CSS px), and its pixel size.
+export function gameRect(id: string, w: number, h: number, dpr: number) {
+  const s = GAME_SIZES.find((g) => g.id === id);
+  const aspect = s?.px ? s.px[0] / s.px[1] : s?.aspect;
+  if (!aspect) return { x: 0, y: 0, w, h, pw: Math.round(w * dpr), ph: Math.round(h * dpr) };
+  const fw = Math.min(w, h * aspect);
+  const fh = fw / aspect;
+  const [pw, ph] = s?.px ?? [Math.round(fw * dpr), Math.round(fh * dpr)];
+  return { x: Math.floor((w - fw) / 2), y: Math.floor((h - fh) / 2), w: Math.floor(fw), h: Math.floor(fh), pw, ph };
+}
+
 export function Viewport() {
   const canvas = useRef<HTMLCanvasElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
@@ -23,6 +57,10 @@ export function Viewport() {
   const [error, setError] = useState<string | null>(null);
   const drag = useRef<{ x: number; y: number; mode: 'orbit' | 'pan' | 'click' | 'gizmo'; moved: boolean } | null>(null);
   const [gizmo, setGizmo] = useState<'move' | 'rotate' | 'scale'>('move');
+  const [gameSize, setGameSize] = useState(savedSize);
+  const sizing = useRef({ game: false, size: gameSize });
+  sizing.current = { game: tab === 'game' && playing, size: gameSize };
+  const relayout = useRef<() => void>(() => {});
   const setMode = (m: 'move' | 'rotate' | 'scale') => {
     setGizmo(m);
     getEngine()?.set_gizmo_mode(m);
@@ -35,16 +73,21 @@ export function Viewport() {
     let frames = 0;
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
-      const w = Math.max(1, Math.round(c.clientWidth * dpr));
-      const h = Math.max(1, Math.round(c.clientHeight * dpr));
+      const box = c.parentElement!;
+      const { game, size } = sizing.current;
+      const r = gameRect(game ? size : 'free', Math.max(1, box.clientWidth), Math.max(1, box.clientHeight), dpr);
+      Object.assign(c.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+      const w = Math.max(1, r.pw);
+      const h = Math.max(1, r.ph);
       if (c.width !== w || c.height !== h) {
         c.width = w;
         c.height = h;
         getEngine()?.resize(w, h);
       }
     };
+    relayout.current = resize;
     const ro = new ResizeObserver(resize);
-    ro.observe(c);
+    ro.observe(c.parentElement!);
     resize();
     startEngine(c)
       .then(() => {
@@ -78,6 +121,10 @@ export function Viewport() {
       ro.disconnect();
     };
   }, []);
+
+  useEffect(() => relayout.current(), [tab, playing, gameSize]);
+  // the remembered size decides the Play layout too
+  useEffect(() => setState({ dual3ds: savedSize() === '3ds' }), []);
 
   // keyboard: play-mode input, F, Ctrl+S
   useEffect(() => {
@@ -177,9 +224,28 @@ export function Viewport() {
           {scene ? `${scene}${dirty ? ' *' : ''}` : 'no scene open — double-click a .scene.json'}
         </span>
         <div className="spacer" />
-        <label className="dim check">
-          <input type="checkbox" checked={dual} onChange={(e) => setState({ dual3ds: e.target.checked })} disabled={playing} /> 3DS screens
-        </label>
+        <select
+          className="game-size"
+          title="Game view size"
+          value={dual ? '3ds' : gameSize === '3ds' ? 'free' : gameSize}
+          onChange={(e) => {
+            const id = e.target.value;
+            if (playing && (id === '3ds') !== dual) return log('the 3DS screen layout is chosen when Play starts', 'warn');
+            setGameSize(id);
+            setState({ dual3ds: id === '3ds' });
+            try {
+              localStorage.setItem(SIZE_KEY, id);
+            } catch {
+              /* not remembered */
+            }
+          }}
+        >
+          {GAME_SIZES.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.label}
+            </option>
+          ))}
+        </select>
         <button className={`play${playing ? ' on' : ''}`} onClick={() => (playing ? stopPlay() : void startPlay())} title="Play / Stop (Esc)">
           {playing ? '■' : '▶'}
         </button>
