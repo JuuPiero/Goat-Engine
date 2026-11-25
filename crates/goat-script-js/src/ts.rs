@@ -23,7 +23,11 @@ pub fn compile(key: &str, source: &str) -> Result<String, String> {
         return Err(semantic.diagnostics.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("; "));
     }
     let scoping = semantic.semantic.into_scoping();
-    let options = TransformOptions::default();
+    // decorators (`@field(TextAsset)`, `@button`...): TypeScript's legacy form, helpers from the
+    // global `babelHelpers` that goat.js defines (no helper module to import)
+    let mut options = TransformOptions::default();
+    options.decorator.legacy = true;
+    options.helper_loader.mode = oxc_transformer::HelperLoaderMode::External;
     let ret = Transformer::new(&allocator, Path::new(key), &options).build_with_scoping(scoping, &mut program);
     if !ret.diagnostics.is_empty() {
         return Err(ret.diagnostics.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("; "));

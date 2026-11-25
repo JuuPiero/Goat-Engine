@@ -206,6 +206,30 @@ impl AssetIo {
         serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text)).map_err(|e| AssetError::Format(key.to_string(), e.to_string()))
     }
 
+    /// Every file key (memory and disk, `.meta` files left out), sorted: `Resources.loadAll` and
+    /// friends search it.
+    pub fn list_all(&self) -> Vec<String> {
+        let mut out = std::collections::BTreeSet::new();
+        if let Ok(m) = self.memory.read() {
+            out.extend(m.keys().filter(|k| !k.ends_with(META_EXT)).cloned());
+        }
+        fn walk(dir: &Path, prefix: &str, out: &mut std::collections::BTreeSet<String>) {
+            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let key = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, &key, out);
+                } else if !key.ends_with(META_EXT) {
+                    out.insert(key);
+                }
+            }
+        }
+        walk(&self.root, "", &mut out);
+        out.into_iter().collect()
+    }
+
     pub fn exists(&self, key: &str) -> bool {
         if key.starts_with("guid:") {
             let path = self.canonical(key);

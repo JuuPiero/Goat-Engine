@@ -361,6 +361,30 @@ Như Unity: method `onDrawGizmos()` (luôn vẽ) và `onDrawGizmosSelected()` (k
 - `Gizmos.color`, `Gizmos.matrix` (ví dụ `this.transform.localToWorldMatrix`), `drawLine`, `drawRay`, `drawWireSphere`, `drawWireCube`, `drawLineList`, `drawLineStrip`, `drawFrustum` (`drawSphere` / `drawCube` vẽ dạng khung).
 - `Handles.color`, `Handles.label(pos, text)`, `drawLine`, `drawWireDisc(center, normal, r)`, `drawWireArc(center, normal, from, angle, r)`, `drawWireCube`.
 - Tắt bằng nút **Gizmos** của Scene view.
+### File dữ liệu (TextAsset, JsonAsset, BufferAsset) và Resources
+
+Như PiaEngine / Unity. Ví dụ: `scenes/data.scene.json` + `scripts/LevelManager.ts`.
+
+```ts
+import { Behaviour, TextAsset, JsonAsset, BufferAsset, Resources, field } from "goat";
+export default class LevelManager extends Behaviour {
+  @field(TextAsset) credits: TextAsset | null = null;   // .txt .md .csv .json .xml .yaml...
+  @field([JsonAsset]) levels: JsonAsset[] = [];          // một danh sách .json
+  @field(BufferAsset) map: BufferAsset | null = null;   // file bất kỳ
+  start() {
+    this.credits?.text; this.credits?.lines;            // TextAsset: text, lines, bytes
+    this.levels[0].json;                                 // JsonAsset: json / data (parse một lần)
+    this.map?.bytes; this.map?.dataView;                 // BufferAsset: bytes, buffer, dataView, length
+  }
+}
+```
+
+- Kéo file từ Project vào ô trong Inspector (danh sách có **+ Add** / **−**).
+- **Resources**: file nằm trong thư mục `Resources/` bất kỳ của project, gọi bằng đường dẫn không có đuôi: `Resources.load('Enemies/Goblin', JsonAsset)`, `Resources.loadAll('Enemies')`, `Resources.find('Sounds/hit')` (trả về key), `Resources.loadPrefab('Props/Crate')` (dùng với instantiate). Một key đầy đủ cũng dùng được.
+
+### Decorator cho field (kiểu Odin / attribute của Unity)
+
+`@field(Type)` (TextAsset, JsonAsset, BufferAsset, Texture, Material, một lớp ScriptableObject; `[Type]` = danh sách), `@hideInInspector` (vẫn lưu), `@nonSerialized` (không lưu, không hiện), `@header('Tiêu đề')`, `@tooltip('...')`, `@range(min, max)` (thanh trượt), `@readOnly`, `@showIf('field', giá trị?)` / `@hideIf(...)`, `@button('Nhãn')` trên method (nút trong Inspector: lúc chưa Play chạy trên giá trị đã lưu rồi lưu lại thay đổi; khi Play gọi trên object đang chạy), `@contextMenu('Tên')` (mục trong menu ⋮ của component).
 ## Text, physics, audio
 
 Chữ có thể có viền (`.with_outline(màu, 0.06)`), bóng (`.with_shadow(màu, [0.05, 0.05])`) và rich text (`.rich()`: `<color=#ff8800>`, `<size=1.5>`, `<b>`, `<i>`). Trong scene, các key tương ứng là `rich` / `outline` / `shadow` của `Text` và `UiText`.

@@ -1687,26 +1687,192 @@ export class ScriptableObject {
   }
 }
 
-/** Unity's Resources.load: ScriptableObject assets by key (other keys come back as they are). */
+// ------------------------------------------------------------------ data assets, Resources
+
+/** Unity's TextAsset: a text file of the project (.txt .md .csv .json .xml .yaml...) as a field
+ *  (`@field(TextAsset) credits: TextAsset | null = null`) or from `Resources.load`. */
+export class TextAsset {
+  constructor(key) { this._key = key; }
+  get path() { return this._key; }
+  get name() { return (this._key ?? '').split('/').pop().replace(/\.[^.]*$/, ''); }
+  get isLoaded() { return true; }
+  load() { return Promise.resolve(this); }
+  get text() { return (this._text ??= String(N.call('Asset.readText', -1, [this._key]) ?? '')); }
+  get lines() { return this.text.split(/\r?\n/); }
+  get bytes() { return (this._bytes ??= fromBase64(N.call('Asset.readBytes', -1, [this._key]) ?? '')); }
+  toString() { return this.text; }
+}
+
+/** A `.json` file parsed once: `json` / `data`. */
+export class JsonAsset extends TextAsset {
+  get json() {
+    if (this._json === undefined) {
+      try { this._json = JSON.parse(this.text); } catch (e) { throw new Error(`${this._key}: ${e?.message ?? e}`); }
+    }
+    return this._json;
+  }
+  get data() { return this.json; }
+}
+
+/** Any file's bytes (.bytes, .bin...). */
+export class BufferAsset {
+  constructor(key) { this._key = key; }
+  get path() { return this._key; }
+  get name() { return (this._key ?? '').split('/').pop().replace(/\.[^.]*$/, ''); }
+  get isLoaded() { return true; }
+  load() { return Promise.resolve(this); }
+  get bytes() { return (this._bytes ??= fromBase64(N.call('Asset.readBytes', -1, [this._key]) ?? '')); }
+  get buffer() { return this.bytes.buffer; }
+  get dataView() { return new DataView(this.bytes.buffer, this.bytes.byteOffset, this.bytes.byteLength); }
+  get length() { return this.bytes.length; }
+}
+
+const TEXT_EXT = /\.(txt|md|csv|tsv|xml|ya?ml|ini|json|html|css|glsl|hlsl|shader)$/i;
+/** An asset object for a key: what `type` asks for, else by extension. */
+function assetFor(key, type) {
+  if (key == null || key === '') return null;
+  if (type === TextAsset || type === 'textAsset') return new TextAsset(key);
+  if (type === JsonAsset || type === 'jsonAsset') return new JsonAsset(key);
+  if (type === BufferAsset || type === 'bufferAsset') return new BufferAsset(key);
+  if (type === Texture || type === RenderTexture || type === 'texture') return Texture.fromKey(key);
+  if (key.endsWith('.asset.json')) return ScriptableObject.load(key);
+  if (type && typeof type === 'function' && type.prototype instanceof ScriptableObject) return ScriptableObject.load(key);
+  if (key.endsWith('.json')) return new JsonAsset(key);
+  if (TEXT_EXT.test(key)) return new TextAsset(key);
+  if (/\.(png|jpe?g|ktx)$|\.renderTexture\.json$/i.test(key)) return Texture.fromKey(key);
+  if (/\.(prefab\.json|glb|gltf|mat\.json|wav|ogg)$/i.test(key)) return key;
+  return new BufferAsset(key);
+}
+
+/** Unity's Resources: files under any `Resources/` folder of the project, by path without the
+ *  extension (`Resources/Enemies/Goblin.asset.json` → `Resources.load('Enemies/Goblin')`).
+ *  A full asset key works too. `type`: TextAsset, JsonAsset, BufferAsset, Texture, a ScriptableObject class. */
 export const Resources = {
-  load(key) { return typeof key === 'string' && key.endsWith('.asset.json') ? ScriptableObject.load(key) : key; },
+  /** The asset key of `path` (null when no Resources folder has it). */
+  find(path) { return N.call('Resources.find', -1, [String(path)]) ?? null; },
+  load(path, type = null) {
+    const key = typeof path === 'string' && N.call('Asset.exists', -1, [path]) ? path : this.find(path);
+    return key ? assetFor(key, type) : null;
+  },
+  /** Every asset in a Resources folder (and its subfolders), of `type` if given. */
+  loadAll(folder = '', type = null) {
+    const keys = N.call('Resources.list', -1, [String(folder)]) ?? [];
+    const out = [];
+    for (const k of keys) {
+      const a = assetFor(k, type);
+      if (a == null) continue;
+      if (type && typeof type === 'function' && !(a instanceof type) && !(type === Texture && a instanceof Texture)) continue;
+      out.push(a);
+    }
+    return out;
+  },
+  /** A prefab's key for `instantiate` (`GameObject.instantiate(Resources.loadPrefab('Enemies/Goblin'))`). */
+  loadPrefab(path) { const k = this.find(path); return k && /\.prefab\.json$/i.test(k) ? k : null; },
+  loadAsync(path, type = null) { return Promise.resolve(this.load(path, type)); },
 };
 
+// ------------------------------------------------------------------ field decorators (Odin / Unity attributes)
+
+// TypeScript decorators compile to `babelHelpers.decorate(...)` (legacy form, see ts.rs)
+globalThis.babelHelpers ??= {};
+globalThis.babelHelpers.decorate ??= function (decorators, target, key, desc) {
+  const c = arguments.length;
+  let r = c < 3 ? target : desc === null ? (desc = Object.getOwnPropertyDescriptor(target, key)) : desc;
+  for (let i = decorators.length - 1; i >= 0; i--) {
+    const d = decorators[i];
+    if (d) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+  }
+  if (c > 3 && r) Object.defineProperty(target, key, r);
+  return r;
+};
+
+function metaFor(target, key) {
+  if (!Object.prototype.hasOwnProperty.call(target, '__goatMeta')) Object.defineProperty(target, '__goatMeta', { value: { fields: {}, buttons: [] }, enumerable: false });
+  const m = target.__goatMeta;
+  return key == null ? m : (m.fields[key] ??= {});
+}
+const TYPE_NAMES = () => new Map([[TextAsset, 'textAsset'], [JsonAsset, 'jsonAsset'], [BufferAsset, 'bufferAsset'], [GameObject, 'gameObject'], [Texture, 'texture'], [RenderTexture, 'texture'], [Material, 'material']]);
+function typeName(t) {
+  if (typeof t === 'string') return t;
+  if (typeof t !== 'function') return null;
+  const n = TYPE_NAMES().get(t);
+  if (n) return n;
+  if (t.prototype instanceof ScriptableObject) return 'scriptableObject';
+  return null;
+}
+const fieldDecorator = (f) => (target, key) => { f(metaFor(target, key)); };
+
+/** `@field(TextAsset)`, `@field([JsonAsset])` (a list), `@field(EnemyData)` (a ScriptableObject),
+ *  `@field('prefab' | 'material' | 'texture' | 'audio')`, with options `{ tooltip, range: [min, max], header }`. */
+export function field(type, options) {
+  if (type && typeof type === 'object' && !Array.isArray(type) && typeof options === 'string') { metaFor(type, options).serialize = true; return undefined; }
+  return fieldDecorator((m) => {
+    const list = Array.isArray(type);
+    const t = typeName(list ? type[0] : type);
+    if (t) m.type = t;
+    if (list) m.array = true;
+    if (options) Object.assign(m, options);
+  });
+}
+/** Serialized but not shown (Unity's [HideInInspector]). */
+export function hideInInspector(target, key) { metaFor(target, key).hide = true; }
+/** Not saved, not shown (Unity's [NonSerialized]). */
+export function nonSerialized(target, key) { metaFor(target, key).nonSerialized = true; }
+/** Unity's [SerializeField] (fields are serialized anyway; kept for familiarity). */
+export function serializeField(target, key) { metaFor(target, key).serialize = true; }
+export function header(text) { return fieldDecorator((m) => { m.header = String(text); }); }
+export function tooltip(text) { return fieldDecorator((m) => { m.tooltip = String(text); }); }
+export function range(min, max) { return fieldDecorator((m) => { m.range = [min, max]; }); }
+export function readOnly(target, key) { metaFor(target, key).readOnly = true; }
+/** Shown only while `field` equals `value` (default: truthy) — Odin's [ShowIf]. */
+export function showIf(field, value = true) { return fieldDecorator((m) => { m.showIf = [field, value]; }); }
+export function hideIf(field, value = true) { return fieldDecorator((m) => { m.hideIf = [field, value]; }); }
+/** Odin's [Button]: a method shown as a button in the Inspector (Edit mode: runs on the saved
+ *  values and saves what it changed; Play mode: on the running object). */
+export function button(labelOrTarget, key) {
+  if (typeof labelOrTarget === 'object' && typeof key === 'string') { metaFor(labelOrTarget).buttons.push({ method: key, label: key }); return undefined; }
+  return (target, k) => { metaFor(target).buttons.push({ method: k, label: labelOrTarget ?? k }); };
+}
+/** Unity's [ContextMenu("Name")]: a method in the component's ⋮ menu. */
+export function contextMenu(label) { return (target, k) => { metaFor(target).buttons.push({ method: k, label, menu: true }); }; }
+
+/** Host (editor): the Inspector metadata of a script class: fields (types, hidden, ranges...) and buttons. */
+export function __fieldMeta(cls) {
+  const out = { fields: {}, buttons: [] };
+  const chain = [];
+  for (let p = cls?.prototype; p && p !== Object.prototype; p = Object.getPrototypeOf(p)) chain.unshift(p);
+  for (const p of chain) {
+    if (!Object.prototype.hasOwnProperty.call(p, '__goatMeta')) continue;
+    const m = p.__goatMeta;
+    for (const [k, v] of Object.entries(m.fields)) out.fields[k] = { ...(out.fields[k] ?? {}), ...v };
+    out.buttons.push(...m.buttons);
+  }
+  return out;
+}
+
+const metaOfObj = (obj) => (obj ? __fieldMeta(obj.constructor) : { fields: {}, buttons: [] });
 const isAssetKey = (v) => typeof v === 'string' && v.endsWith('.asset.json');
-const assetOrValue = (v) => (isAssetKey(v) ? ScriptableObject.load(v) : v);
+const assetOrValue = (v, m) => {
+  if (m?.type && typeof v === 'string' && ['textAsset', 'jsonAsset', 'bufferAsset', 'texture', 'scriptableObject'].includes(m.type)) return assetFor(v, m.type);
+  return isAssetKey(v) ? ScriptableObject.load(v) : v;
+};
 
 /** Host: initial field values (scene "props", ScriptableObject "data"); arrays fill Vector fields,
  *  `.asset.json` keys become the ScriptableObjects (also inside arrays). */
 export function __applyProps(obj, props) {
   if (!props || typeof props !== 'object') return;
+  const meta = metaOfObj(obj).fields;
   for (const k of Object.keys(props)) {
     const v = props[k];
     const cur = obj[k];
+    const m = meta[k];
+    if (m?.nonSerialized) continue;
+    if (m?.type && Array.isArray(v)) { obj[k] = v.map((x) => assetOrValue(x, m)); continue; }
     if (Array.isArray(v) && cur instanceof Vector3) obj[k] = new Vector3(v[0] ?? 0, v[1] ?? 0, v[2] ?? 0);
     else if (Array.isArray(v) && cur instanceof Vector2) obj[k] = new Vector2(v[0] ?? 0, v[1] ?? 0);
     else if (Array.isArray(v) && cur instanceof Quaternion) obj[k] = new Quaternion(v[0] ?? 0, v[1] ?? 0, v[2] ?? 0, v[3] ?? 1);
-    else if (Array.isArray(v) && v.some(isAssetKey)) obj[k] = v.map(assetOrValue);
-    else obj[k] = assetOrValue(v);
+    else if (Array.isArray(v) && v.some(isAssetKey)) obj[k] = v.map((x) => assetOrValue(x, m));
+    else obj[k] = assetOrValue(v, m);
   }
 }
 
@@ -1715,6 +1881,7 @@ const fieldJson = (v) => {
   if (v instanceof Vector2) return [v.x, v.y];
   if (v instanceof Quaternion) return [v.x, v.y, v.z, v.w];
   if (v instanceof ScriptableObject) return v._key ?? null;
+  if (v instanceof TextAsset || v instanceof BufferAsset || v instanceof Texture) return v._key ?? null;
   if (v instanceof GameObject || v instanceof Transform) return null;
   if (Array.isArray(v)) return v.map(fieldJson);
   if (v && typeof v === 'object') {
@@ -1732,8 +1899,9 @@ export function __isScriptableObject(cls) { return cls.prototype instanceof Scri
 
 export function __fields(obj) {
   const out = [];
+  const meta = metaOfObj(obj).fields;
   for (const k of Object.keys(obj)) {
-    if (k.startsWith('_') || typeof obj[k] === 'function') continue;
+    if (k.startsWith('_') || typeof obj[k] === 'function' || meta[k]?.nonSerialized) continue;
     out.push([k, fieldJson(obj[k]) ?? null]);
   }
   return out;

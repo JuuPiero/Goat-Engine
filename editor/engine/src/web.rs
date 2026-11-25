@@ -287,6 +287,16 @@ impl EditorEngine {
         self.core.script_info(&mut self.gfx, src).to_string()
     }
 
+    /// An Inspector button of a script (`@button`): Edit mode returns the props to save (JSON),
+    /// Play mode "" (the running object gets the call).
+    pub fn script_button(&mut self, id: &str, index: usize, method: &str) -> Result<String, JsValue> {
+        let e = entity_of(id).ok_or_else(|| JsValue::from_str("no entity"))?;
+        match self.core.script_button(&mut self.gfx, e, index, method).map_err(|e| JsValue::from_str(&e))? {
+            Some(v) => Ok(v.to_string()),
+            None => Ok(String::new()),
+        }
+    }
+
     // ------------------------------------------------------------ gizmos
     /// "move" / "rotate" / "scale" / "transform".
     pub fn set_gizmo_mode(&mut self, mode: &str) {

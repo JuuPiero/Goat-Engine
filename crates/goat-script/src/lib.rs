@@ -16,6 +16,7 @@
 //!   or the script goes away. A script that throws is logged and disabled.
 
 pub mod core_api;
+pub mod assets_api;
 pub mod graphics_api;
 pub mod scene_api;
 
@@ -193,6 +194,7 @@ pub fn entity_arg(v: &Value) -> Option<Entity> {
 pub fn register_core(x: &mut Extensions) {
     core_api::register(x);
     graphics_api::register(x);
+    assets_api::register(x);
     scene_api::register(x);
     fn set_active(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
         goat_runtime::set_active(api.ctx.world, e, a.first().and_then(|v| v.as_bool()).unwrap_or(true));

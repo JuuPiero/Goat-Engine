@@ -996,3 +996,87 @@ export default class Boot extends Behaviour {
     );
     assert!(names.iter().any(|n| n == "Music") && names.iter().any(|n| n == "Level"), "{names:?}");
 }
+
+/// TextAsset / JsonAsset / BufferAsset fields (decorators), Resources.load / loadAll / find /
+/// loadPrefab, @nonSerialized / @hideInInspector and the field metadata the editor reads.
+#[test]
+fn data_assets_resources_and_field_decorators() {
+    fn dio() -> AssetIo {
+        let io = io();
+        io.put("data/credits.txt", "\u{feff}Goat\nEngine".as_bytes().to_vec());
+        io.put("data/level.json", br#"{ "name": "One", "buses": 3 }"#.to_vec());
+        io.put("data/map.bytes", vec![1, 2, 3, 250]);
+        io.put("Resources/Enemies/Goblin.json", br#"{ "hp": 7 }"#.to_vec());
+        io.put("Resources/Enemies/Orc.json", br#"{ "hp": 12 }"#.to_vec());
+        io.put("game/Resources/Sounds/hit.txt", b"boom".to_vec());
+        io.put("Resources/Props/Crate.prefab.json", br#"{ "version": 1, "entities": [] }"#.to_vec());
+        io.put(
+            "scripts/Data.ts",
+            br#"
+import { Behaviour, TextAsset, JsonAsset, BufferAsset, Resources, field, nonSerialized, hideInInspector, range, button, header } from "goat";
+export default class Data extends Behaviour {
+  @field(TextAsset) credits: TextAsset | null = null;
+  @field([JsonAsset]) levels: JsonAsset[] = [];
+  @field(BufferAsset) map: BufferAsset | null = null;
+  @nonSerialized cache = 5;
+  @hideInInspector secret = 1;
+  @header("Tuning") @range(0, 10) speed = 2;
+  @button("Reset Speed") resetSpeed() { this.speed = 0; }
+  start() {
+    const out: any[] = [];
+    out.push(this.credits!.lines.length, this.credits!.text.startsWith("Goat"));
+    out.push(this.levels[0].json.buses, this.levels[0].name);
+    out.push(this.map!.length, this.map!.bytes[3]);
+    const g = Resources.load("Enemies/Goblin", JsonAsset) as JsonAsset;
+    out.push(g.json.hp);
+    out.push(Resources.loadAll("Enemies").length, Resources.loadAll("").length);
+    out.push(Resources.find("Sounds/hit"), (Resources.load("Sounds/hit") as TextAsset).text);
+    out.push(Resources.loadPrefab("Props/Crate"), Resources.load("Nope"));
+    out.push(this.cache);
+    this.gameObject.name = JSON.stringify(out);
+  }
+}
+"#
+            .to_vec(),
+        );
+        io
+    }
+    struct D;
+    impl Game for D {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(dio()));
+            let props = serde_json::json!({ "credits": "data/credits.txt", "levels": ["data/level.json"], "map": "data/map.bytes", "cache": 99 });
+            ctx.world.spawn((Name("Data".into()), Transform::default(), GlobalTransform::default(), Script(vec![ScriptRef::new("scripts/Data.ts").with_props(props)])));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(dio())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(D);
+    for _ in 0..3 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    let names: Vec<String> = e.world.query::<&Name>().iter().map(|(_, n)| n.0.clone()).collect();
+    assert!(
+        names.iter().any(|n| n == r#"[2,true,3,"level",4,250,7,2,4,"game/Resources/Sounds/hit.txt","boom","Resources/Props/Crate.prefab.json",null,5]"#),
+        "{names:?}"
+    );
+    // what the editor reads: fields without the non-serialized one, and the metadata
+    let mut host = JsHost::with_io(dio());
+    let mut gfx = NullBackend::new();
+    let mut eng = Engine::new(D);
+    eng.frame(0.0, &mut gfx);
+    eng.with_context(&mut gfx, |ctx| {
+        let mut api = crate::api_of(ctx);
+        let fields: Vec<String> = host.defaults(&mut api, "scripts/Data.ts").unwrap().into_iter().map(|(k, _)| k).collect();
+        assert_eq!(fields, ["credits", "levels", "map", "secret", "speed"]);
+        let meta = host.field_meta(&mut api, "scripts/Data.ts").unwrap();
+        assert_eq!(meta["fields"]["credits"]["type"], "textAsset");
+        assert_eq!(meta["fields"]["levels"]["array"], true);
+        assert_eq!(meta["fields"]["secret"]["hide"], true);
+        assert_eq!(meta["fields"]["speed"]["range"], serde_json::json!([0, 10]));
+        assert_eq!(meta["fields"]["speed"]["header"], "Tuning");
+        assert_eq!(meta["buttons"][0]["label"], "Reset Speed");
+    });
+}

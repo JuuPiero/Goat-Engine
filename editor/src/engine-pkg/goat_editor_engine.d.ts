@@ -151,6 +151,11 @@ export class EditorEngine {
      */
     scene_overlay(w: number, h: number, px: number, py: number): string;
     /**
+     * An Inspector button of a script (`@button`): Edit mode returns the props to save (JSON),
+     * Play mode "" (the running object gets the call).
+     */
+    script_button(id: string, index: number, method: string): string;
+    /**
      * `{ kind: "behaviour" | "scriptableObject", fields: {...} }` or `{ error }` of a script.
      */
     script_info(src: string): string;
@@ -305,6 +310,7 @@ export interface InitOutput {
     readonly editorengine_save_scene: (a: number) => [number, number, number, number];
     readonly editorengine_scene: (a: number) => [number, number];
     readonly editorengine_scene_overlay: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly editorengine_script_button: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly editorengine_script_info: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_select: (a: number, b: number, c: number) => void;
     readonly editorengine_select_many: (a: number, b: number, c: number) => void;

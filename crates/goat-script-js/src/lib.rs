@@ -681,6 +681,37 @@ impl JsHost {
         })
     }
 
+    /// The serialized fields of a live instance (the editor reads them after an Inspector button
+    /// ran, to save what the method changed).
+    pub fn instance_fields(&mut self, api: &mut Api, id: u32) -> Result<Vec<(String, Value)>, String> {
+        self.enter(api, |h| {
+            let object = h.instances.get(&id).map(|i| i.object.clone()).ok_or("no such instance")?;
+            let goat = h.evaluate("goat")?;
+            let fields = goat.get(js_string!("__fields"), &mut h.ctx).map_err(|e| h.describe(e))?;
+            let f = fields.as_callable().ok_or("goat.js has no __fields")?;
+            let v = f.call(&JsValue::undefined(), &[object.into()], &mut h.ctx).map_err(|e| h.describe(e))?;
+            let mut v = v.to_json(&mut h.ctx).map(|v| v.unwrap_or(Value::Null)).map_err(|e| h.describe(e))?;
+            goat_script::normalize_numbers(&mut v);
+            serde_json::from_value(v).map_err(|e| e.to_string())
+        })
+    }
+
+    /// The Inspector metadata of a script class (`@field` types, `@hideInInspector`, `@range`,
+    /// `@button`...): `{ fields: { name: {...} }, buttons: [{ method, label, menu? }] }`.
+    pub fn field_meta(&mut self, api: &mut Api, src: &str) -> Result<Value, String> {
+        self.ensure_io(api)?;
+        self.enter(api, |h| {
+            let class = h.class_of(src)?;
+            let goat = h.evaluate("goat")?;
+            let f = goat.get(js_string!("__fieldMeta"), &mut h.ctx).map_err(|e| h.describe(e))?;
+            let f = f.as_callable().ok_or("goat.js has no __fieldMeta")?;
+            let v = f.call(&JsValue::undefined(), &[class.into()], &mut h.ctx).map_err(|e| h.describe(e))?;
+            let mut j = v.to_json(&mut h.ctx).map(|v| v.unwrap_or(Value::Null)).map_err(|e| h.describe(e))?;
+            goat_script::normalize_numbers(&mut j);
+            Ok(j)
+        })
+    }
+
     /// Whether a script's class extends goat's ScriptableObject.
     pub fn is_scriptable_object(&mut self, api: &mut Api, src: &str) -> Result<bool, String> {
         self.ensure_io(api)?;

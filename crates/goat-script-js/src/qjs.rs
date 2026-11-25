@@ -285,6 +285,18 @@ impl QjsHost {
         })
     }
 
+    /// The Inspector metadata of a script class (see [`JsHost::field_meta`](crate::JsHost::field_meta)).
+    pub fn field_meta(&mut self, api: &mut Api, src: &str) -> Result<Value, String> {
+        self.ensure_io(api)?;
+        let sh = self.shared();
+        self.enter(api, |ctx, h| {
+            let class = class_of(ctx, &sh, src).catch(ctx).map_err(|e| e.to_string())?;
+            let f: Function = h.goat(ctx)?.get("__fieldMeta").map_err(|e| e.to_string())?;
+            let v: JsValue = f.call((class,)).catch(ctx).map_err(|e| e.to_string())?;
+            from_js(ctx, &v).map_err(|e| e.to_string())
+        })
+    }
+
     /// Whether a script's class extends goat's ScriptableObject.
     pub fn is_scriptable_object(&mut self, api: &mut Api, src: &str) -> Result<bool, String> {
         self.ensure_io(api)?;

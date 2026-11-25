@@ -139,8 +139,9 @@ Duyệt bảng "Đối chiếu với Unity" và từng phần README / API của
 - ⬜ Còn lại của đồ hoạ cấp thấp: RawImage hiện render texture, `Sprite.create`, `Graphics.drawTexture`, `onRenderImage` trong script, `readPixels` trên web / 3DS, GPU instancing thật (desktop), Inspector của asset Render Texture
 - ✅ `Gizmos.*` / `Handles.*` + `onDrawGizmos` / `onDrawGizmosSelected` của script (Edit mode và Play)
 - ✅ Nhiều scene: `LoadSceneMode.Additive`, `loadSceneAsync` → AsyncOperation, `unloadSceneAsync`, `dontDestroyOnLoad`, `setActiveScene`, `gameObject.scene`, sự kiện sceneLoaded / sceneUnloaded, Hierarchy nhiều scene khi Play
-- ⬜ `TextAsset` / `JsonAsset` / `BufferAsset`, `Resources.loadPrefab` / `loadAll` / `find`
-- ⬜ Attribute field: `@hideInInspector`, `@nonSerialized`, mảng + struct `@serializable`, `@createAssetMenu`, `@contextMenu`, decorator kiểu Odin (`@button`, `@showIf`, `@boxGroup`...)
+- ✅ `TextAsset` / `JsonAsset` / `BufferAsset`, `Resources.load` / `loadPrefab` / `loadAll` / `find` (thư mục `Resources/`)
+- ✅ Decorator field: `@field(Type)` / `[Type]`, `@hideInInspector`, `@nonSerialized`, `@header`, `@tooltip`, `@range`, `@readOnly`, `@showIf` / `@hideIf`, `@button`, `@contextMenu`
+- ⬜ Còn lại: struct `@serializable` lồng nhau trong Inspector, `@createAssetMenu`, nhóm kiểu Odin (`@boxGroup`, `@foldoutGroup`...)
 - ⬜ API script cho LineRenderer / TrailRenderer / ParticleSystem / Light / Camera (field + hàm), EventSystem kéo thả (`onBeginDrag` / `onDrag` / `onDrop` / `onScroll`)
 - ⬜ `RenderStats`, `ProfilerMarker` / `Profiler.beginSample` / `ProfilerRecorder`, `Screen.safeArea` / `dpi` / `orientation`
 - ⬜ GPU Instancing (material `enableInstancing`; desktop), Baked Animation (GPU) cho đám đông, GPU skinning

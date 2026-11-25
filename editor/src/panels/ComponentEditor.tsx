@@ -141,8 +141,11 @@ const ASSET_EXT: Record<string, RegExp> = {
   scriptableObject: /\.asset\.json$/i,
   shader: /\.shader$/i,
   cubemap: /\.cubemap\.json$/i,
+  textAsset: /\.(txt|md|csv|tsv|xml|ya?ml|ini|json|html|css|glsl|hlsl|shader)$/i,
+  jsonAsset: /\.json$/i,
+  bufferAsset: /./,
 };
-const KIND_LABEL: Record<string, string> = { scriptableObject: 'ScriptableObject', script: 'Script', controller: 'Animator Controller', cubemap: 'Cubemap', renderTexture: 'Render Texture' };
+const KIND_LABEL: Record<string, string> = { scriptableObject: 'ScriptableObject', script: 'Script', controller: 'Animator Controller', cubemap: 'Cubemap', renderTexture: 'Render Texture', textAsset: 'TextAsset', jsonAsset: 'JsonAsset', bufferAsset: 'BufferAsset' };
 const BUILTINS: Record<string, string[]> = {
   mesh: ['builtin:cube', 'builtin:sphere', 'builtin:capsule', 'builtin:cylinder', 'builtin:plane', 'builtin:quad'],
   material: ['builtin:default'],
@@ -353,9 +356,22 @@ function Field({ path, name, value, hints, onChange }: { path: string; name: str
 
 // ------------------------------------------------------------------ script fields
 
+/** Inspector metadata of a script field (decorators: @field, @hideInInspector, @range...). */
+interface FieldMeta {
+  type?: string;
+  array?: boolean;
+  hide?: boolean;
+  readOnly?: boolean;
+  header?: string;
+  tooltip?: string;
+  range?: [number, number];
+  showIf?: [string, Json];
+  hideIf?: [string, Json];
+}
 interface ScriptInfoJson {
   kind?: 'behaviour' | 'scriptableObject';
   fields?: Record<string, Json>;
+  meta?: { fields?: Record<string, FieldMeta>; buttons?: { method: string; label: string; menu?: boolean }[] };
   /** Field names in declaration order. */
   order?: string[];
   error?: string;
@@ -375,31 +391,78 @@ export function scriptInfo(src: string): ScriptInfoJson | null {
 /// Unity's serialized fields of a script (a Behaviour on an object, or a ScriptableObject asset):
 /// the class's fields with their defaults, the saved values over them. Fields holding nothing or a
 /// `.asset.json` are object references (drop a ScriptableObject asset on them).
-export function ScriptFields({ src, values, onChange, path }: { src: string; values: Record<string, Json>; onChange: (key: string, value: Json) => void; path: string }) {
+export function ScriptFields({ src, values, onChange, path, onButton }: { src: string; values: Record<string, Json>; onChange: (key: string, value: Json) => void; path: string; onButton?: (method: string) => void }) {
   const rev = useStore((s) => s.revision);
   const info = useMemo(() => scriptInfo(src), [src, rev]);
   if (!src) return <div className="dim">Pick a script</div>;
   if (!info) return null;
   if (info.error) return <div className="dim script-error" title={info.error}>{info.error.split('\n')[0]}</div>;
   const keys = info.order ?? Object.keys(info.fields ?? {});
-  if (!keys.length) return <div className="dim">(no fields)</div>;
+  const meta = info.meta?.fields ?? {};
+  const buttons = (info.meta?.buttons ?? []).filter((b) => !b.menu);
+  if (!keys.length && !buttons.length) return <div className="dim">(no fields)</div>;
+  const valueOf = (k: string): Json => (k in values ? values[k] : info.fields?.[k]) ?? null;
+  const same = (a: Json, b: Json) => JSON.stringify(a) === JSON.stringify(b);
   return (
     <>
       {keys.map((k) => {
-        const v = k in values ? values[k] : info.fields![k];
-        const reference = v === null || (typeof v === 'string' && /\.asset\.json$/i.test(v));
-        return reference ? (
-          <Row key={k} name={k}>
-            <AssetField value={typeof v === 'string' && v ? v : null} kind="scriptableObject" onChange={(nv) => onChange(k, nv)} />
-          </Row>
-        ) : (
-          <Field key={k} path={`${path}.${k}`} name={k} value={v} hints={{}} onChange={(nv) => onChange(k, nv)} />
+        const m = meta[k] ?? {};
+        if (m.hide) return null;
+        if (m.showIf && !(m.showIf[1] === true ? !!valueOf(m.showIf[0]) : same(valueOf(m.showIf[0]), m.showIf[1]))) return null;
+        if (m.hideIf && (m.hideIf[1] === true ? !!valueOf(m.hideIf[0]) : same(valueOf(m.hideIf[0]), m.hideIf[1]))) return null;
+        const v = valueOf(k);
+        const headerRow = m.header ? <div key={`${k}-h`} className="g-field-header">{m.header}</div> : null;
+        const kind = m.type && m.type !== 'gameObject' ? m.type : null;
+        let body: React.ReactNode;
+        if (kind && m.array) {
+          const list = (Array.isArray(v) ? v : []) as (string | null)[];
+          body = (
+            <Row name={`${k} (${list.length})`}>
+              <div className="g-asset-list">
+                {list.map((x, i) => (
+                  <div key={i} className="g-asset-list-row">
+                    <AssetField value={typeof x === 'string' && x ? x : null} kind={kind} onChange={(nv) => onChange(k, list.map((y, j) => (j === i ? nv : y)))} />
+                    <button className="g-icon-btn" title="Remove" onClick={() => onChange(k, list.filter((_, j) => j !== i))}>−</button>
+                  </div>
+                ))}
+                <button className="g-btn small" onClick={() => onChange(k, [...list, null])}>+ Add</button>
+              </div>
+            </Row>
+          );
+        } else if (kind || v === null || (typeof v === 'string' && /\.asset\.json$/i.test(v))) {
+          body = (
+            <Row name={k}>
+              <AssetField value={typeof v === 'string' && v ? v : null} kind={kind ?? 'scriptableObject'} onChange={(nv) => onChange(k, nv)} />
+            </Row>
+          );
+        } else if (m.range && typeof v === 'number') {
+          const [lo, hi] = m.range;
+          body = (
+            <Row name={k}>
+              <div className="g-range">
+                <input type="range" min={lo} max={hi} step={(hi - lo) / 100} value={v} disabled={m.readOnly} onChange={(e) => onChange(k, Number(e.target.value))} />
+                <NumberField label="" value={v} onChange={(nv) => onChange(k, Math.min(hi, Math.max(lo, nv)))} />
+              </div>
+            </Row>
+          );
+        } else {
+          body = <Field path={`${path}.${k}`} name={k} value={v ?? null} hints={{}} onChange={(nv) => !m.readOnly && onChange(k, nv)} />;
+        }
+        return (
+          <div key={k} title={m.tooltip} className={m.readOnly ? 'g-readonly' : undefined}>
+            {headerRow}
+            {body}
+          </div>
         );
       })}
+      {onButton && buttons.map((b) => (
+        <div key={b.method} className="g-script-button">
+          <button className="g-btn" onClick={() => onButton(b.method)}>{b.label}</button>
+        </div>
+      ))}
     </>
   );
 }
-
 interface ScriptRefJson {
   src: string;
   props?: Record<string, Json> | null;
@@ -413,12 +476,24 @@ const scriptTitle = (src: string) => (src ? `${nameOf(src).replace(/\.(ts|js|mjs
 function ScriptBlocks({ list, write, ids }: { list: ScriptRefJson[]; write: (next: ScriptRefJson[]) => void; ids: string[] }) {
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const set = (i: number, patch: Partial<ScriptRefJson>) => write(list.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  // @button / @contextMenu: Edit mode saves what the method changed, Play mode calls the running object
+  const runButton = (i: number, method: string) => {
+    const e = getEngine();
+    if (!e) return;
+    try {
+      const r = e.script_button(ids[0], i, method);
+      if (r) set(i, { props: JSON.parse(r) as Record<string, Json> });
+    } catch (err) {
+      log(`: ${err}`, 'error');
+    }
+  };
   return (
     <>
       {list.map((s, i) => {
         const menu = (ev: React.MouseEvent) =>
           openContextMenu(ev, [
             { label: 'Reset', action: () => set(i, { props: null }) },
+            ...(scriptInfo(s.src)?.meta?.buttons ?? []).filter((b) => b.menu).map((b) => ({ label: b.label, action: () => runButton(i, b.method) })),
             '-',
             { label: 'Remove Component', action: () => mutate(`Remove ${scriptTitle(s.src)}`, () => ids.forEach((x) => (list.length > 1 ? getEngine()?.set_component(x, 'Script', JSON.stringify(list.filter((_, j) => j !== i))) : getEngine()?.remove_component(x, 'Script')))) },
             { label: 'Move Up', disabled: i === 0, action: () => write(list.map((x, j) => (j === i - 1 ? list[i] : j === i ? list[i - 1] : x))) },
@@ -445,7 +520,7 @@ function ScriptBlocks({ list, write, ids }: { list: ScriptRefJson[]; write: (nex
                 <Row name="Script">
                   <AssetField value={s.src || null} kind="script" onChange={(v) => set(i, { src: v ?? '', props: null })} />
                 </Row>
-                <ScriptFields src={s.src} path={`Script.${i}`} values={(s.props ?? {}) as Record<string, Json>} onChange={(k, v) => set(i, { props: { ...(s.props ?? {}), [k]: v } })} />
+                <ScriptFields src={s.src} path={`Script.${i}`} values={(s.props ?? {}) as Record<string, Json>} onChange={(k, v) => set(i, { props: { ...(s.props ?? {}), [k]: v } })} onButton={(m) => runButton(i, m)} />
               </>
             )}
           </div>

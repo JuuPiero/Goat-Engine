@@ -44,7 +44,8 @@ impl EditorCore {
                 match host.is_scriptable_object(&mut api, src).and_then(|so| host.defaults(&mut api, src).map(|f| (so, f))) {
                     Ok((so, fields)) => {
                         let order: Vec<&String> = fields.iter().map(|(k, _)| k).collect();
-                        json!({ "kind": if so { "scriptableObject" } else { "behaviour" }, "order": order, "fields": fields.iter().cloned().collect::<serde_json::Map<_, _>>() })
+                        let meta = host.field_meta(&mut api, src).unwrap_or(Value::Null);
+                        json!({ "kind": if so { "scriptableObject" } else { "behaviour" }, "order": order, "fields": fields.iter().cloned().collect::<serde_json::Map<_, _>>(), "meta": meta })
                     }
                     Err(e) => json!({ "error": e }),
                 }
@@ -52,6 +53,33 @@ impl EditorCore {
         };
         self.scripts.cache.insert(src.to_string(), v.clone());
         v
+    }
+
+    /// An Inspector button (`@button` / `@contextMenu`) of the `index`-th script of `e`. Playing:
+    /// called on the running instance (next frame). Edit mode: called on a fresh instance with the
+    /// saved values; the fields it changed are saved back (returns the new props to store).
+    pub fn script_button(&mut self, gfx: &mut dyn GraphicsBackend, e: goat_runtime::Entity, index: usize, method: &str) -> Result<Option<Value>, String> {
+        if let Some(play) = self.play.as_mut() {
+            play.resources.get_or_default::<goat_script::Messages>().0.push((e, method.to_string(), Value::Null));
+            return Ok(None);
+        }
+        let r = self.edit.world.get::<&goat_script::Script>(e).map_err(|_| "no Script on this object")?.0.get(index).cloned().ok_or("no such script")?;
+        let io = self.io.clone();
+        let (scripts, edit) = (&mut self.scripts, &mut self.edit);
+        let host = scripts.host.get_or_insert_with(|| JsHost::with_io(io));
+        let props = edit.with_context(gfx, |ctx| {
+            let x = ctx.resources.get_or_default::<goat_script::Extensions>();
+            if x.get("Gizmos.lines").is_none() {
+                goat_script::register_core(x);
+            }
+            let mut api = goat_script_js::api_of(ctx);
+            use goat_script::ScriptHost;
+            let id = host.instantiate(&mut api, e, &r.src, &r.props)?;
+            let result = host.message(&mut api, id, e, method, &Value::Null).and_then(|_| host.instance_fields(&mut api, id));
+            host.destroy(id);
+            result
+        })?;
+        Ok(Some(Value::Object(props.into_iter().collect())))
     }
 
     /// Edit mode: `onDrawGizmos` (and `onDrawGizmosSelected` for the selection) of the edit
@@ -170,8 +198,8 @@ mod tests {
         let mut gfx = NullBackend::new();
         let mut c = EditorCore::new(io.clone());
         c.first_frame(&mut gfx);
-        assert_eq!(c.script_info(&mut gfx, "scripts/Data.ts"), json!({ "kind": "scriptableObject", "order": ["hp", "dir"], "fields": { "hp": 3, "dir": [0, 1, 0] } }));
-        assert_eq!(c.script_info(&mut gfx, "scripts/Mover.js"), json!({ "kind": "behaviour", "order": ["speed", "target", "label"], "fields": { "speed": 2, "target": null, "label": "go" } }));
+        assert_eq!(c.script_info(&mut gfx, "scripts/Data.ts"), json!({ "kind": "scriptableObject", "order": ["hp", "dir"], "fields": { "hp": 3, "dir": [0, 1, 0] }, "meta": { "fields": {}, "buttons": [] } }));
+        assert_eq!(c.script_info(&mut gfx, "scripts/Mover.js"), json!({ "kind": "behaviour", "order": ["speed", "target", "label"], "fields": { "speed": 2, "target": null, "label": "go" }, "meta": { "fields": {}, "buttons": [] } }));
         assert!(c.script_info(&mut gfx, "scripts/Nope.ts")["error"].is_string());
         // edits are seen once the file changes
         io.put("scripts/Mover.js", b"import { Behaviour } from 'goat';\nexport default class Mover extends Behaviour { speed = 5; }\n".to_vec());
