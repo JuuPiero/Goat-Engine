@@ -161,6 +161,7 @@ impl FontAtlas {
             mipmaps: false,
             format: TextureFormat::Rgba8,
             compressed: None,
+            bc: None,
         };
         Ok(FontAtlas { font, pixels, texture: None, glyphs: HashMap::new(), cursor: (PAD, PAD, 0), dirty: true, ascent, line_height })
     }

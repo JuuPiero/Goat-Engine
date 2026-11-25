@@ -128,6 +128,11 @@ target/release/goat build 3ds --debug  # bản debug
 
 Chạy trên máy 3DS thật: chép `out/3ds/goat-hello.3dsx` vào thư mục `/3ds/` trên thẻ SD rồi mở bằng Homebrew Launcher, hoặc gửi qua Wi-Fi bằng `3dslink`.
 
+Khi đóng gói, asset được **bake** cho nền tảng đích (giữ nguyên tên file, bộ nạp nhận định dạng theo nội dung):
+- Mọi file `.json` (scene, prefab, material, clip, controller, ScriptableObject, input actions, project.json…) → **JSON nhị phân** (`GBJ1`: bảng chuỗi dùng chung, số nguyên varint, số thực f32 khi không mất chính xác) — nhỏ hơn (~40–60%) và đọc nhanh hơn; scene / prefab đọc thẳng thành giá trị, không qua text.
+- Texture PNG / JPEG → **nén khối sẵn cho GPU đích**: 3DS = ETC1 (không alpha) / ETC1A4 (có alpha), đã đổi về kích thước lũy thừa 2 (VRAM bằng 1/8 – 1/4 RGBA8, không giải nén PNG / nén lại trên máy); desktop = BC1 / BC3 (GPU dùng thẳng, máy không hỗ trợ thì giải nén). Mipmap theo `.import.json`. Giữ nguyên ảnh có `"compression": "none"`, `"filter": "nearest"` (pixel art), `"format"` 16-bit, hoặc nhỏ hơn 16×16.
+- Lệnh build in ra đã giảm bao nhiêu; `GOAT_NO_BAKE=1` để tắt bước này.
+
 Tùy chọn của player desktop:
 
 | Tùy chọn | Ý nghĩa |
@@ -227,7 +232,7 @@ Asset được gọi bằng **key** là đường dẫn tương đối:
 
 | Loại | Định dạng |
 |---|---|
-| Ảnh | PNG, JPEG, KTX 1.1 (ETC1 nén sẵn — 3DS nạp thẳng các khối, máy khác giải mã; hoặc RGBA8 / RGB8). Tạo KTX: `cargo run -p goat-assets --example to_ktx -- in.png out.ktx`. Thiết lập import đặt trong `<ảnh>.import.json`: `{ "mipmaps": true, "format": "rgb565", "filter": "nearest", "max_size": 256 }` |
+| Ảnh | PNG, JPEG, KTX 1.1 (ETC1 / ETC1A4 nén sẵn — 3DS nạp thẳng các khối; BC1 / BC3 — desktop nạp thẳng; máy khác giải mã; hoặc RGBA8 / RGB8). Tạo KTX: `cargo run -p goat-assets --example to_ktx -- in.png out.ktx`. Thiết lập import đặt trong `<ảnh>.import.json`: `{ "mipmaps": true, "format": "rgb565", "filter": "nearest", "max_size": 256 }` |
 | Model | glTF 2.0 / GLB: mesh, material, ảnh nhúng, cây node |
 | Material | `*.mat.json`: `{ "base_color": "#3d8bff", "texture": "../textures/a.png", "shininess": 64, "blend": "alpha" }` |
 | Scene / Prefab | `*.scene.json` / `*.prefab.json` (xem `crates/goat-scene/src/lib.rs`) |

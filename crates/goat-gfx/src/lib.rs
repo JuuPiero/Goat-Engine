@@ -10,6 +10,7 @@
 //! that every target can draw *well*: per-pixel Blinn-Phong lighting with one directional light +
 //! ambient (fragment lighting on the 3DS), a base color texture, vertex colors, alpha blending.
 
+pub mod bc;
 pub mod etc1;
 pub mod mesh;
 pub mod null;
@@ -40,6 +41,9 @@ pub struct TextureData {
     /// Already-compressed ETC1 levels (KTX files, precompressed builds): used as is when
     /// `format` is Etc1 / Etc1A4 and the backend stores ETC1; `rgba` still holds the pixels.
     pub compressed: Option<etc1::Etc1Levels>,
+    /// Already-compressed BC1 / BC3 levels (desktop builds): uploaded as is by GPUs that sample
+    /// BC (desktops), else decoded; `rgba` still holds the pixels.
+    pub bc: Option<bc::BcLevels>,
 }
 
 /// GPU storage of a texture. On the 3DS 16-bit formats halve VRAM / bandwidth.
@@ -85,12 +89,12 @@ impl TextureData {
                 rgba.extend_from_slice(&c);
             }
         }
-        TextureData { width: size, height: size, rgba, filter: Filter::Nearest, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None }
+        TextureData { width: size, height: size, rgba, filter: Filter::Nearest, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None, bc: None }
     }
 
     /// Same settings, no pixels (what backends keep after uploading).
     pub fn clone_meta(&self) -> Self {
-        TextureData { width: self.width, height: self.height, rgba: Vec::new(), filter: self.filter, wrap: self.wrap, mipmaps: self.mipmaps, format: self.format, compressed: None }
+        TextureData { width: self.width, height: self.height, rgba: Vec::new(), filter: self.filter, wrap: self.wrap, mipmaps: self.mipmaps, format: self.format, compressed: None, bc: None }
     }
 
     /// Builder-style setters.
@@ -132,7 +136,7 @@ impl TextureData {
 
     /// A 1×1 texture of one color.
     pub fn solid(c: Color) -> Self {
-        TextureData { width: 8, height: 8, rgba: c.to_rgba8().repeat(64), filter: Filter::Nearest, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None }
+        TextureData { width: 8, height: 8, rgba: c.to_rgba8().repeat(64), filter: Filter::Nearest, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None, bc: None }
     }
 }
 

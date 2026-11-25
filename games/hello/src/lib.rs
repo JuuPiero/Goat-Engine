@@ -289,7 +289,7 @@ impl Game for HelloGame {
                     [120, 84, 52, (a * 255.0) as u8]
                 })
                 .collect();
-            gfx.create_texture(&TextureData { width: n, height: n, rgba, filter: goat_runtime::gfx::Filter::Linear, wrap: goat_runtime::gfx::Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None }).expect("texture")
+            gfx.create_texture(&TextureData { width: n, height: n, rgba, filter: goat_runtime::gfx::Filter::Linear, wrap: goat_runtime::gfx::Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None, bc: None }).expect("texture")
         };
         let fence = gfx.create_material(&MaterialDesc { texture: Some(fence_tex), alpha_cutoff: 0.5, alpha_dither: true, cull: goat_runtime::gfx::CullMode::None, specular: Color::BLACK, ..Default::default() }).expect("material");
         let world = &mut *ctx.world;

@@ -85,7 +85,7 @@ impl Builder for Nintendo3ds {
 
     fn build(&self, config: &Config, options: &BuildOptions) -> Result<PathBuf, String> {
         // romfs: the assets with scripts compiled (players/3ds/Cargo.toml points cargo-3ds here)
-        stage_assets(config, &config.target_dir().join("3ds-romfs"))?;
+        stage_assets(config, &config.target_dir().join("3ds-romfs"), goat_assets::bake::Target::N3ds)?;
         let mut cmd = Self::cargo(config)?;
         cmd.args(["+nightly", "3ds", "build", "-p", PACKAGE]);
         if options.release {

@@ -2212,7 +2212,9 @@ dependencies = [
 name = "goat"
 version = "0.1.0"
 dependencies = [
+ "goat-assets",
  "goat-script-js",
+ "serde_json",
 ]
 
 [[package]]

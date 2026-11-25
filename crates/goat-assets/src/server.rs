@@ -135,7 +135,17 @@ impl AssetServer {
             return Ok(TextureData::checker(8, 1, c, c));
         }
         let bytes = self.io.read(key)?;
-        let t = match ext_of(key).as_str() {
+        // the bytes decide (builds store precompressed KTX under the source name)
+        let sniffed = if bytes.starts_with(&[0xAB, b'K', b'T', b'X']) {
+            "ktx".to_string()
+        } else if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+            "png".to_string()
+        } else if bytes.starts_with(&[0xFF, 0xD8]) {
+            "jpg".to_string()
+        } else {
+            ext_of(key)
+        };
+        let t = match sniffed.as_str() {
             "png" => decode_png(&bytes).map_err(|e| AssetError::Format(key.into(), e))?,
             "jpg" | "jpeg" => crate::image::decode_jpeg(&bytes).map_err(|e| AssetError::Format(key.into(), e))?,
             "ktx" => crate::image::decode_ktx(&bytes).map_err(|e| AssetError::Format(key.into(), e))?,
@@ -800,7 +810,7 @@ fn sky_face(i: usize) -> TextureData {
             rgba.extend_from_slice(&[(c.x * 255.0) as u8, (c.y * 255.0) as u8, (c.z * 255.0) as u8, 255]);
         }
     }
-    TextureData { width: n, height: n, rgba, filter: goat_gfx::Filter::Linear, wrap: goat_gfx::Wrap::Clamp, mipmaps: false, format: Default::default(), compressed: None }
+    TextureData { width: n, height: n, rgba, filter: goat_gfx::Filter::Linear, wrap: goat_gfx::Wrap::Clamp, mipmaps: false, format: Default::default(), compressed: None, bc: None }
 }
 
 /// The cache key of a shader variant: the path, then its keywords sorted.

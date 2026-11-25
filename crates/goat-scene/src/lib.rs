@@ -145,6 +145,17 @@ pub fn parse(source: &str, text: &str) -> Result<SceneFile, SceneError> {
     Ok(file)
 }
 
+/// A scene / prefab file of the assets: JSON text, or the binary JSON builds ship (read as a
+/// value directly, no text round trip).
+pub fn read_file(assets: &AssetServer, key: &str) -> Result<SceneFile, SceneError> {
+    let v = assets.io.read_json(key)?;
+    let file: SceneFile = serde_json::from_value(v).map_err(|e| SceneError::Format(key.into(), e.to_string()))?;
+    if file.version > SCENE_VERSION {
+        return Err(SceneError::Format(key.into(), format!("scene version {} is newer than this engine ({SCENE_VERSION})", file.version)));
+    }
+    Ok(file)
+}
+
 pub(crate) const MAX_PREFAB_DEPTH: u32 = 16;
 
 /// Spawns a scene file's entities. Root entities get `parent` (if any). Returns the roots.

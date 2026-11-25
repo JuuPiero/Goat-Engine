@@ -51,7 +51,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ `goat-scene`: scene / prefab JSON, registry component + behaviour (serde), model / prefab instance, lưu ra file (round-trip có test)
 - ✅ JPEG (zune-jpeg; cả ảnh JPEG trong glTF), KTX 1.1: ETC1 nén sẵn (`TextureData.compressed`: 3DS chỉ xếp lại khối, không nén lại trên máy), RGBA8 / RGB8; ví dụ `to_ktx`
 - ✅ GUID + `.meta` (key `guid:...`; editor phát hiện file đổi tên / di chuyển bên ngoài và sửa tham chiếu), override sâu trong prefab (đường id xuyên prefab lồng nhau, JSON merge patch, editor tự ghi khi lưu, entity thêm vào trong prefab), prefab variant (`base`)
-- ⬜ Bản build: chuyển JSON → nhị phân, nén texture trước cho từng nền tảng
+- ✅ Bản build: chuyển JSON → nhị phân, nén texture trước cho từng nền tảng (ETC1 / ETC1A4 cho 3DS, BC1 / BC3 cho desktop)
 - ⬜ Hot reload asset trên desktop
 - ✅ ScriptableObject (`.asset.json`, TS / JS / C#, Inspector + Create menu, tham chiếu từ field script)
 

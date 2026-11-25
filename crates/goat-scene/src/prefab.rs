@@ -23,7 +23,7 @@ use goat_runtime::{Entity, Parent, World};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::{parse, PrefabInstance, SceneError, SceneFile, MAX_PREFAB_DEPTH};
+use crate::{PrefabInstance, SceneError, SceneFile, MAX_PREFAB_DEPTH};
 
 /// One change to an entity inside a prefab instance.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -215,8 +215,7 @@ fn resolve_depth(assets: &AssetServer, key: &str, depth: u32) -> Result<SceneFil
     if depth > MAX_PREFAB_DEPTH {
         return Err(SceneError::Format(key.into(), "prefab variants nested too deep (a variant of itself?)".into()));
     }
-    let text = assets.io.read_string(key)?;
-    let file = parse(key, &text)?;
+    let file = crate::read_file(assets, key)?;
     resolve_variant(assets, key, file, depth)
 }
 

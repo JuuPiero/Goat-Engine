@@ -12,6 +12,8 @@
 //! Formats: PNG ([`image`]), glTF 2.0 / GLB ([`model`]), material files `*.mat.json`
 //! ([`material`]), texture import settings `<texture>.import.json`.
 
+pub mod bake;
+pub mod bjson;
 pub mod image;
 pub mod batch;
 pub mod material;
@@ -185,10 +187,25 @@ impl AssetIo {
     }
     pub fn read_string(&self, key: &str) -> Result<String, AssetError> {
         let bytes = self.read(key)?;
+        // binary JSON of a build: back to text for loaders that parse text
+        if bjson::is_binary(&bytes) {
+            let v = bjson::decode(&bytes).map_err(|e| AssetError::Format(key.to_string(), e))?;
+            return Ok(serde_json::to_string(&v).unwrap_or_default());
+        }
         // files written by Windows tools may start with a UTF-8 BOM
         let text = String::from_utf8(bytes).map_err(|e| AssetError::Format(key.to_string(), e.to_string()))?;
         Ok(text.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(text))
     }
+    /// A JSON file as a value: text, or the binary JSON builds store (no text round trip).
+    pub fn read_json(&self, key: &str) -> Result<serde_json::Value, AssetError> {
+        let bytes = self.read(key)?;
+        if bjson::is_binary(&bytes) {
+            return bjson::decode(&bytes).map_err(|e| AssetError::Format(key.to_string(), e));
+        }
+        let text = std::str::from_utf8(&bytes).map_err(|e| AssetError::Format(key.to_string(), e.to_string()))?;
+        serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text)).map_err(|e| AssetError::Format(key.to_string(), e.to_string()))
+    }
+
     pub fn exists(&self, key: &str) -> bool {
         if key.starts_with("guid:") {
             let path = self.canonical(key);

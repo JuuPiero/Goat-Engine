@@ -447,7 +447,7 @@ fn soft_dot() -> TextureData {
             rgba.extend_from_slice(&[255, 255, 255, (a * a * 255.0) as u8]);
         }
     }
-    TextureData { width: n, height: n, rgba, filter: Filter::Linear, wrap: Wrap::Clamp, mipmaps: true, format: Default::default(), compressed: None }
+    TextureData { width: n, height: n, rgba, filter: Filter::Linear, wrap: Wrap::Clamp, mipmaps: true, format: Default::default(), compressed: None, bc: None }
 }
 
 /// Simulates and draws every [`ParticleSystem`].

@@ -40,7 +40,7 @@ impl Builder for Desktop {
         let out = config.out_dir(self.id())?;
         let assets = super::game_assets(config);
         if assets.is_dir() {
-            stage_assets(config, &out.join("assets"))?;
+            stage_assets(config, &out.join("assets"), goat_assets::bake::Target::Desktop)?;
         }
         copy_into(&out, &[built])
     }

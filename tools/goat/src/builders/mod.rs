@@ -75,8 +75,9 @@ pub(crate) fn game_assets(config: &Config) -> std::path::PathBuf {
 
 /// The game's assets as a build ships them, in `dest`: a copy where scripts are compiled —
 /// C# → JavaScript (tools/goat-cs, needs the .NET SDK when there are .cs files), TypeScript →
-/// JavaScript (oxc) — and their sources dropped (consoles load the JavaScript).
-pub(crate) fn stage_assets(config: &Config, dest: &Path) -> Result<(), String> {
+/// JavaScript (oxc) — and their sources dropped (consoles load the JavaScript); then baked for
+/// the target ([`bake_assets`]: binary JSON, precompressed textures) unless `GOAT_NO_BAKE` is set.
+pub(crate) fn stage_assets(config: &Config, dest: &Path, target: goat_assets::bake::Target) -> Result<(), String> {
     let src = game_assets(config);
     copy_dir(&src, dest)?;
     let mut files = Vec::new();
@@ -105,6 +106,63 @@ pub(crate) fn stage_assets(config: &Config, dest: &Path) -> Result<(), String> {
     }
     if compiled > 0 {
         println!("goat: compiled {compiled} TypeScript file(s)");
+    }
+    if std::env::var_os("GOAT_NO_BAKE").is_none() {
+        bake_assets(dest, target)?;
+    }
+    Ok(())
+}
+
+/// JSON → binary JSON and textures → the target GPU's block compression, in place (same names:
+/// loaders look at the bytes). Prints what it saved.
+pub(crate) fn bake_assets(dest: &Path, target: goat_assets::bake::Target) -> Result<(), String> {
+    use goat_assets::bake::{bake_json, bake_texture, is_bakeable_json};
+    let mut files = Vec::new();
+    walk(dest, &mut files);
+    let (mut json_n, mut json_before, mut json_after) = (0usize, 0u64, 0u64);
+    let (mut tex_n, mut tex_before, mut tex_after) = (0usize, 0u64, 0u64);
+    let mut codecs = std::collections::BTreeMap::<String, usize>::new();
+    // textures first: they read their `.import.json` as text
+    for f in &files {
+        let key = f.strip_prefix(dest).unwrap_or(f).to_string_lossy().replace('\\', "/");
+        let ext = f.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg") {
+            continue;
+        }
+        let bytes = std::fs::read(f).map_err(|e| format!("{key}: {e}"))?;
+        let import = std::fs::read_to_string(format!("{}.import.json", f.display())).ok();
+        match bake_texture(&bytes, &ext, import.as_deref(), target) {
+            Ok(Some((ktx, codec))) => {
+                tex_n += 1;
+                tex_before += bytes.len() as u64;
+                tex_after += ktx.len() as u64;
+                *codecs.entry(format!("{codec:?}")).or_default() += 1;
+                std::fs::write(f, ktx).map_err(|e| format!("{key}: {e}"))?;
+            }
+            Ok(None) => {}
+            Err(e) => println!("goat: {key}: kept as it is ({e})"),
+        }
+    }
+    for f in &files {
+        let key = f.strip_prefix(dest).unwrap_or(f).to_string_lossy().replace('\\', "/");
+        if !is_bakeable_json(&key) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(f) else { continue };
+        if let Some(bin) = bake_json(&text) {
+            json_n += 1;
+            json_before += text.len() as u64;
+            json_after += bin.len() as u64;
+            std::fs::write(f, bin).map_err(|e| format!("{key}: {e}"))?;
+        }
+    }
+    let kb = |b: u64| b as f64 / 1024.0;
+    if json_n > 0 {
+        println!("goat: {json_n} JSON file(s) → binary: {:.1} KB → {:.1} KB", kb(json_before), kb(json_after));
+    }
+    if tex_n > 0 {
+        let list: Vec<String> = codecs.iter().map(|(c, n)| format!("{n} {c}")).collect();
+        println!("goat: {tex_n} texture(s) precompressed ({}): {:.1} KB → {:.1} KB on disk", list.join(", "), kb(tex_before), kb(tex_after));
     }
     Ok(())
 }

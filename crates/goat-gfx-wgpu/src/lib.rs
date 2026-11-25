@@ -320,7 +320,8 @@ impl WgpuBackend {
         let adapter_name = format!("wgpu/{:?} ({})", info.backend, info.name);
         let (device, queue) = (adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("goat"),
-            required_features: wgpu::Features::empty(),
+            // BC textures (precompressed desktop builds) when the GPU samples them
+            required_features: adapter.features() & wgpu::Features::TEXTURE_COMPRESSION_BC,
             required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,
@@ -747,6 +748,32 @@ fn make_depth(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView {
 
 fn upload_texture(device: &wgpu::Device, queue: &wgpu::Queue, t: &TextureData) -> GpuTexture {
     let size = wgpu::Extent3d { width: t.width, height: t.height, depth_or_array_layers: 1 };
+    // precompressed BC levels: uploaded as they are (block-aligned sizes, GPU feature on)
+    if let Some(bc) = t.bc.as_ref().filter(|b| !b.levels.is_empty() && t.width % 4 == 0 && t.height % 4 == 0 && device.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC)) {
+        let format = if bc.alpha { wgpu::TextureFormat::Bc3RgbaUnormSrgb } else { wgpu::TextureFormat::Bc1RgbaUnormSrgb };
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("texture (BC)"),
+            size,
+            mip_level_count: bc.levels.len() as u32,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (level, data) in bc.levels.iter().enumerate() {
+            let (w, h) = ((t.width >> level).max(1), (t.height >> level).max(1));
+            let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: level as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                data,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bw * bc.block_bytes() as u32), rows_per_image: Some(bh) },
+                // the physical size of small levels is whole blocks
+                wgpu::Extent3d { width: bw * 4, height: bh * 4, depth_or_array_layers: 1 },
+            );
+        }
+        return finish_texture(device, tex, t, bc.levels.len());
+    }
     let levels = t.mip_chain(1);
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("texture"),
@@ -766,6 +793,10 @@ fn upload_texture(device: &wgpu::Device, queue: &wgpu::Queue, t: &TextureData) -
             wgpu::Extent3d { width: *w, height: *h, depth_or_array_layers: 1 },
         );
     }
+    finish_texture(device, tex, t, levels.len())
+}
+
+fn finish_texture(device: &wgpu::Device, tex: wgpu::Texture, t: &TextureData, levels: usize) -> GpuTexture {
     let filter = if t.filter == Filter::Linear { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest };
     let wrap = if t.wrap == Wrap::Repeat { wgpu::AddressMode::Repeat } else { wgpu::AddressMode::ClampToEdge };
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -773,7 +804,7 @@ fn upload_texture(device: &wgpu::Device, queue: &wgpu::Queue, t: &TextureData) -
         address_mode_v: wrap,
         mag_filter: filter,
         min_filter: filter,
-        mipmap_filter: if levels.len() > 1 { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest },
+        mipmap_filter: if levels > 1 { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest },
         ..Default::default()
     });
     GpuTexture { view: tex.create_view(&Default::default()), sampler, texture: tex }
