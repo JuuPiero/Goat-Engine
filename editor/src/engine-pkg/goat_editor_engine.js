@@ -18,6 +18,52 @@ export class EditorEngine {
         wasm.__wbg_editorengine_free(ptr, 0);
     }
     /**
+     * `[{ id, name, path }]` of an animated root and the objects under it.
+     * @param {string} root
+     * @returns {string}
+     */
+    anim_paths(root) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ptr0 = passStringToWasm0(root, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.editorengine_anim_paths(this.__wbg_ptr, ptr0, len0);
+            deferred2_0 = ret[0];
+            deferred2_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * Shows a clip (its JSON) at a time on the root's objects; `anim_preview_end` puts them back.
+     * @param {string} root
+     * @param {string} clip_json
+     * @param {number} time
+     */
+    anim_preview(root, clip_json, time) {
+        const val3 = +time;
+        let ptr0, len0, ptr1, len1;
+        try {
+            ptr0 = passStringToWasm0(root, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            len0 = WASM_VECTOR_LEN;
+            ptr1 = passStringToWasm0(clip_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            len1 = WASM_VECTOR_LEN;
+        } catch (e) {
+            if (ptr1) { wasm.__wbindgen_free(ptr1, len1 * 1, 1); }
+            if (ptr0) { wasm.__wbindgen_free(ptr0, len0 * 1, 1); }
+            throw e;
+        }
+        const ret = wasm.editorengine_anim_preview(this.__wbg_ptr, ptr0, len0, ptr1, len1, val3);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    anim_preview_end() {
+        wasm.editorengine_anim_preview_end(this.__wbg_ptr);
+    }
+    /**
      * Apply All: returns `{ key, text }` (the prefab file to write).
      * @param {string} id
      * @returns {string}

@@ -151,6 +151,8 @@ pub struct EditorCore {
     pub(crate) gizmos: crate::gizmos::Gizmos,
     /// Script fields / kinds for the Inspector (scripting.rs).
     pub(crate) scripts: crate::scripting::ScriptInfo,
+    /// The Animation window's preview (animation.rs).
+    pub(crate) anim: crate::animation::AnimPreview,
     /// Play mode paused (the game view keeps drawing) / one frame requested.
     pub paused: bool,
     pub step_once: bool,
@@ -197,6 +199,7 @@ impl EditorCore {
             nav_preview: Default::default(),
             gizmos: Default::default(),
             scripts: Default::default(),
+            anim: Default::default(),
             paused: false,
             step_once: false,
             tools: Default::default(),
@@ -257,6 +260,26 @@ impl EditorCore {
 
     /// The scene as JSON (what Save writes).
     pub fn save_scene(&mut self) -> Result<String, String> {
+        // the Animation window's preview isn't part of the scene: saved with the values it hides
+        let saved = std::mem::take(&mut self.anim);
+        let hidden = saved.transforms_snapshot();
+        let current: Vec<(Entity, Transform)> = hidden.iter().filter_map(|(e, _)| self.edit.world.get::<&Transform>(*e).ok().map(|t| (*e, *t))).collect();
+        for (e, t) in &hidden {
+            if let Ok(mut cur) = self.edit.world.get::<&mut Transform>(*e) {
+                *cur = *t;
+            }
+        }
+        let r = self.save_scene_inner();
+        for (e, t) in current {
+            if let Ok(mut cur) = self.edit.world.get::<&mut Transform>(e) {
+                *cur = t;
+            }
+        }
+        self.anim = saved;
+        r
+    }
+
+    fn save_scene_inner(&mut self) -> Result<String, String> {
         let registry = self.edit.resources.take::<SceneRegistry>().unwrap_or_default();
         let out = self.edit.resources.get::<AssetServer>().map(|a| serde_json::to_string_pretty(&goat_scene::save_world(&self.edit.world, a, &registry)).unwrap_or_default());
         self.edit.resources.put_back(registry);

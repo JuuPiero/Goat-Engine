@@ -2,6 +2,9 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __wbg_editorengine_free: (a: number, b: number) => void;
+export const editorengine_anim_paths: (a: number, b: number, c: number) => [number, number];
+export const editorengine_anim_preview: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+export const editorengine_anim_preview_end: (a: number) => void;
 export const editorengine_apply_prefab: (a: number, b: number, c: number) => [number, number, number, number];
 export const editorengine_backend_name: (a: number) => [number, number];
 export const editorengine_component_action: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];

@@ -225,6 +225,20 @@ impl EditorEngine {
         self.core.instantiate(&mut self.gfx, key, at).map(id_of).map_err(|e| JsValue::from_str(&e))
     }
 
+    // ------------------------------------------------------------ Animation window
+    /// `[{ id, name, path }]` of an animated root and the objects under it.
+    pub fn anim_paths(&self, root: &str) -> String {
+        entity_of(root).map(|e| self.core.anim_paths(e).to_string()).unwrap_or_else(|| "[]".into())
+    }
+    /// Shows a clip (its JSON) at a time on the root's objects; `anim_preview_end` puts them back.
+    pub fn anim_preview(&mut self, root: &str, clip_json: &str, time: f32) -> Result<(), JsValue> {
+        let e = entity_of(root).ok_or_else(|| JsValue::from_str("no entity"))?;
+        self.core.anim_preview(&mut self.gfx, e, clip_json, time).map_err(|e| JsValue::from_str(&e))
+    }
+    pub fn anim_preview_end(&mut self) {
+        self.core.anim_preview_end(&mut self.gfx);
+    }
+
     // ------------------------------------------------------------ shaders
     /// `{ name, kind, properties, state, … }` or `{ errors }` of a `.shader` file.
     pub fn shader_info(&self, key: &str) -> String {

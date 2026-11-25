@@ -36,6 +36,8 @@ export interface EditorState {
   contextMenu: { x: number; y: number; items: MenuItem[] } | null;
   /// Bumped when the scene's entities change (Hierarchy re-reads the engine).
   hierarchyRev: number;
+  /// Bumped when values change without an edit (the Animation window's preview): the Inspector re-reads.
+  inspectorRev: number;
   playing: boolean;
   /// Play mode paused (Unity's Pause).
   paused: boolean;
@@ -64,7 +66,7 @@ export interface EditorState {
   prefabStack: string[];
 }
 
-let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, entities: [], renaming: null, undoLabel: null, redoLabel: null, contextMenu: null, hierarchyRev: 0, playing: false, paused: false, dual3ds: true, viewTab: 'scene', controller: null, tool: 'move', pivotCenter: false, toolLocal: false, view2d: false, viewOrtho: false, showGrid: true, showGizmos: true, gameSize: '3ds', gameZoom: 1, gameStats: false, stats: '', engineError: null, engineReady: false, prefabStack: [] };
+let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, entities: [], renaming: null, undoLabel: null, redoLabel: null, contextMenu: null, hierarchyRev: 0, inspectorRev: 0, playing: false, paused: false, dual3ds: true, viewTab: 'scene', controller: null, tool: 'move', pivotCenter: false, toolLocal: false, view2d: false, viewOrtho: false, showGrid: true, showGizmos: true, gameSize: '3ds', gameZoom: 1, gameStats: false, stats: '', engineError: null, engineReady: false, prefabStack: [] };
 /// Editor preferences remembered between sessions (per machine, like Unity's EditorPrefs).
 const PREFS_KEY = 'goat.editor.prefs.v1';
 const PREF_KEYS = ['tool', 'pivotCenter', 'toolLocal', 'showGrid', 'showGizmos', 'gameSize', 'gameZoom', 'gameStats', 'dual3ds'] as const;

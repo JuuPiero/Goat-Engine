@@ -21,7 +21,7 @@ public class JsWriter(SemanticModel model, string fileStem)
     {
         ["Debug.LogWarning"] = "warn", ["Debug.LogError"] = "error",
     };
-    const string Exports = "Behaviour, MonoBehaviour, ScriptableObject, Resources, Vector2, Vector3, Quaternion, Transform, GameObject, Time, Input, Debug, Mathf, Application, WaitForSeconds, WaitForSecondsRealtime, WaitUntil, WaitWhile, WaitForEndOfFrame, WaitForFixedUpdate, Awaitable, DOTween, Ease, LoopType, PathType, Tween, Sequence, PlayerPrefs, SaveData, UI, Physics, Physics2D, Audio, AudioSource, AudioMixer, Animator, SpriteAnimator, NavMeshAgent, NavMesh, SceneManager, LoadSceneMode, Collision, PointerEventData";
+    const string Exports = "Behaviour, MonoBehaviour, ScriptableObject, Resources, Vector2, Vector3, Quaternion, Transform, GameObject, Time, Input, Debug, Mathf, Application, WaitForSeconds, WaitForSecondsRealtime, WaitUntil, WaitWhile, WaitForEndOfFrame, WaitForFixedUpdate, Awaitable, DOTween, Ease, LoopType, PathType, Tween, Sequence, PlayerPrefs, SaveData, UI, Physics, Physics2D, Audio, AudioSource, AudioMixer, Animator, Animation, SpriteAnimator, NavMeshAgent, NavMesh, SceneManager, LoadSceneMode, Collision, PointerEventData";
 
     // ------------------------------------------------------------------ output helpers
     void Line(string s) => sb.Append(new string(' ', indent * 2)).Append(s).Append('\n');

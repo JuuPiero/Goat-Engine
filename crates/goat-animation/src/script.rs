@@ -71,7 +71,42 @@ fn set_speed(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
     with(api, e, |an| an.speed = s).map(|_| Value::Null)
 }
 
+fn with_anim<R>(api: &mut Api, e: Entity, f: impl FnOnce(&mut crate::Animation) -> R) -> Result<R, String> {
+    let mut a = api.ctx.world.get::<&mut crate::Animation>(e).map_err(|_| "no Animation on this object".to_string())?;
+    Ok(f(&mut a))
+}
+
+/// `Animation.play(clip?)`: the clip (an .anim.json key, or the component's clip) from the start.
+fn anim_play(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
+    let key = a.first().and_then(Value::as_str).map(str::to_string);
+    with_anim(api, e, |an| {
+        let k = key.unwrap_or_else(|| an.clip.clone());
+        an.play(&k);
+    })
+    .map(|_| Value::Null)
+}
+fn anim_stop(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
+    with_anim(api, e, |an| an.stop()).map(|_| Value::Null)
+}
+fn anim_is_playing(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
+    with_anim(api, e, |an| Value::Bool(an.playing.is_some()))
+}
+fn anim_time(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
+    let set = a.first().and_then(Value::as_f64);
+    with_anim(api, e, |an| {
+        if let Some(t) = set {
+            an.time = t as f32;
+        }
+        Value::from(an.time as f64)
+    })
+}
+fn anim_speed(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
+    let s = a.first().and_then(Value::as_f64).unwrap_or(1.0) as f32;
+    with_anim(api, e, |an| an.speed = s).map(|_| Value::Null)
+}
+
 pub fn register(x: &mut goat_script::Extensions) {
+    x.add("Animation.play", anim_play).add("Animation.stop", anim_stop).add("Animation.isPlaying", anim_is_playing).add("Animation.time", anim_time).add("Animation.setSpeed", anim_speed);
     x.add("Animator.events", events).add("Animator.normalizedTime", normalized_time).add("Animator.setSpeed", set_speed);
     x.add("Animator.setFloat", set_float)
         .add("Animator.setInteger", set_integer)

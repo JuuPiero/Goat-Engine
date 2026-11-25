@@ -126,3 +126,4 @@ Mỗi nền tảng = backend đồ họa + platform + `Builder` trong `tools/goa
 - Lõi (`goat-core`, `goat-gfx`, `goat-runtime`) không bao giờ chứa code riêng của một nền tảng.
 - Không cấp phát trong vòng lặp frame ở đường nóng: dùng pool, buffer dùng lại, typed handle.
 - Mỗi tính năng đều được kiểm chứng thật: 3DS trên emulator (và máy thật khi có thể), desktop bằng ảnh chụp tự động.
+- ✅ Cửa sổ Animation (dopesheet, Preview, Record, Add Property) + component Animation + API script (2026-11-25)

@@ -228,6 +228,17 @@ namespace GoatEngine
 
     public class MonoBehaviour : Behaviour { }
 
+    /// <summary>Unity's (legacy) Animation: plays .anim.json clips (Window ▸ Animation).</summary>
+    public class Animation
+    {
+        public static Animation Of(GameObject go) => null!;
+        public void Play(string? clip = null) { }
+        public void Stop() { }
+        public bool isPlaying => false;
+        public float time { get; set; }
+        public float speed { set { } }
+    }
+
     /// <summary>Unity's ScriptableObject: a data asset (<c>.asset.json</c>, Project ▸ Create ▸ ScriptableObject)
     /// shared by everything that references it. A field of this type set in the Inspector gets the asset.</summary>
     public class ScriptableObject

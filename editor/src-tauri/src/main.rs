@@ -114,7 +114,14 @@ fn read_text(s: State<AppState>, key: String) -> Res<String> {
 }
 #[tauri::command]
 fn write_text(s: State<AppState>, key: String, text: String) -> Res<()> {
-    with(&s, |p| std::fs::write(p.abs(&key), text).map_err(|e| e.to_string()))
+    with(&s, |p| {
+        let path = p.abs(&key);
+        // new assets may go into folders that don't exist yet (animations/…)
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(path, text).map_err(|e| e.to_string())
+    })
 }
 /// Shows the item in the OS file manager.
 #[tauri::command]

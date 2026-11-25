@@ -343,6 +343,7 @@ export function AssetPanel() {
       ],
     },
     { label: 'Animator Controller', action: () => void createAsset('controller') },
+    { label: 'Animation Clip', action: () => void freeName('New Animation', '.anim.json').then((k) => writeNew(k, JSON.stringify({ length: 1, loop: true, sample_rate: 60, curves: [] }, null, 2) + '\n')) },
     '-',
     {
       label: 'Scripting',

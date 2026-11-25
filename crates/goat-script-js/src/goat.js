@@ -424,6 +424,20 @@ export class Animator {
   onEvent(fn) { animListeners.push({ h: this._h, fn }); return this; }
 }
 
+/** Unity's (legacy) Animation component: plays the .anim.json clips made in the Animation window.
+ *  Animation.of(go).play() / .play("animations/Door.anim.json") / .stop(); time; isPlaying. */
+export class Animation {
+  constructor(go) { this._h = handle(go); }
+  static of(go) { return new Animation(go); }
+  _c(name, args = []) { return N.call(`Animation.${name}`, this._h, args); }
+  play(clip) { this._c('play', clip == null ? [] : [clip]); }
+  stop() { this._c('stop'); }
+  get isPlaying() { return this._c('isPlaying'); }
+  get time() { return this._c('time'); }
+  set time(t) { this._c('time', [t]); }
+  set speed(s) { this._c('setSpeed', [s]); }
+}
+
 /**
  * Walks an object over the navmesh (Unity's NavMeshAgent): NavMeshAgent.of(go).setDestination(p).
  * State getters read the engine (one call each): remainingDistance, hasPath, pathPending, velocity...

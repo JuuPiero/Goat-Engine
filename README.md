@@ -393,6 +393,14 @@ UI còn có (tên giống Unity, đều dùng được trong file scene):
 - `UiShadow` / `UiOutline`: bóng đổ / viền cho Image, RawImage, Text (khoảng cách tính bằng pixel).
 - `UiEventSystem` (`navigation: true`): D-pad / cần analog di chuyển vùng chọn, A để bấm, B để thoát ô nhập / đóng danh sách. Vùng chọn có màu riêng.
 
+### Cửa sổ Animation (Window ▸ Animation ▸ Animation, Ctrl+6)
+
+Như Unity: chọn một object rồi bấm **Create** → tạo clip `animations/<tên>.anim.json` và gắn component **Animation** (`clip`, `clips`, `play_automatically`, `speed`).
+- Thanh công cụ: **Preview** (clip hiện trên scene tại playhead; tắt preview / đóng cửa sổ thì scene trở lại như cũ, Save và Play không lưu giá trị đang preview), **Record** (●: kéo gizmo / sửa Inspector trên object đang được animate thì thành key tại playhead), về đầu, key trước, Play (Space), key sau, về cuối, số frame, chọn clip / *Create New Clip…*, Samples, Loop.
+- Bên trái: mỗi property một hàng kèm giá trị tại playhead (gõ giá trị = đặt key); **Add Property**: Transform ▸ Position / Rotation / Scale hoặc một số trong component, của object gốc hay object con (đường dẫn theo tên).
+- Dopesheet: thước frame (click / kéo = playhead, Ctrl+lăn chuột = zoom), hàng tổng, key hình thoi: click / Shift+click chọn, kéo để dời (theo frame, Alt+kéo = nhân bản), Delete xoá, double-click trên hàng thêm key, chuột phải: Delete Key, Smooth / Linear / Constant.
+- Script: `Animation.of(go).play()` / `.play("animations/Door.anim.json")` / `.stop()` / `time` / `isPlaying` (C#: `Animation.Of(gameObject).Play()`). Project ▸ Create ▸ Animation Clip tạo clip rỗng.
+
 ### Animator Controller
 
 State machine như Mecanim của Unity, lưu trong file `.controller.json` (tạo bằng *Create ▸ Animator Controller*, sửa trong cửa sổ **Animator** của editor):

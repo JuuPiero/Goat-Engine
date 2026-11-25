@@ -536,7 +536,7 @@ type CompList = { name: string; value: Json }[];
 /// selected (`ids`), only the components they all have; a field edit sets that field on every
 /// one (their other fields stay), fields that differ are marked (Unity's mixed values).
 export function ComponentList({ id, ids = [id] }: { id: string; ids?: string[] }) {
-  const rev = useStore((s) => s.hierarchyRev);
+  const rev = useStore((s) => s.hierarchyRev * 100000 + s.inspectorRev);
   const [list, setList] = useState<CompList>([]);
   const [others, setOthers] = useState<CompList[]>([]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -729,7 +729,7 @@ interface TransformEdit {
 }
 
 export function EntityInspector({ id }: { id: string }) {
-  const rev = useStore((s) => s.hierarchyRev);
+  const rev = useStore((s) => s.hierarchyRev * 100000 + s.inspectorRev);
   const selected = useStore((s) => s.entities);
   // every selected entity (the active one included): edits apply to all of them
   const ids = selected.includes(id) ? selected : [id];
@@ -862,7 +862,7 @@ export function EntityInspector({ id }: { id: string }) {
 /// Unity's prefab instance bar: Open (Prefab Mode), Select (the root), Overrides ▾ with the
 /// changed objects / components, Revert All and Apply All.
 function PrefabBar({ id }: { id: string }) {
-  const rev = useStore((s) => s.hierarchyRev);
+  const rev = useStore((s) => s.hierarchyRev * 100000 + s.inspectorRev);
   const playing = useStore((s) => s.playing);
   const [info, setInfo] = useState<{ root: string; key: string; overrides: { target: number[]; object: string; name?: string; active?: boolean; components: string[]; scripts: boolean }[] } | null>(null);
   useEffect(() => {

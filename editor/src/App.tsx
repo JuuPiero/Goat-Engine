@@ -8,7 +8,7 @@ import { dockBack, float, installPopouts, locationOf, popOut, popoutUrl } from '
 import 'dockview-react/dist/styles/dockview.css';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { listen } from '@tauri-apps/api/event';
-import { Activity, Box, Clapperboard, Crosshair, Globe, Hammer, Hand, Move, Move3d, Pause, Play, Rotate3d, Scale3d, StepForward } from 'lucide-react';
+import { Activity, Box, Clapperboard, Film, Crosshair, Globe, Hammer, Hand, Move, Move3d, Pause, Play, Rotate3d, Scale3d, StepForward } from 'lucide-react';
 import { api } from './api';
 import { handleDrop, installDropHandling } from './dnd';
 import { getState, log, refresh, run, setState, useStore } from './store';
@@ -16,6 +16,7 @@ import { AssetPanel } from './panels/AssetPanel';
 import { Console, Hierarchy, Inspector } from './panels/Panels';
 import { GameView, SceneView } from './panels/Viewport';
 import { AnimatorWindow } from './panels/AnimatorWindow';
+import { AnimationWindow } from './panels/AnimationWindow';
 import { getEngine, openScene, saveScene, startPlay, stepFrame, stopPlay, syncFiles, togglePause } from './engine';
 import { ProfilerPanel } from './panels/ProfilerPanel';
 import { BuildSettingsWindow, ProjectSettingsWindow } from './panels/SettingsWindows';
@@ -36,6 +37,7 @@ const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> =
   project: () => panel(<AssetPanel />),
   console: () => panel(<Console />),
   animator: () => <AnimatorWindow />,
+  animation: () => <AnimationWindow />,
   profiler: () => <ProfilerPanel />,
   build: () => <div className="panel-scroll g-panel"><BuildSettingsWindow /></div>,
   settings: () => panel(<ProjectSettingsWindow />),
@@ -61,6 +63,7 @@ const PANELS: { id: string; title: string; key?: string; near?: string }[] = [
   { id: 'hierarchy', title: 'Hierarchy', key: 'Ctrl+4', near: 'hierarchy' },
   { id: 'project', title: 'Project', key: 'Ctrl+5', near: 'project' },
   { id: 'console', title: 'Console', key: 'Ctrl+Shift+C', near: 'project' },
+  { id: 'animation', title: 'Animation', key: 'Ctrl+6', near: 'project' },
   { id: 'animator', title: 'Animator' },
   { id: 'profiler', title: 'Profiler', key: 'Ctrl+7', near: 'project' },
 ];
@@ -121,6 +124,9 @@ function Toolbar({ dv }: { dv: React.RefObject<DockviewApi | null> }) {
         </div>
       </div>
       <div className="g-toolbar-right">
+        <button className="g-btn" onClick={() => showPanel(dv.current, 'animation', 'Animation', 'project')} title="Window > Animation > Animation (Ctrl+6)">
+          <Film size={13} /> Animation
+        </button>
         <button className="g-btn" onClick={() => showPanel(dv.current, 'animator', 'Animator')} title="Window > Animator">
           <Clapperboard size={13} /> Animator
         </button>
@@ -205,7 +211,7 @@ export function App() {
         ev.preventDefault();
         showPanel(dv.current, 'build', 'Build Settings');
       }
-      // Window shortcuts (Unity): Ctrl+1 Scene, Ctrl+2 Game, Ctrl+3 Inspector, Ctrl+4 Hierarchy, Ctrl+5 Project, Ctrl+7 Profiler
+      // Window shortcuts (Unity): Ctrl+1 Scene, Ctrl+2 Game, Ctrl+3 Inspector, Ctrl+4 Hierarchy, Ctrl+5 Project, Ctrl+6 Animation, Ctrl+7 Profiler
       const digit = /^Digit([1-7])$/.exec(ev.code)?.[1];
       if (ctrl && !ev.shiftKey && !ev.altKey && digit) {
         const p = PANELS.find((x) => x.key === `Ctrl+${digit}`);
@@ -438,7 +444,7 @@ function menus(dv: React.RefObject<DockviewApi | null>, resetLayout: () => void,
       title: 'Window',
       items: () => [
         { label: 'General', children: PANELS.slice(0, 6).map((p) => ({ label: p.title, shortcut: p.key, action: () => showPanel(dv.current, p.id, p.title, p.near) })) },
-        { label: 'Animation', children: [{ label: 'Animator', action: () => showPanel(dv.current, 'animator', 'Animator') }] },
+        { label: 'Animation', children: [{ label: 'Animation', shortcut: 'Ctrl+6', action: () => showPanel(dv.current, 'animation', 'Animation', 'project') }, { label: 'Animator', action: () => showPanel(dv.current, 'animator', 'Animator') }] },
         { label: 'Analysis', children: [{ label: 'Profiler', shortcut: 'Ctrl+7', action: () => showPanel(dv.current, 'profiler', 'Profiler', 'project') }] },
         '-',
         { label: 'Build Settings', shortcut: 'Ctrl+Shift+B', action: () => showPanel(dv.current, 'build', 'Build Settings') },

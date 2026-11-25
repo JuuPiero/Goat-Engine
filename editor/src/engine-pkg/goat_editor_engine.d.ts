@@ -6,6 +6,15 @@ export class EditorEngine {
     free(): void;
     [Symbol.dispose](): void;
     /**
+     * `[{ id, name, path }]` of an animated root and the objects under it.
+     */
+    anim_paths(root: string): string;
+    /**
+     * Shows a clip (its JSON) at a time on the root's objects; `anim_preview_end` puts them back.
+     */
+    anim_preview(root: string, clip_json: string, time: number): void;
+    anim_preview_end(): void;
+    /**
      * Apply All: returns `{ key, text }` (the prefab file to write).
      */
     apply_prefab(id: string): string;
@@ -210,6 +219,9 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_editorengine_free: (a: number, b: number) => void;
+    readonly editorengine_anim_paths: (a: number, b: number, c: number) => [number, number];
+    readonly editorengine_anim_preview: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly editorengine_anim_preview_end: (a: number) => void;
     readonly editorengine_apply_prefab: (a: number, b: number, c: number) => [number, number, number, number];
     readonly editorengine_backend_name: (a: number) => [number, number];
     readonly editorengine_component_action: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
