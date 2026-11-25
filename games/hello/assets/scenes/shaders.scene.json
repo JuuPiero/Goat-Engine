@@ -17,6 +17,12 @@
         "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/dissolve.mat.json" } } },
     { "id": 7, "name": "Wobble", "components": {
         "Transform": { "position": [2.4, 1.1, 0], "scale": [1.6, 1.6, 1.6] },
-        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/wobble.mat.json" } } }
+        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/wobble.mat.json" } } },
+    { "id": 8, "name": "TintGlow (3DS too)", "components": {
+        "Transform": { "position": [-1.3, 0.7, 2.2], "euler": [0, 30, 0] },
+        "MeshRenderer": { "mesh": "builtin:cube", "material": "materials/tintglow.mat.json" } } },
+    { "id": 9, "name": "Blend2 (3DS too)", "components": {
+        "Transform": { "position": [1.3, 0.7, 2.2], "euler": [0, -30, 0] },
+        "MeshRenderer": { "mesh": "builtin:cube", "material": "materials/blend2.mat.json" } } }
   ]
 }

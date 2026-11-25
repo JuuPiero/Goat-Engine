@@ -2563,6 +2563,7 @@ dependencies = [
 name = "goat-shader"
 version = "0.1.0"
 dependencies = [
+ "goat-gfx",
  "naga",
  "serde",
  "serde_json",

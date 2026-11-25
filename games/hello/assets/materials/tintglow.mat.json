@@ -1,0 +1,1 @@
+{ "shader": "../shaders/TintGlow.shader", "properties": { "_MainTex": "../textures/logo.png", "_Color": "#ffd9b3", "_Glow": "#26100a" } }

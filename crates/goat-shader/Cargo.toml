@@ -10,6 +10,7 @@ license.workspace = true
 validate = ["dep:naga"]
 
 [dependencies]
+goat-gfx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 naga = { version = "25", features = ["wgsl-in"], optional = true }

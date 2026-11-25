@@ -387,8 +387,22 @@ impl AssetServer {
         let m = &sh.standard;
         let tex_of = |name: &Option<String>| name.as_ref().and_then(|n| sh.textures.iter().find(|t| &t.name == n)).and_then(|t| textures[t.unit]);
         let color_of = |name: &Option<String>| name.as_ref().and_then(|n| value(n).or_else(|| sh.params.iter().find(|p| &p.name == n).map(|p| p.default))).map(|c| goat_core::Color::rgba(c[0], c[1], c[2], c[3]));
+        // no custom programs (3DS): the texture combiners when the fragment program fits them,
+        // else the standard mapping (Fallback)
+        let tev = if gpu.is_none() {
+            match sh.tev(&value) {
+                Ok(p) => Some(p),
+                Err(why) => {
+                    goat_core::warn!("{key}: {} draws its Fallback here ({why})", sh.name);
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let d = MaterialDesc::default();
         MaterialDesc {
+            tev,
             base_color: color_of(&m.color).unwrap_or(d.base_color),
             texture: tex_of(&m.texture),
             lighting: if m.lighting == "unlit" { goat_gfx::LightingModel::Unlit } else { goat_gfx::LightingModel::Lit },

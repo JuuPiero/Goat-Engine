@@ -654,6 +654,11 @@ impl Citro3dBackend {
     }
 
     fn set_material(&mut self, m: &MaterialDesc, tex: Option<*mut c3d::C3D_Tex>) {
+        if let Some(p) = &m.tev {
+            self.set_tev_material(m, p);
+            self.set_render_state(m);
+            return;
+        }
         let gpu = |id: Option<TextureId>, cube: bool, s: &mut Self| id.filter(|t| s.cubes.contains(&t.index()) == cube).and_then(|t| s.gpu_textures.get_mut(&t.index())).map(|t| &mut *t.tex as *mut c3d::C3D_Tex);
         let env_map = if m.reflectivity > 0.0 { gpu(m.env_map, true, self) } else { None };
         let emissive_map = if env_map.is_none() { gpu(m.emissive_texture, false, self) } else { None };
@@ -756,6 +761,117 @@ impl Citro3dBackend {
                 c3d::C3D_TexEnvFunc(env4, c3d::C3D_RGB, ctru::GPU_MODULATE);
                 c3d::C3D_TexEnvColor(env4, abgr_u32(g));
             }
+            // stage 5 and the combiner buffer: only Goat shader programs use them
+            c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(5));
+            c3d::C3D_TexEnvBufUpdate(c3d::C3D_Both as i32, 0);
+        }
+        self.set_render_state(m);
+    }
+
+    /// A Goat shader compiled for the texture combiners (goat-shader pica.rs): its stages, its
+    /// two textures, the fragment lighting with a white material when it is lit (the program
+    /// multiplies the light itself), then the view's grading in the next free stage.
+    fn set_tev_material(&mut self, m: &MaterialDesc, p: &goat_gfx::TevProgram) {
+        use goat_gfx::{TevFunc, TevOperand, TevSource};
+        self.use_program(0);
+        self.set_procedural(None);
+        let tex = |i: usize, s: &mut Self| p.textures[i].and_then(|u| m.shader_textures.get(u).copied().flatten()).and_then(|t| s.gpu_textures.get_mut(&t.index())).map(|t| &mut *t.tex as *mut c3d::C3D_Tex);
+        let (t0, t1) = (tex(0, self), tex(1, self));
+        let src = |s: TevSource| match s {
+            TevSource::Vertex => ctru::GPU_PRIMARY_COLOR,
+            TevSource::LightDiffuse => ctru::GPU_FRAGMENT_PRIMARY_COLOR,
+            TevSource::LightSpecular => ctru::GPU_FRAGMENT_SECONDARY_COLOR,
+            TevSource::Texture0 => ctru::GPU_TEXTURE0,
+            TevSource::Texture1 => ctru::GPU_TEXTURE1,
+            TevSource::Constant => ctru::GPU_CONSTANT,
+            TevSource::Previous => ctru::GPU_PREVIOUS,
+            TevSource::Buffer => ctru::GPU_PREVIOUS_BUFFER,
+        };
+        let op_rgb = |o: TevOperand| match o {
+            TevOperand::Color => ctru::GPU_TEVOP_RGB_SRC_COLOR,
+            TevOperand::OneMinusColor => ctru::GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,
+            TevOperand::Alpha => ctru::GPU_TEVOP_RGB_SRC_ALPHA,
+            TevOperand::OneMinusAlpha => ctru::GPU_TEVOP_RGB_ONE_MINUS_SRC_ALPHA,
+            TevOperand::R => ctru::GPU_TEVOP_RGB_SRC_R,
+            TevOperand::OneMinusR => ctru::GPU_TEVOP_RGB_ONE_MINUS_SRC_R,
+            TevOperand::G => ctru::GPU_TEVOP_RGB_SRC_G,
+            TevOperand::OneMinusG => ctru::GPU_TEVOP_RGB_ONE_MINUS_SRC_G,
+            TevOperand::B => ctru::GPU_TEVOP_RGB_SRC_B,
+            TevOperand::OneMinusB => ctru::GPU_TEVOP_RGB_ONE_MINUS_SRC_B,
+        };
+        let op_a = |o: TevOperand| match o {
+            TevOperand::Color | TevOperand::Alpha => ctru::GPU_TEVOP_A_SRC_ALPHA,
+            TevOperand::OneMinusColor | TevOperand::OneMinusAlpha => ctru::GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA,
+            TevOperand::R => ctru::GPU_TEVOP_A_SRC_R,
+            TevOperand::OneMinusR => ctru::GPU_TEVOP_A_ONE_MINUS_SRC_R,
+            TevOperand::G => ctru::GPU_TEVOP_A_SRC_G,
+            TevOperand::OneMinusG => ctru::GPU_TEVOP_A_ONE_MINUS_SRC_G,
+            TevOperand::B => ctru::GPU_TEVOP_A_SRC_B,
+            TevOperand::OneMinusB => ctru::GPU_TEVOP_A_ONE_MINUS_SRC_B,
+        };
+        let func = |f: TevFunc| match f {
+            TevFunc::Replace => ctru::GPU_REPLACE,
+            TevFunc::Modulate => ctru::GPU_MODULATE,
+            TevFunc::Add => ctru::GPU_ADD,
+            TevFunc::Interpolate => ctru::GPU_INTERPOLATE,
+            TevFunc::Subtract => ctru::GPU_SUBTRACT,
+            TevFunc::MultiplyAdd => ctru::GPU_MULTIPLY_ADD,
+        };
+        let scale = |k: u8| match k {
+            2 => ctru::GPU_TEVSCALE_2,
+            4 => ctru::GPU_TEVSCALE_4,
+            _ => ctru::GPU_TEVSCALE_1,
+        };
+        // SAFETY: texenv / light env calls with pointers owned by the backend.
+        unsafe {
+            c3d::C3D_TexBind(0, t0.unwrap_or(std::ptr::null_mut()));
+            c3d::C3D_TexBind(1, t1.unwrap_or(std::ptr::null_mut()));
+            if p.lit && !debug("unlit") {
+                let mat = c3d::C3D_Material { ambient: [1.0; 3], diffuse: [1.0; 3], specular0: [1.0; 3], specular1: [0.0; 3], emission: [0.0; 3] };
+                c3d::C3D_LightEnvBind(&mut self.fixed.light_env);
+                c3d::C3D_LightEnvMaterial(&mut self.fixed.light_env, &mat);
+                self.bind_specular_lut(32.0, 0);
+                self.bind_rim_lut(None);
+            } else {
+                c3d::C3D_LightEnvBind(std::ptr::null_mut());
+            }
+            let (mut buf_rgb, mut buf_a) = (0, 0);
+            for i in 0..6 {
+                let env = c3d::C3D_GetTexEnv(i as i32);
+                c3d::C3D_TexEnvInit(env);
+                if let Some(s) = p.stages.get(i) {
+                    let (r, a) = (&s.rgb, &s.alpha);
+                    c3d::C3D_TexEnvSrc(env, c3d::C3D_RGB, src(r.sources[0]), src(r.sources[1]), src(r.sources[2]));
+                    c3d::C3D_TexEnvSrc(env, c3d::C3D_Alpha, src(a.sources[0]), src(a.sources[1]), src(a.sources[2]));
+                    c3d::C3D_TexEnvOpRgb(env, op_rgb(r.operands[0]), op_rgb(r.operands[1]), op_rgb(r.operands[2]));
+                    c3d::C3D_TexEnvOpAlpha(env, op_a(a.operands[0]), op_a(a.operands[1]), op_a(a.operands[2]));
+                    c3d::C3D_TexEnvFunc(env, c3d::C3D_RGB, func(r.func));
+                    c3d::C3D_TexEnvFunc(env, c3d::C3D_Alpha, func(a.func));
+                    c3d::C3D_TexEnvScale(env, c3d::C3D_RGB as i32, scale(r.scale));
+                    c3d::C3D_TexEnvScale(env, c3d::C3D_Alpha as i32, scale(a.scale));
+                    let k = s.constant;
+                    c3d::C3D_TexEnvColor(env, abgr_u32(Color::rgba(k[0], k[1], k[2], k[3])));
+                    if i < 4 {
+                        buf_rgb |= (s.buffer_rgb as i32) << i;
+                        buf_a |= (s.buffer_alpha as i32) << i;
+                    }
+                } else if i == p.stages.len() {
+                    if let Some(g) = self.view_grade {
+                        c3d::C3D_TexEnvSrc(env, c3d::C3D_RGB, ctru::GPU_PREVIOUS, ctru::GPU_CONSTANT, 0);
+                        c3d::C3D_TexEnvFunc(env, c3d::C3D_RGB, ctru::GPU_MODULATE);
+                        c3d::C3D_TexEnvColor(env, abgr_u32(g));
+                    }
+                }
+            }
+            c3d::C3D_TexEnvBufUpdate(c3d::C3D_RGB as i32, buf_rgb);
+            c3d::C3D_TexEnvBufUpdate(c3d::C3D_Alpha as i32, buf_a);
+        }
+    }
+
+    /// Cull / depth / blend / alpha test / fog of a material.
+    fn set_render_state(&mut self, m: &MaterialDesc) {
+        // SAFETY: fixed-function state.
+        unsafe {
             c3d::C3D_CullFace(match m.cull {
                 CullMode::None => ctru::GPU_CULL_NONE,
                 CullMode::Back => ctru::GPU_CULL_BACK_CCW,

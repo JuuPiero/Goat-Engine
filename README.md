@@ -285,7 +285,7 @@ Thêm vào đó:
 Shader tự viết là file `.shader` theo cú pháp của Unity: phần **ShaderLab** (`Properties`, `Tags`, `Blend` / `Cull` / `ZWrite` / `ZTest` / `Fog`, `Fallback`) bao quanh một chương trình **HLSL** (`HLSLPROGRAM … ENDHLSL` hoặc `CGPROGRAM … ENDCG`). Crate `goat-shader` (Rust thuần, chạy cả trong editor WebAssembly) đọc, kiểm tra kiểu rồi **dịch cho từng nền tảng**:
 
 - **Desktop / web (wgpu)** → WGSL, dùng chung ánh sáng, bóng đổ, fog với material chuẩn; được kiểm tra bằng naga trước khi đưa lên GPU.
-- **3DS (PICA200)**: GPU không có fragment shader lập trình được → dùng `Fallback`: material chuẩn với các property tương ứng (`_Color` / `_BaseColor` → màu, `_MainTex` → texture, `_EmissionColor`, `_Cutoff`). Bước tiếp theo: dịch hàm fragment đơn giản thành chuỗi texture combiner (TEV).
+- **3DS (PICA200)**: GPU không có fragment shader lập trình được, nên hàm `frag` / `surf` được **dịch thành texture combiner (TEV)**: chạy ký hiệu hàm HLSL (inline hàm phụ, biến, swizzle `.rgb` / `.a` / `.r`, field, `out` / `inout`), tính sẵn mọi thứ chỉ phụ thuộc property của material (`pow`, `sin`, phép chia… của hằng), rồi xếp tối đa 6 stage (`*`, `+`, `-`, `1 - x`, `lerp`, `× 2` / `× 4`, `a × b + c`; khi cả hai vế đều phải tính thì dùng buffer của combiner). Nguồn: 2 texture lấy mẫu tại uv của mesh, màu đỉnh, ánh sáng (surface shader: albedo × ánh sáng + emission), hằng. Không vừa (`if` / vòng lặp theo pixel, `clip`, vị trí / normal, toán trên uv, `_Time`, vertex function, >2 texture) thì dùng `Fallback`: material chuẩn với property tương ứng (`_Color` / `_BaseColor` → màu, `_MainTex` → texture, `_EmissionColor`, `_Cutoff`); lý do hiện trong Inspector của shader và Console. Tiling / Offset bị bỏ qua trên 3DS. Đúng sai của trình dịch được kiểm bằng bộ mô phỏng TEV trong test (`pica::simulate`).
 
 Hai loại chương trình như built-in pipeline của Unity:
 
@@ -312,7 +312,7 @@ fixed4 frag (v2f i) : SV_Target { return tex2D(_MainTex, i.uv) * _Time.y; }
 - Material dùng shader: `{ "shader": "../shaders/Dissolve.shader", "properties": { "_MainTex": "../textures/photo.jpg", "_Color": "#ffffff", "_EdgeColor": [2.5, 0.7, 0.1, 1], "_MainTex_ST": [2, 2, 0, 0] } }`. Shader bị lỗi vẽ màu hồng (như Unity), lỗi kèm số dòng hiện ở Console và Inspector.
 - Editor: Project ▸ Create ▸ **Shader** ▸ Standard Surface Shader / Unlit Shader (mẫu của Unity); Create ▸ Material khi đang chọn một shader = material của shader đó. Inspector của material: chọn Shader rồi sửa property theo kiểu (màu, slider, toggle, enum, texture + Tiling / Offset); Scene view cập nhật ngay khi sửa material hoặc file shader. Inspector của `.shader`: loại, render state, Fallback trên 3DS, property, lỗi.
 - Chưa có: keyword (`multi_compile` / `shader_feature`), nhiều Pass, `#if`, Stencil / GrabPass, tangent (normal map theo tangent space), bóng đổ theo `clip`.
-- Ví dụ: `games/hello/assets/shaders` (Hologram, Dissolve, Wobble), scene `scenes/shaders.scene.json` (`goat-hello --scene scenes/shaders.scene.json`).
+- Ví dụ: `games/hello/assets/shaders` (Hologram, Dissolve, Wobble — Fallback trên 3DS; TintGlow, Blend2 — chạy bằng TEV trên 3DS), scene `scenes/shaders.scene.json` (`goat-hello --scene scenes/shaders.scene.json`).
 
 ## Text, physics, audio
 

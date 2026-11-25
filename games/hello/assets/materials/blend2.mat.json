@@ -1,0 +1,1 @@
+{ "shader": "../shaders/Blend2.shader", "properties": { "_MainTex": "../textures/photo.jpg", "_Detail": "../textures/logo.png", "_Mix": 0.45 } }

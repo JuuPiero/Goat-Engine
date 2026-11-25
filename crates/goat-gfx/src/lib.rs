@@ -212,6 +212,8 @@ pub struct MaterialDesc {
     /// Bit `i` set: slot `i` is a color (sRGB-authored, converted like `base_color`).
     pub shader_color_slots: u16,
     pub shader_textures: [Option<TextureId>; SHADER_TEXTURES],
+    /// The shader compiled for texture combiners (3DS), when it fits.
+    pub tev: Option<TevProgram>,
 }
 
 impl Default for MaterialDesc {
@@ -243,6 +245,7 @@ impl Default for MaterialDesc {
             shader_params: [[0.0; 4]; SHADER_PARAMS],
             shader_color_slots: 0,
             shader_textures: [None; SHADER_TEXTURES],
+            tev: None,
         }
     }
 }
@@ -292,6 +295,88 @@ pub struct ShaderDesc {
     /// The complete WGSL module (goat-shader's prelude + the program).
     pub wgsl: String,
     pub custom_vertex: bool,
+}
+
+/// A fixed-function fragment program (the 3DS's texture combiners, "TEV"): what a Goat shader
+/// compiles to where fragments aren't programmable. Each stage combines up to three sources for
+/// the color and the alpha separately; results are clamped to 0..1 after every stage.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TevProgram {
+    pub stages: Vec<TevStage>,
+    /// Uses the fragment lighting (sources LightDiffuse / LightSpecular).
+    pub lit: bool,
+    /// Texture of PICA unit 0 / 1: an index into `MaterialDesc::shader_textures`.
+    pub textures: [Option<usize>; 2],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TevStage {
+    pub rgb: TevCombine,
+    pub alpha: TevCombine,
+    /// The stage's constant color (sRGB-authored like `base_color`).
+    pub constant: [f32; 4],
+    /// The stage's color / alpha output is kept in the combiner buffer (stages 0..3; read later
+    /// as `TevSource::Buffer`).
+    pub buffer_rgb: bool,
+    pub buffer_alpha: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TevCombine {
+    pub func: TevFunc,
+    pub sources: [TevSource; 3],
+    pub operands: [TevOperand; 3],
+    /// 1, 2 or 4.
+    pub scale: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TevSource {
+    /// Interpolated vertex color.
+    Vertex,
+    /// Fragment lighting: ambient + diffuse light / specular light.
+    LightDiffuse,
+    LightSpecular,
+    Texture0,
+    Texture1,
+    Constant,
+    Previous,
+    Buffer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TevOperand {
+    Color,
+    OneMinusColor,
+    Alpha,
+    OneMinusAlpha,
+    R,
+    OneMinusR,
+    G,
+    OneMinusG,
+    B,
+    OneMinusB,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TevFunc {
+    /// a
+    Replace,
+    /// a × b
+    Modulate,
+    /// a + b
+    Add,
+    /// a × c + b × (1 − c)
+    Interpolate,
+    /// a − b
+    Subtract,
+    /// a × b + c
+    MultiplyAdd,
+}
+
+impl TevCombine {
+    /// `REPLACE(previous)`: passes the last stage's value on.
+    pub const PASS: TevCombine = TevCombine { func: TevFunc::Replace, sources: [TevSource::Previous; 3], operands: [TevOperand::Color; 3], scale: 1 };
 }
 
 /// Parameter slots of a custom shader (`goat_params.v`) and its texture units.

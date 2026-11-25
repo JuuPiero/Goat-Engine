@@ -29,6 +29,7 @@
 //! texture's `_ST`), 4 textures, no `#if` / keywords / multiple passes yet.
 
 pub mod hlsl;
+pub mod pica;
 pub mod shaderlab;
 pub mod wgsl;
 
@@ -103,9 +104,23 @@ pub struct Shader {
     pub textures: Vec<TextureSlot>,
     pub standard: StandardMapping,
     pub warnings: Vec<Diagnostic>,
+    /// 3DS: why the fragment program can't run on the texture combiners (None = it can).
+    pub pica_error: Option<String>,
+    /// 3DS: what the combiners ignore (tiling, normal maps…).
+    pub pica_notes: Vec<String>,
+    #[serde(skip_serializing)]
+    pub pica: Option<pica::PicaIr>,
 }
 
 impl Shader {
+    /// The texture combiner program (3DS) of a material with these property values, or why the
+    /// shader can't run there (the standard mapping / Fallback is used then).
+    pub fn tev(&self, value_of: impl Fn(&str) -> Option<[f32; 4]>) -> Result<goat_gfx::TevProgram, String> {
+        let ir = self.pica.as_ref().ok_or_else(|| self.pica_error.clone().unwrap_or_default())?;
+        let params = self.pack_params(value_of);
+        pica::plan(ir, &|slot| params.get(slot).copied().unwrap_or([0.0; 4]))
+    }
+
     /// The complete WGSL module (prelude + program).
     pub fn wgsl_module(&self) -> String {
         format!("{WGSL_PRELUDE}\n// ---- {}\n{}", self.name, self.wgsl)
@@ -278,6 +293,11 @@ fn compile_inner(src: &str) -> Result<Shader, Diagnostic> {
     let mut emitter = wgsl::Emitter::new(&layout);
     emitter.fog = state.fog;
     let wgsl = emitter.module(&items, &entry)?;
+    let (pica, pica_error) = match pica::lower(&items, &layout, &entry) {
+        Ok(ir) => (Some(ir), None),
+        Err(e) => (None, Some(e)),
+    };
+    let pica_notes = pica.as_ref().map(|p| p.notes.clone()).unwrap_or_default();
 
     let has = |n: &str| lab.properties.iter().any(|p| p.name == n);
     let first = |names: &[&str], kind: fn(&PropertyKind) -> bool| names.iter().find(|n| lab.properties.iter().any(|p| p.name == **n && kind(&p.kind))).map(|s| s.to_string());
@@ -297,7 +317,7 @@ fn compile_inner(src: &str) -> Result<Shader, Diagnostic> {
         emission: first(&["_EmissionColor", "_Emission", "_EmissiveColor"], is_color),
         cutoff: has("_Cutoff").then(|| "_Cutoff".to_string()),
     };
-    Ok(Shader { name: lab.name, properties: lab.properties, state, fallback: lab.fallback, kind, custom_vertex, wgsl, params, textures, standard, warnings })
+    Ok(Shader { name: lab.name, properties: lab.properties, state, fallback: lab.fallback, kind, custom_vertex, wgsl, params, textures, standard, warnings, pica_error, pica_notes, pica })
 }
 
 #[cfg(test)]

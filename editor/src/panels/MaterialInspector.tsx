@@ -34,6 +34,9 @@ interface ShaderInfo {
   warnings?: { line: number; message: string }[];
   errors?: { line: number; message: string }[];
   standard?: { lighting: string; color?: string; texture?: string; emission?: string; cutoff?: string };
+  /** 3DS: why the texture combiners can't run it (null = they can). */
+  picaError?: string | null;
+  picaNotes?: string[];
 }
 
 /// `materials/a.mat.json` + `../shaders/X.shader` → `shaders/X.shader` (and back).
@@ -111,12 +114,14 @@ export function ShaderInspector({ assetKey }: { assetKey: string }) {
               {info.state?.fog ? '' : ' · no fog'}
             </span>
           </Row>
-          <Row name="3DS">
-            <span className="dim" title="The 3DS GPU has no programmable fragment stage: the standard material draws the mapped properties">
-              {info.fallback ? `Fallback "${info.fallback}"` : 'no Fallback'} · {info.standard?.lighting}
-              {info.standard?.color ? ` · ${info.standard.color}` : ''}
-              {info.standard?.texture ? ` · ${info.standard.texture}` : ''}
-            </span>
+          <Row name="On 3DS">
+            {info.picaError ? (
+              <span className="dim" title={`The 3DS GPU has no programmable fragment stage: ${info.picaError}`}>
+                {info.fallback ? `Fallback "${info.fallback}"` : 'standard material'} — {info.picaError}
+              </span>
+            ) : (
+              <span title="Compiled to the PICA200 texture combiners">texture combiners ✓{info.picaNotes?.length ? ` (${info.picaNotes.join('; ')})` : ''}</span>
+            )}
           </Row>
           <div className="field-name shader-props-title">Properties</div>
           {(info.properties ?? []).map((p) => (

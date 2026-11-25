@@ -195,3 +195,106 @@ fn sample_shaders_compile() {
     }
     assert!(n >= 3);
 }
+
+// ------------------------------------------------------------------ 3DS texture combiners
+
+/// Compiles `frag` / `surf` for the combiners and checks the simulated combiners against the
+/// expression on pseudo-random inputs.
+fn tev_matches(src: &str, values: &[(&str, [f32; 4])]) -> goat_gfx::TevProgram {
+    let s = ok(src);
+    let ir = s.pica.clone().unwrap_or_else(|| panic!("not lowered: {:?}", s.pica_error));
+    let value = |n: &str| values.iter().find(|(k, _)| *k == n).map(|(_, v)| *v);
+    let prog = s.tev(value).unwrap_or_else(|e| panic!("{e}"));
+    let params = s.pack_params(value);
+    let mut seed = 12345u32;
+    let mut rnd = || {
+        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        (seed >> 8) as f32 / (1 << 24) as f32
+    };
+    for _ in 0..200 {
+        let mut v4 = || [rnd(), rnd(), rnd(), rnd()];
+        let inp = pica::Inputs { textures: vec![v4(), v4(), v4(), v4()], vertex: v4(), diffuse: v4(), specular: v4() };
+        let want = pica::eval(&ir.color, &inp, &|k| params[k]);
+        let got = pica::simulate(&prog, &inp);
+        for k in 0..4 {
+            assert!((want[k] - got[k]).abs() < 1e-4, "lane {k}: expression {want:?} vs combiners {got:?}\n{prog:#?}");
+        }
+    }
+    prog
+}
+
+const UNLIT_HEAD: &str = "Shader \"T\" {\n Properties { _MainTex (\"A\", 2D) = \"white\" {} _Detail (\"B\", 2D) = \"white\" {} _Color (\"C\", Color) = (1, 0.5, 0.25, 0.8) _K (\"K\", Range(0, 1)) = 0.3 }\n SubShader { Pass {\n HLSLPROGRAM\n #pragma fragment frag\n sampler2D _MainTex; sampler2D _Detail; float4 _MainTex_ST; float4 _Color; float _K;\n struct v2f { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; float4 color : COLOR; };\n";
+
+fn unlit(body: &str) -> String {
+    format!("{UNLIT_HEAD}{body}\n ENDHLSL\n }} }}\n}}")
+}
+
+#[test]
+fn tev_texture_times_color() {
+    let p = tev_matches(&unlit("fixed4 frag (v2f i) : SV_Target { return tex2D(_MainTex, TRANSFORM_TEX(i.uv, _MainTex)) * _Color * i.color; }"), &[("_Color", [0.9, 0.6, 0.3, 0.7])]);
+    assert!(p.stages.len() <= 2, "{p:#?}");
+    assert!(!p.lit);
+}
+
+#[test]
+fn tev_helpers_swizzles_and_buffer() {
+    // lerp of two computed values: the first goes through the combiner buffer
+    let p = tev_matches(
+        &unlit(
+            "float4 tint(float4 c, float k) { return c * k; }\n\
+             fixed4 frag (v2f i) : SV_Target {\n\
+               float4 a = tex2D(_MainTex, i.uv) * i.color;\n\
+               float4 b = tint(tex2D(_Detail, i.uv), _K) * _Color;\n\
+               float4 o = lerp(a, b, tex2D(_MainTex, i.uv).a);\n\
+               o.a = 1 - i.color.r;\n\
+               return o;\n\
+             }",
+        ),
+        &[],
+    );
+    assert!(p.stages.iter().any(|s| s.buffer_rgb), "{p:#?}");
+    assert_eq!(p.textures, [Some(0), Some(1)]);
+}
+
+#[test]
+fn tev_surface_lambert_is_lit() {
+    let p = tev_matches(
+        r#"Shader "S" { Properties { _Color ("C", Color) = (1, 1, 1, 1) _MainTex ("T", 2D) = "white" {} _Glow ("G", Color) = (0.2, 0.1, 0, 1) }
+        SubShader { CGPROGRAM
+        #pragma surface surf Lambert
+        sampler2D _MainTex; fixed4 _Color; fixed4 _Glow;
+        struct Input { float2 uv_MainTex; float4 color; };
+        void surf (Input IN, inout SurfaceOutput o) {
+            fixed4 c = tex2D(_MainTex, IN.uv_MainTex) * _Color;
+            o.Albedo = c.rgb * IN.color.rgb;
+            o.Emission = _Glow.rgb;
+            o.Alpha = c.a;
+        }
+        ENDCG } }"#,
+        &[("_Color", [1.0, 0.8, 0.6, 1.0])],
+    );
+    assert!(p.lit);
+    assert!(p.stages.len() <= 4, "{}", p.stages.len());
+}
+
+#[test]
+fn tev_reports_what_needs_a_programmable_gpu() {
+    let s = ok(&unlit("fixed4 frag (v2f i) : SV_Target { float4 c = tex2D(_MainTex, i.uv); if (c.r > 0.5) return c; return _Color; }"));
+    assert!(s.pica_error.as_deref().is_some_and(|e| e.contains("if")), "{:?}", s.pica_error);
+    // the samples: Hologram uses _Time and positions, Dissolve clips, Wobble has a vertex function
+    for (file, why) in [("Hologram", "per-pixel"), ("Dissolve", ""), ("Wobble", "vertex function")] {
+        let path = format!("{}/../../games/hello/assets/shaders/{file}.shader", env!("CARGO_MANIFEST_DIR"));
+        let s = compile(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let e = s.pica_error.clone().unwrap_or_default();
+        assert!(!e.is_empty() && e.contains(why), "{file}: {e}");
+    }
+}
+
+#[test]
+fn tev_samples_for_the_3ds() {
+    for file in ["TintGlow", "Blend2"] {
+        let path = format!("{}/../../games/hello/assets/shaders/{file}.shader", env!("CARGO_MANIFEST_DIR"));
+        let p = tev_matches(&std::fs::read_to_string(path).unwrap(), &[]);
+        assert!(p.stages.len() <= 5, "{file}: {} stages (one left for the view's grading)", p.stages.len());
+    }
+}
