@@ -1,6 +1,7 @@
 // Hierarchy, Inspector, Console and the Scene view placeholder.
 import { useEffect, useRef, useState } from 'react';
 import { api, fileUrl, nameOf } from '../api';
+import { getEngine } from '../engine';
 import { log, run, setState, useStore } from '../store';
 import { CircleAlert, Info, Search, TriangleAlert } from 'lucide-react';
 import { AssetIcon } from './icons';
@@ -152,7 +153,22 @@ export function Console() {
   const [show, setShow] = useState({ info: true, warn: true, error: true });
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState<number | null>(null);
+  const playing = useStore((s) => s.playing);
+  const [errorPause, setErrorPause] = useState(false);
+  const [expr, setExpr] = useState('');
+  const history = useRef<string[]>([]);
+  const histAt = useRef(0);
   const end = useRef<HTMLDivElement>(null);
+  const evaluate = () => {
+    const code = expr.trim();
+    if (!code) return;
+    log(`> ${code}`);
+    history.current.push(code);
+    histAt.current = history.current.length;
+    setExpr('');
+    // answered by the engine after the next frame (viewport.ts prints it)
+    if (!getEngine()?.console_eval(code)) log('the console runs while playing', 'warn');
+  };
   const counts = { info: 0, warn: 0, error: 0 };
   for (const l of logs) counts[l.level]++;
   let lines: { time: string; level: 'info' | 'warn' | 'error'; text: string; n: number }[] = logs.filter((l) => show[l.level] && (!q || l.text.toLowerCase().includes(q.toLowerCase()))).map((l) => ({ ...l, n: 1 }));
@@ -181,6 +197,16 @@ export function Console() {
         </button>
         <button className={`g-tbtn${collapse ? ' on' : ''}`} onClick={() => setCollapse(!collapse)}>
           Collapse
+        </button>
+        <button
+          className={`g-tbtn${errorPause ? ' on' : ''}`}
+          title="Pause Play mode when a script error happens (Unity's Error Pause)"
+          onClick={() => {
+            getEngine()?.set_error_pause(!errorPause);
+            setErrorPause(!errorPause);
+          }}
+        >
+          Error Pause
         </button>
         <span className="g-flex" />
         <div className="g-search-wrap">
@@ -213,6 +239,28 @@ export function Console() {
           <pre>
             [{sel.time}] {sel.text}
           </pre>
+        </div>
+      )}
+      {playing && (
+        <div className="g-console-input">
+          <span className="dim">&gt;</span>
+          <input
+            className="g-input"
+            placeholder="JavaScript in the running game: $sel = selected object, $scripts = its behaviours"
+            value={expr}
+            onChange={(e) => setExpr(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') evaluate();
+              else if (e.key === 'ArrowUp' && history.current.length) {
+                histAt.current = Math.max(0, histAt.current - 1);
+                setExpr(history.current[histAt.current] ?? '');
+              } else if (e.key === 'ArrowDown') {
+                histAt.current = Math.min(history.current.length, histAt.current + 1);
+                setExpr(history.current[histAt.current] ?? '');
+              }
+              e.stopPropagation();
+            }}
+          />
         </div>
       )}
     </div>

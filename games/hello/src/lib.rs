@@ -31,7 +31,7 @@ pub fn plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(goat_tween::TweenPlugin),
         Box::new(goat_save::SavePlugin::new("GoatHello")),
         // scripts: TypeScript / JavaScript / C# (translated by goat-cs) and native C / C++
-        Box::new(goat_script::ScriptPlugin::new().with_host(goat_script_js::JsHost::new()).with_host(goat_script_native::NativeHost::new())),
+        Box::new(goat_script::ScriptPlugin::new().with_host(script_host()).with_host(goat_script_native::NativeHost::new())),
     ]
 }
 
@@ -603,4 +603,14 @@ fn spawn_animation_and_particles(ctx: &mut Context) {
         }
         .with_seed(99),
     ));
+}
+
+/// The JavaScript host: QuickJS in players built with `quickjs` (3DS, desktop), Boa otherwise.
+#[cfg(feature = "quickjs")]
+fn script_host() -> goat_script_js::QjsHost {
+    goat_script_js::QjsHost::new()
+}
+#[cfg(not(feature = "quickjs"))]
+fn script_host() -> goat_script_js::JsHost {
+    goat_script_js::JsHost::new()
 }

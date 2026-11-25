@@ -194,6 +194,34 @@ export class EditorEngine {
         }
     }
     /**
+     * Console expression in the running game: its id (0 = not playing); answers come from
+     * `console_results`.
+     * @param {string} code
+     * @returns {number}
+     */
+    console_eval(code) {
+        const ptr0 = passStringToWasm0(code, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.editorengine_console_eval(this.__wbg_ptr, ptr0, len0);
+        return ret >>> 0;
+    }
+    /**
+     * `[{ id, text, ok }]` answered since the last call.
+     * @returns {string}
+     */
+    console_results() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.editorengine_console_results(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * The selection as scene JSON (clipboard), or nothing.
      * @returns {string | undefined}
      */
@@ -794,6 +822,13 @@ export class EditorEngine {
         wasm.editorengine_set_dual_3ds(this.__wbg_ptr, on);
     }
     /**
+     * The Console's Error Pause: pause when a script fails.
+     * @param {boolean} on
+     */
+    set_error_pause(on) {
+        wasm.editorengine_set_error_pause(this.__wbg_ptr, on);
+    }
+    /**
      * "move" / "rotate" / "scale" / "transform".
      * @param {string} mode
      */
@@ -957,6 +992,22 @@ export class EditorEngine {
         let deferred1_1;
         try {
             const ret = wasm.editorengine_take_logs(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Why the game paused itself since the last call (Debug.break / Error Pause), "" = it didn't.
+     * @returns {string}
+     */
+    take_pause_reason() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.editorengine_take_pause_reason(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -2047,7 +2098,7 @@ function __wbg_get_imports() {
             arg0.writeTexture(arg1, arg2, arg3, arg4);
         }, arguments); },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2863, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2873, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_49c42322a91a8d99___convert__closures_____invoke___wasm_bindgen_49c42322a91a8d99___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_49c42322a91a8d99___JsError___true_);
             return ret;
         },

@@ -126,3 +126,7 @@
 .g-anim-key.sel { background: #4c9be8; }
 .g-anim-playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: #ff4d4d; pointer-events: none; z-index: 4; }
 .g-anim-end { position: absolute; top: 22px; bottom: 0; width: 1px; background: #777; opacity: 0.6; pointer-events: none; }
+
+/* Console: expression input while playing */
+.g-console-input { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-top: 1px solid var(--g-border, #222); }
+.g-console-input .g-input { flex: 1; font-family: ui-monospace, Consolas, monospace; }

@@ -873,7 +873,36 @@ export const Debug = {
   error(...a) { N.log(4, text(a)); },
   logWarning(...a) { N.log(3, text(a)); },
   logError(...a) { N.log(4, text(a)); },
+  /** Pauses the game in the editor (Unity's Debug.Break), with an optional message. */
+  break(message = '') { N.debugBreak(String(message)); },
 };
+
+/** The editor console's view of a value. */
+function __show(v) {
+  if (v === undefined) return 'undefined';
+  if (v === null || typeof v !== 'object') return typeof v === 'string' ? JSON.stringify(v) : String(v);
+  if (v instanceof GameObject) return `GameObject(${JSON.stringify(v.name)})`;
+  if (typeof v.toString === 'function' && v.toString !== Object.prototype.toString && !Array.isArray(v)) return v.toString();
+  try { return JSON.stringify(v, (k, x) => (k.startsWith('_') && k !== '_h' ? undefined : x)); } catch (e) { return String(v); }
+}
+
+/** The editor console (Play mode): evaluates `code` with `$sel` = the selected object
+ *  (`$scripts` = its behaviours), returns what to print. */
+export function __console(h, code) {
+  // the API without imports: GameObject, Vector3, Debug... typed directly
+  if (!globalThis.GameObject) Object.assign(globalThis, { GameObject, Vector2, Vector3, Quaternion, Mathf, Time, Debug, Input, Physics, Random, Color });
+  globalThis.$sel = h >= 0 ? new GameObject(h) : null;
+  globalThis.$scripts = h >= 0 ? (__instances.get(h) || []) : [];
+  const r = (0, eval)(code);
+  return __show(r);
+}
+/** Behaviour instances by GameObject handle (the console's $scripts). */
+const __instances = new Map();
+export function __track(obj) {
+  const list = __instances.get(obj._h) || [];
+  list.push(obj);
+  __instances.set(obj._h, list);
+}
 globalThis.console = { log: Debug.log, info: Debug.log, warn: Debug.warn, error: Debug.error, debug: Debug.log };
 
 export const Application = {
@@ -1343,6 +1372,9 @@ const fieldJson = (v) => {
 
 /** Host (editor): the serialized fields of a fresh instance — own fields not starting with `_`,
  *  as `[name, value]` pairs in declaration order. */
+/** Whether a script class extends ScriptableObject (the QuickJS host asks this way). */
+export function __isScriptableObject(cls) { return cls.prototype instanceof ScriptableObject; }
+
 export function __fields(obj) {
   const out = [];
   for (const k of Object.keys(obj)) {

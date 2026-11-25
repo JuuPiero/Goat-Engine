@@ -88,6 +88,10 @@ impl EditorCore {
             self.scripts.cache.clear();
             self.scripts.host = None;
         }
+        // playing: the running objects take the new code (hot reload)
+        if is_script(key) || key.ends_with(".cs.js") {
+            self.hot_reload(key);
+        }
         if key.ends_with(".mat.json") || key.ends_with(".shader") {
             if let Some(mut assets) = self.edit.resources.take::<goat_assets::AssetServer>() {
                 if key.ends_with(".shader") {

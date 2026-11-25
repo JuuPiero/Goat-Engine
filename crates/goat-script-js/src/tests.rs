@@ -123,7 +123,7 @@ fn csharp_scripts_run_after_goat_cs() {
         eprintln!("skipped: build tools/goat-cs first (dotnet build -c Release -o bin)");
         return;
     }
-    let dir = std::env::temp_dir().join(format!("goat-cs-test-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("goat-cs-test-{}", std::process::id()) + &module_path!().replace("::", "_"));
     std::fs::create_dir_all(dir.join("scripts")).unwrap();
     std::fs::copy(format!("{root}/tests/Hover.cs"), dir.join("scripts/Hover.cs")).unwrap();
     let out = std::process::Command::new("dotnet").arg(&tool).arg(&dir).output();
@@ -260,7 +260,7 @@ fn csharp_coroutines_and_tweens() {
         eprintln!("skipped: build tools/goat-cs first");
         return;
     }
-    let dir = std::env::temp_dir().join(format!("goat-cs-fx-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("goat-cs-fx-{}", std::process::id()) + &module_path!().replace("::", "_"));
     std::fs::create_dir_all(dir.join("scripts")).unwrap();
     std::fs::copy(format!("{root}/tests/Fx.cs"), dir.join("scripts/Fx.cs")).unwrap();
     let Ok(out) = std::process::Command::new("dotnet").arg(&tool).arg(&dir).output() else {
@@ -307,7 +307,7 @@ fn csharp_core_api() {
         eprintln!("skipped: build tools/goat-cs first");
         return;
     }
-    let dir = std::env::temp_dir().join(format!("goat-cs-core-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("goat-cs-core-{}", std::process::id()) + &module_path!().replace("::", "_"));
     std::fs::create_dir_all(dir.join("scripts")).unwrap();
     std::fs::copy(format!("{root}/tests/Core.cs"), dir.join("scripts/Core.cs")).unwrap();
     let Ok(out) = std::process::Command::new("dotnet").arg(&tool).arg(&dir).output() else {
@@ -752,4 +752,107 @@ fn core_api_math_transforms_camera_materials() {
     let id = e.world.get::<&goat_runtime::MeshRenderer>(box_e).unwrap().material;
     let d = goat_gfx::GraphicsBackend::material_desc(&gfx, id).unwrap();
     assert_eq!(d.base_color.to_array(), [1.0, 0.0, 0.0, 1.0]);
+}
+/// Play-mode tools: hot reload keeps state and swaps the code; the console sees `$sel` /
+/// `$scripts`; `Debug.break()` asks the editor to pause.
+#[test]
+fn hot_reload_console_and_break() {
+    let io = AssetIo::new("/nonexistent-goat-reload");
+    io.put(
+        "scripts/Counter.js",
+        br#"
+import { Behaviour, Debug } from "goat";
+export default class Counter extends Behaviour {
+  count = 0;
+  update() { this.count += 1; this.gameObject.name = "c" + this.count; if (this.count === 3) Debug.break("three"); }
+}
+"#
+        .to_vec(),
+    );
+    struct G(AssetIo);
+    impl Game for G {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(self.0.clone()));
+            ctx.world.spawn((Name("c".into()), Transform::default(), GlobalTransform::default(), Script::one("scripts/Counter.js")));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(self.0.clone())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(G(io.clone()));
+    e.frame(0.0, &mut gfx);
+    for _ in 0..2 {
+        e.frame(0.1, &mut gfx);
+    }
+    let name = |e: &Engine| e.world.query::<&Name>().iter().next().map(|(_, n)| n.0.clone()).unwrap();
+    assert_eq!(name(&e), "c3");
+    let brk = e.resources.get_mut::<goat_script::ScriptDebug>().and_then(|d| d.break_requested.take());
+    assert_eq!(brk.as_deref(), Some("three"));
+    // new code: counts by ten, the running object keeps its count
+    io.put(
+        "scripts/Counter.js",
+        br#"
+import { Behaviour } from "goat";
+export default class Counter extends Behaviour {
+  count = 0;
+  update() { this.count += 10; this.gameObject.name = "c" + this.count; }
+}
+"#
+        .to_vec(),
+    );
+    e.resources.get_or_default::<goat_script::ScriptDebug>().reloads.push("scripts/Counter.js".into());
+    e.frame(0.1, &mut gfx);
+    assert_eq!(name(&e), "c13", "state kept, new code");
+    // the console
+    let ent = e.world.query::<&Name>().iter().next().map(|(en, _)| en).unwrap();
+    e.resources.get_or_default::<goat_script::ScriptDebug>().evals.push((7, "$sel.name + ' ' + $scripts[0].count + ' ' + (1 + 2)".into(), Some(ent)));
+    e.frame(0.1, &mut gfx);
+    let results = std::mem::take(&mut e.resources.get_or_default::<goat_script::ScriptDebug>().results);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, 7);
+    assert_eq!(results[0].1.as_ref().unwrap(), &Value::String("\"c13 13 3\"".into()));
+}
+/// Speed of the host: 100 behaviours doing vector math + engine calls for 200 frames
+/// (`cargo test -p goat-script-js --release --features quickjs bench_ -- --ignored --nocapture`).
+#[test]
+#[ignore]
+fn bench_hundred_behaviours() {
+    let io = AssetIo::new("/nonexistent-goat-bench");
+    io.put(
+        "scripts/Busy.js",
+        br#"
+import { Behaviour, Vector3, Mathf, Time } from "goat";
+export default class Busy extends Behaviour {
+  t = 0;
+  update() {
+    this.t += Time.deltaTime;
+    let acc = new Vector3(0, 0, 0);
+    for (let i = 0; i < 50; i++) { acc = acc.add(new Vector3(Mathf.sin(this.t + i), Mathf.cos(i), 0.5).normalized); }
+    this.transform.localPosition = acc.mul(0.01);
+  }
+}
+"#
+        .to_vec(),
+    );
+    struct G(AssetIo);
+    impl Game for G {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(self.0.clone()));
+            for i in 0..100 {
+                ctx.world.spawn((Name(format!("b{i}")), Transform::default(), GlobalTransform::default(), Script::one("scripts/Busy.js")));
+            }
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(self.0.clone())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(G(io));
+    e.frame(0.0, &mut gfx);
+    let start = std::time::Instant::now();
+    for _ in 0..200 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    println!("{}: {:.2} ms per frame (100 behaviours)", module_path!(), start.elapsed().as_secs_f64() * 1000.0 / 200.0);
 }

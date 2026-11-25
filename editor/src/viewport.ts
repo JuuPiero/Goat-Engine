@@ -122,6 +122,16 @@ function ensureLoop() {
           // engine log lines (script errors, warnings) → the Console
           const lines = eng.take_logs();
           if (lines !== '[]') for (const [level, text] of JSON.parse(lines) as [LogLevel, string][]) log(text, level);
+          if (eng.is_playing()) {
+            // console answers, Debug.break / Error Pause
+            const answers = eng.console_results();
+            if (answers !== '[]') for (const r of JSON.parse(answers) as { text: string; ok: boolean }[]) log(`< ${r.text}`, r.ok ? 'info' : 'error');
+            const why = eng.take_pause_reason();
+            if (why) {
+              setState({ paused: true });
+              log(`paused: ${why}`, 'warn');
+            }
+          }
           if (!eng.is_playing() && getState().playing) setState({ playing: false, paused: false });
         }
         last = now;

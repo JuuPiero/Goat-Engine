@@ -84,7 +84,7 @@ Mọi ngôn ngữ đi qua cùng một lõi (`goat-script`: component `Script`, t
 - ✅ **TypeScript / JavaScript** (`goat-script-js`): ES module `export default class X extends Behaviour`, import API từ `"goat"` và import lẫn nhau; engine JS Boa (Rust thuần → chạy y hệt trên desktop, editor wasm, 3DS); TS biên dịch bằng oxc (lúc nạp trên desktop / editor, lúc build cho console)
 - ✅ **C#** (`tools/goat-cs`, Roslyn): kiểm tra kiểu theo API `GoatEngine` (tên Unity), dịch sang ES module `X.cs.js` chạy trên host JS; editor tự dịch khi file .cs đổi, lỗi hiện ở Console; `goat build` dịch trước khi đóng gói
 - ✅ **C / C++** (`goat-script-native`, `include/goat.h`): lớp behaviour = bảng callback, đăng ký bằng `goat_register_behaviour`, link tĩnh; ví dụ C + C++ (template class) có test
-- ⬜ QuickJS làm host JS nhanh hơn trên 3DS (cùng trait `ScriptHost`), hot reload script khi Play, debugger, field script hiện trong Inspector
+- ✅ QuickJS làm host JS nhanh hơn trên 3DS (cùng trait `ScriptHost`; desktop cũng dùng, editor giữ Boa), hot reload script khi Play, debugger (Console chạy lệnh khi Play với `$sel` / `$scripts`, Error Pause, `Debug.break`; chưa có breakpoint), field script hiện trong Inspector
 
 ## Giai đoạn 5 — Editor 🔨
 - ✅ Tauri 2 + React + dockview; engine chạy dạng wasm (WebGPU / WebGL2) trong Scene / Game view

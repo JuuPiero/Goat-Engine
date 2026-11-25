@@ -34,3 +34,5 @@ goat-navigation = { workspace = true, features = ["scene", "script"] }
 default = ["typescript"]
 # compile .ts when loaded (desktop, editor); console builds load the .js `goat build` produces
 typescript = ["goat-script-js/typescript"]
+# scripts on QuickJS (players) instead of Boa (the editor keeps Boa)
+quickjs = ["goat-script-js/quickjs"]

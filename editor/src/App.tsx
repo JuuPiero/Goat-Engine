@@ -234,6 +234,8 @@ export function App() {
       syncTimer = window.setTimeout(() => {
         const e = getEngine();
         if (e && !e.is_playing()) void syncFiles(e).then(refresh);
+        // playing: scripts only (hot reload: the running objects take the new code)
+        else if (e) void syncFiles(e, (k) => /\.(ts|js|mjs)$/.test(k) && !k.endsWith('.d.ts'));
       }, 250);
     });
     // C# translation results (tools/goat-cs, run by the backend when .cs files change)

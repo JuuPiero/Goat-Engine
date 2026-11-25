@@ -38,6 +38,17 @@ impl Nintendo3ds {
         if let Some(clang) = Self::libclang(config) {
             cmd.env("LIBCLANG_PATH", clang);
         }
+        // C dependencies (QuickJS): devkitARM's gcc and newlib headers for bindgen; newlib's
+        // int32_t is `long`, harmless on ARM32 (GCC 14 makes the pointer mismatch an error)
+        let gcc_include = std::fs::read_dir(arm.join("lib").join("gcc").join("arm-none-eabi")).ok().and_then(|mut d| d.next()).and_then(|e| e.ok()).map(|e| e.path().join("include"));
+        let mut clang_args = format!("-isystem {} -mfloat-abi=hard -D__3DS__", arm.join("arm-none-eabi").join("include").display());
+        if let Some(g) = gcc_include {
+            clang_args.push_str(&format!(" -isystem {}", g.display()));
+        }
+        cmd.env("BINDGEN_EXTRA_CLANG_ARGS_armv6k_nintendo_3ds", clang_args.replace('\\', "/"))
+            .env("CC_armv6k_nintendo_3ds", "arm-none-eabi-gcc")
+            .env("AR_armv6k_nintendo_3ds", "arm-none-eabi-ar")
+            .env("CFLAGS_armv6k_nintendo_3ds", "-march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -D__3DS__ -Wno-incompatible-pointer-types");
         Ok(cmd)
     }
 }

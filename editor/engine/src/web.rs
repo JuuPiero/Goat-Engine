@@ -368,6 +368,23 @@ impl EditorEngine {
     pub fn set_paused(&mut self, paused: bool) {
         self.core.paused = paused;
     }
+    /// Console expression in the running game: its id (0 = not playing); answers come from
+    /// `console_results`.
+    pub fn console_eval(&mut self, code: &str) -> u32 {
+        self.core.console_eval(code).unwrap_or(0)
+    }
+    /// `[{ id, text, ok }]` answered since the last call.
+    pub fn console_results(&mut self) -> String {
+        self.core.console_results().to_string()
+    }
+    /// The Console's Error Pause: pause when a script fails.
+    pub fn set_error_pause(&mut self, on: bool) {
+        self.core.debug.error_pause = on;
+    }
+    /// Why the game paused itself since the last call (Debug.break / Error Pause), "" = it didn't.
+    pub fn take_pause_reason(&mut self) -> String {
+        self.core.take_pause_reason()
+    }
     pub fn is_paused(&self) -> bool {
         self.core.paused
     }

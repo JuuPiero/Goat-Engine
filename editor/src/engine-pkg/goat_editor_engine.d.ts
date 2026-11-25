@@ -36,6 +36,15 @@ export class EditorEngine {
      */
     components(id: string): string;
     /**
+     * Console expression in the running game: its id (0 = not playing); answers come from
+     * `console_results`.
+     */
+    console_eval(code: string): number;
+    /**
+     * `[{ id, text, ok }]` answered since the last call.
+     */
+    console_results(): string;
+    /**
      * The selection as scene JSON (clipboard), or nothing.
      */
     copy_selection(): string | undefined;
@@ -153,6 +162,10 @@ export class EditorEngine {
      */
     set_dual_3ds(on: boolean): void;
     /**
+     * The Console's Error Pause: pause when a script fails.
+     */
+    set_error_pause(on: boolean): void;
+    /**
      * "move" / "rotate" / "scale" / "transform".
      */
     set_gizmo_mode(mode: string): void;
@@ -198,6 +211,10 @@ export class EditorEngine {
      */
     take_logs(): string;
     /**
+     * Why the game paused itself since the last call (Debug.break / Error Pause), "" = it didn't.
+     */
+    take_pause_reason(): string;
+    /**
      * `{ position, euler, scale }` of an entity.
      */
     transform(id: string): string | undefined;
@@ -228,6 +245,8 @@ export interface InitOutput {
     readonly editorengine_component_info: (a: number) => [number, number];
     readonly editorengine_component_names: (a: number) => [number, number];
     readonly editorengine_components: (a: number, b: number, c: number) => [number, number];
+    readonly editorengine_console_eval: (a: number, b: number, c: number) => number;
+    readonly editorengine_console_results: (a: number) => [number, number];
     readonly editorengine_copy_selection: (a: number) => [number, number];
     readonly editorengine_create: (a: any) => any;
     readonly editorengine_create_entity: (a: number, b: number, c: number, d: number, e: number) => [number, number];
@@ -272,6 +291,7 @@ export interface InitOutput {
     readonly editorengine_set_active: (a: number, b: number, c: number, d: number) => void;
     readonly editorengine_set_component: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly editorengine_set_dual_3ds: (a: number, b: number) => void;
+    readonly editorengine_set_error_pause: (a: number, b: number) => void;
     readonly editorengine_set_gizmo_mode: (a: number, b: number, c: number) => void;
     readonly editorengine_set_gizmos: (a: number, b: number) => void;
     readonly editorengine_set_grid: (a: number, b: number) => void;
@@ -287,6 +307,7 @@ export interface InitOutput {
     readonly editorengine_step: (a: number) => void;
     readonly editorengine_stop: (a: number) => void;
     readonly editorengine_take_logs: (a: number) => [number, number];
+    readonly editorengine_take_pause_reason: (a: number) => [number, number];
     readonly editorengine_transform: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_undo: (a: number) => [number, number];
     readonly editorengine_undo_label: (a: number) => [number, number];

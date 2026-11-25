@@ -27,6 +27,10 @@ use serde_json::Value;
 
 #[cfg(feature = "typescript")]
 mod ts;
+#[cfg(feature = "quickjs")]
+mod qjs;
+#[cfg(feature = "quickjs")]
+pub use qjs::QjsHost;
 
 const GOAT_MODULE: &str = include_str!("goat.js");
 
@@ -137,16 +141,14 @@ fn load_asset(ctx: &mut Context, key: &str) -> JsResult<JsValue> {
         return Ok(o.clone().into());
     }
     let io = sh.loader.io.borrow().clone().ok_or_else(|| err("no asset root yet"))?;
-    let text = io.read_string(key).map_err(|e| err(format!("{key}: {e}")))?;
-    let json: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| err(format!("{key}: {e}")))?;
-    let script = json.get("script").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| err(format!("{key}: the asset has no script")))?.to_string();
+    let (script, data) = asset_file(&io, key).map_err(err)?;
     let class = class_in(&sh, ctx, &script)?;
     let object = class.construct(&[], None, ctx)?;
     object.set(js_string!("_key"), JsValue::from(JsString::from(key)), true, ctx)?;
     // cached before its data: assets referencing each other resolve to the same objects
     sh.assets.borrow_mut().insert(key.to_string(), object.clone());
-    if let (Some(data), Some(apply)) = (json.get("data").filter(|d| d.is_object()), sh.apply.borrow().clone()) {
-        let d = JsValue::from_json(data, ctx)?;
+    if let (Some(data), Some(apply)) = (data, sh.apply.borrow().clone()) {
+        let d = JsValue::from_json(&data, ctx)?;
         apply.call(&JsValue::undefined(), &[object.clone().into(), d], ctx)?;
     }
     let on_enable = object.get(js_string!("onEnable"), ctx)?;
@@ -160,37 +162,51 @@ fn err(msg: impl Into<String>) -> JsError {
     JsNativeError::error().with_message(msg.into()).into()
 }
 
-/// Runs `f` with the engine API of the script call in progress.
-fn with_api<R>(f: impl FnOnce(&mut Api<'_, '_>, &RefCell<Handles>) -> Result<R, String>) -> JsResult<R> {
-    let b = BRIDGE.with(|c| c.get()).ok_or_else(|| err("the engine API is only available while a script runs"))?;
-    // SAFETY: the pointers were set by `enter` from live references for the duration of the
-    // host call that is running this native function (same thread, nothing else holds them).
+/// Runs `f` with the engine API (engine-neutral natives: errors as strings).
+pub(crate) fn with_bridge<R>(f: impl FnOnce(&mut Api<'_, '_>, &RefCell<Handles>) -> Result<R, String>) -> Result<R, String> {
+    let b = BRIDGE.with(|c| c.get()).ok_or("the engine API is only available while a script runs")?;
+    // SAFETY: as in `with_api`.
     let api = unsafe { &mut *(b.api as *mut Api<'static, 'static>) };
     let handles = unsafe { &*b.handles };
-    f(api, handles).map_err(err)
+    f(api, handles)
 }
 
-fn num(args: &[JsValue], i: usize, ctx: &mut Context) -> JsResult<f64> {
-    args.get(i).cloned().unwrap_or_default().to_number(ctx)
+fn num(a: &[Value], i: usize) -> f64 {
+    match a.get(i) {
+        Some(Value::Number(n)) => n.as_f64().unwrap_or(f64::NAN),
+        Some(Value::Bool(b)) => *b as u8 as f64,
+        Some(Value::String(s)) => s.trim().parse().unwrap_or(f64::NAN),
+        _ => f64::NAN,
+    }
 }
-fn f(args: &[JsValue], i: usize, ctx: &mut Context) -> JsResult<f32> {
-    num(args, i, ctx).map(|v| v as f32)
+fn f(a: &[Value], i: usize) -> f32 {
+    num(a, i) as f32
 }
-fn string(args: &[JsValue], i: usize, ctx: &mut Context) -> JsResult<String> {
-    Ok(args.get(i).cloned().unwrap_or_default().to_string(ctx)?.to_std_string_escaped())
+fn string(a: &[Value], i: usize) -> String {
+    match a.get(i) {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => match n.as_f64() {
+            Some(x) if x.fract() == 0.0 && x.abs() < 1e15 => format!("{}", x as i64),
+            _ => n.to_string(),
+        },
+        Some(Value::Bool(b)) => b.to_string(),
+        Some(Value::Null) | None => "undefined".into(),
+        Some(other) => other.to_string(),
+    }
 }
-fn entity(args: &[JsValue], i: usize, ctx: &mut Context) -> JsResult<Entity> {
-    let h = num(args, i, ctx)?;
-    with_api(|_, hs| hs.borrow().entity(h).ok_or_else(|| "not a GameObject (destroyed?)".to_string()))
+fn entity(a: &[Value], i: usize) -> Result<Entity, String> {
+    let h = num(a, i);
+    with_bridge(|_, hs| hs.borrow().entity(h).ok_or_else(|| "not a GameObject (destroyed?)".to_string()))
 }
-fn array(v: &[f32], ctx: &mut Context) -> JsResult<JsValue> {
-    JsValue::from_json(&Value::from(v.iter().map(|x| *x as f64).collect::<Vec<_>>()), ctx)
+fn array(v: &[f32]) -> Value {
+    Value::from(v.iter().map(|x| *x as f64).collect::<Vec<_>>())
 }
-fn json(v: &Value, ctx: &mut Context) -> JsResult<JsValue> {
-    JsValue::from_json(v, ctx)
+fn unit<T>(_: T) -> Value {
+    Value::Null
 }
 
-type Native = fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>;
+/// An engine-neutral native: JSON arguments in, JSON out (Boa and QuickJS wrap these).
+pub(crate) type Native = fn(&[Value]) -> Result<Value, String>;
 
 /// Replaces JSON objects for which `f` returns a value (depth-first, objects and arrays).
 fn map_objects(v: &mut Value, f: &mut dyn FnMut(&serde_json::Map<String, Value>) -> Option<Value>) {
@@ -213,216 +229,205 @@ fn map_objects(v: &mut Value, f: &mut dyn FnMut(&serde_json::Map<String, Value>)
     }
 }
 
-/// The natives behind goat.js (`globalThis.__goat`).
-fn natives() -> Vec<(&'static str, usize, Native)> {
+/// The natives behind goat.js (`globalThis.__goat`), except `loadAsset` (it builds script
+/// objects: each host has its own).
+pub(crate) fn natives() -> Vec<(&'static str, usize, Native)> {
     vec![
-        ("loadAsset", 1, |_, a, c| {
-            let key = string(a, 0, c)?;
-            load_asset(c, &key)
+        ("find", 1, |a| {
+            let name = string(a, 0);
+            with_bridge(|api, hs| Ok(api.find(&name).map(|e| hs.borrow_mut().of(e)).unwrap_or(-1.0))).map(Value::from)
         }),
-        ("find", 1, |_, a, c| {
-            let name = string(a, 0, c)?;
-            with_api(|api, hs| Ok(api.find(&name).map(|e| hs.borrow_mut().of(e)).unwrap_or(-1.0))).map(JsValue::from)
+        ("exists", 1, |a| {
+            let h = num(a, 0);
+            with_bridge(|api, hs| Ok(hs.borrow().entity(h).is_some_and(|e| api.exists(e)))).map(Value::from)
         }),
-        ("exists", 1, |_, a, c| {
-            let h = num(a, 0, c)?;
-            with_api(|api, hs| Ok(hs.borrow().entity(h).is_some_and(|e| api.exists(e)))).map(JsValue::from)
+        ("name", 1, |a| {
+            let e = entity(a, 0)?;
+            with_bridge(|api, _| Ok(api.name(e).unwrap_or_default())).map(Value::from)
         }),
-        ("name", 1, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            with_api(|api, _| Ok(api.name(e).unwrap_or_default())).map(|s| JsValue::from(JsString::from(s)))
+        ("setName", 2, |a| {
+            let (e, n) = (entity(a, 0)?, string(a, 1));
+            with_bridge(|api, _| Ok(api.set_name(e, &n))).map(unit)
         }),
-        ("setName", 2, |_, a, c| {
-            let (e, n) = (entity(a, 0, c)?, string(a, 1, c)?);
-            with_api(|api, _| Ok(api.set_name(e, &n))).map(|_| JsValue::undefined())
+        ("spawn", 1, |a| {
+            let n = string(a, 0);
+            with_bridge(|api, hs| Ok(hs.borrow_mut().of(api.spawn(&n)))).map(Value::from)
         }),
-        ("spawn", 1, |_, a, c| {
-            let n = string(a, 0, c)?;
-            with_api(|api, hs| Ok(hs.borrow_mut().of(api.spawn(&n)))).map(JsValue::from)
+        ("destroy", 1, |a| {
+            let e = entity(a, 0)?;
+            with_bridge(|api, _| Ok(api.destroy(e))).map(unit)
         }),
-        ("destroy", 1, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            with_api(|api, _| Ok(api.destroy(e))).map(|_| JsValue::undefined())
+        ("parent", 1, |a| {
+            let e = entity(a, 0)?;
+            with_bridge(|api, hs| Ok(api.parent(e).map(|p| hs.borrow_mut().of(p)).unwrap_or(-1.0))).map(Value::from)
         }),
-        ("parent", 1, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            with_api(|api, hs| Ok(api.parent(e).map(|p| hs.borrow_mut().of(p)).unwrap_or(-1.0))).map(JsValue::from)
-        }),
-        ("setParent", 2, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let p = num(a, 1, c)?;
-            with_api(|api, hs| {
+        ("setParent", 2, |a| {
+            let e = entity(a, 0)?;
+            let p = num(a, 1);
+            with_bridge(|api, hs| {
                 let p = hs.borrow().entity(p);
                 api.set_parent(e, p);
                 Ok(())
             })
-            .map(|_| JsValue::undefined())
+            .map(unit)
         }),
-        ("instantiate", 2, |_, a, c| {
-            let key = string(a, 0, c)?;
-            let p = num(a, 1, c)?;
-            with_api(|api, hs| {
+        ("instantiate", 2, |a| {
+            let key = string(a, 0);
+            let p = num(a, 1);
+            with_bridge(|api, hs| {
                 let parent = hs.borrow().entity(p);
                 let e = api.instantiate(&key, parent)?;
                 Ok(hs.borrow_mut().of(e))
             })
-            .map(JsValue::from)
+            .map(Value::from)
         }),
-        ("getPos", 1, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let p = with_api(|api, _| Ok(api.position(e)))?;
-            array(&p.to_array(), c)
+        ("getPos", 1, |a| {
+            let e = entity(a, 0)?;
+            with_bridge(|api, _| Ok(array(&api.position(e).to_array())))
         }),
-        ("setPos", 4, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let v = Vec3::new(f(a, 1, c)?, f(a, 2, c)?, f(a, 3, c)?);
-            with_api(|api, _| Ok(api.set_position(e, v))).map(|_| JsValue::undefined())
+        ("setPos", 4, |a| {
+            let e = entity(a, 0)?;
+            let v = Vec3::new(f(a, 1), f(a, 2), f(a, 3));
+            with_bridge(|api, _| Ok(api.set_position(e, v))).map(unit)
         }),
-        ("worldPos", 1, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let p = with_api(|api, _| Ok(api.world_position(e)))?;
-            array(&p.to_array(), c)
+        ("worldPos", 1, |a| {
+            let e = entity(a, 0)?;
+            with_bridge(|api, _| Ok(array(&api.world_position(e).to_array())))
         }),
-        ("getEuler", 1, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let p = with_api(|api, _| Ok(api.euler(e)))?;
-            array(&p.to_array(), c)
+        ("getEuler", 1, |a| {
+            let e = entity(a, 0)?;
+            with_bridge(|api, _| Ok(array(&api.euler(e).to_array())))
         }),
-        ("setEuler", 4, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let v = Vec3::new(f(a, 1, c)?, f(a, 2, c)?, f(a, 3, c)?);
-            with_api(|api, _| Ok(api.set_euler(e, v))).map(|_| JsValue::undefined())
+        ("setEuler", 4, |a| {
+            let e = entity(a, 0)?;
+            let v = Vec3::new(f(a, 1), f(a, 2), f(a, 3));
+            with_bridge(|api, _| Ok(api.set_euler(e, v))).map(unit)
         }),
-        ("getRot", 1, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let q = with_api(|api, _| Ok(api.rotation(e)))?;
-            array(&q.to_array(), c)
+        ("getRot", 1, |a| {
+            let e = entity(a, 0)?;
+            with_bridge(|api, _| Ok(array(&api.rotation(e).to_array())))
         }),
-        ("setRot", 5, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let q = Quat::from_xyzw(f(a, 1, c)?, f(a, 2, c)?, f(a, 3, c)?, f(a, 4, c)?);
-            with_api(|api, _| Ok(api.set_rotation(e, q))).map(|_| JsValue::undefined())
+        ("setRot", 5, |a| {
+            let e = entity(a, 0)?;
+            let q = Quat::from_xyzw(f(a, 1), f(a, 2), f(a, 3), f(a, 4));
+            with_bridge(|api, _| Ok(api.set_rotation(e, q))).map(unit)
         }),
-        ("rotate", 4, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let d = Vec3::new(f(a, 1, c)?, f(a, 2, c)?, f(a, 3, c)?);
-            with_api(|api, _| {
+        ("rotate", 4, |a| {
+            let e = entity(a, 0)?;
+            let d = Vec3::new(f(a, 1), f(a, 2), f(a, 3));
+            with_bridge(|api, _| {
                 let q = api.rotation(e) * Quat::from_euler(EulerRot::YXZ, d.y.to_radians(), d.x.to_radians(), d.z.to_radians());
                 api.set_rotation(e, q);
                 Ok(())
             })
-            .map(|_| JsValue::undefined())
+            .map(unit)
         }),
-        ("lookAt", 4, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let target = Vec3::new(f(a, 1, c)?, f(a, 2, c)?, f(a, 3, c)?);
-            with_api(|api, _| {
+        ("lookAt", 4, |a| {
+            let e = entity(a, 0)?;
+            let target = Vec3::new(f(a, 1), f(a, 2), f(a, 3));
+            with_bridge(|api, _| {
                 if let Some(mut t) = api.transform(e) {
                     t.look_at(target, Vec3::Y);
                     api.set_transform(e, t);
                 }
                 Ok(())
             })
-            .map(|_| JsValue::undefined())
+            .map(unit)
         }),
-        ("eulerToQuat", 3, |_, a, c| {
-            let d = Vec3::new(f(a, 0, c)?, f(a, 1, c)?, f(a, 2, c)?);
-            array(&Quat::from_euler(EulerRot::YXZ, d.y.to_radians(), d.x.to_radians(), d.z.to_radians()).to_array(), c)
+        ("eulerToQuat", 3, |a| {
+            let d = Vec3::new(f(a, 0), f(a, 1), f(a, 2));
+            Ok(array(&Quat::from_euler(EulerRot::YXZ, d.y.to_radians(), d.x.to_radians(), d.z.to_radians()).to_array()))
         }),
-        ("quatToEuler", 4, |_, a, c| {
-            let q = Quat::from_xyzw(f(a, 0, c)?, f(a, 1, c)?, f(a, 2, c)?, f(a, 3, c)?).normalize();
+        ("quatToEuler", 4, |a| {
+            let q = Quat::from_xyzw(f(a, 0), f(a, 1), f(a, 2), f(a, 3)).normalize();
             let (y, x, z) = q.to_euler(EulerRot::YXZ);
-            array(&[x.to_degrees(), y.to_degrees(), z.to_degrees()], c)
+            Ok(array(&[x.to_degrees(), y.to_degrees(), z.to_degrees()]))
         }),
-        ("getScale", 1, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let s = with_api(|api, _| Ok(api.scale(e)))?;
-            array(&s.to_array(), c)
+        ("getScale", 1, |a| {
+            let e = entity(a, 0)?;
+            with_bridge(|api, _| Ok(array(&api.scale(e).to_array())))
         }),
-        ("setScale", 4, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let v = Vec3::new(f(a, 1, c)?, f(a, 2, c)?, f(a, 3, c)?);
-            with_api(|api, _| Ok(api.set_scale(e, v))).map(|_| JsValue::undefined())
+        ("setScale", 4, |a| {
+            let e = entity(a, 0)?;
+            let v = Vec3::new(f(a, 1), f(a, 2), f(a, 3));
+            with_bridge(|api, _| Ok(api.set_scale(e, v))).map(unit)
         }),
-        ("dt", 0, |_, _, _| with_api(|api, _| Ok(api.delta_time() as f64)).map(JsValue::from)),
-        ("time", 0, |_, _, _| with_api(|api, _| Ok(api.time() as f64)).map(JsValue::from)),
-        ("fixedDt", 0, |_, _, _| with_api(|api, _| Ok(api.fixed_delta_time() as f64)).map(JsValue::from)),
-        ("unscaledDt", 0, |_, _, _| with_api(|api, _| Ok(api.unscaled_delta_time() as f64)).map(JsValue::from)),
-        ("unscaledTime", 0, |_, _, _| with_api(|api, _| Ok(api.unscaled_time() as f64)).map(JsValue::from)),
-        ("frameCount", 0, |_, _, _| with_api(|api, _| Ok(api.frame_count() as f64)).map(JsValue::from)),
-        ("timeScale", 0, |_, _, _| with_api(|api, _| Ok(api.time_scale() as f64)).map(JsValue::from)),
-        ("setTimeScale", 1, |_, a, c| {
-            let s = f(a, 0, c)?;
-            with_api(|api, _| Ok(api.set_time_scale(s))).map(|_| JsValue::undefined())
+        ("dt", 0, |_| with_bridge(|api, _| Ok(api.delta_time() as f64)).map(Value::from)),
+        ("time", 0, |_| with_bridge(|api, _| Ok(api.time() as f64)).map(Value::from)),
+        ("fixedDt", 0, |_| with_bridge(|api, _| Ok(api.fixed_delta_time() as f64)).map(Value::from)),
+        ("unscaledDt", 0, |_| with_bridge(|api, _| Ok(api.unscaled_delta_time() as f64)).map(Value::from)),
+        ("unscaledTime", 0, |_| with_bridge(|api, _| Ok(api.unscaled_time() as f64)).map(Value::from)),
+        ("frameCount", 0, |_| with_bridge(|api, _| Ok(api.frame_count() as f64)).map(Value::from)),
+        ("timeScale", 0, |_| with_bridge(|api, _| Ok(api.time_scale() as f64)).map(Value::from)),
+        ("setTimeScale", 1, |a| {
+            let s = f(a, 0);
+            with_bridge(|api, _| Ok(api.set_time_scale(s))).map(unit)
         }),
-        ("button", 1, |_, a, c| {
-            let n = string(a, 0, c)?;
-            with_api(|api, _| {
+        ("button", 1, |a| {
+            let n = string(a, 0);
+            with_bridge(|api, _| {
                 let (h, p, r) = api.button(&n);
                 Ok(h as i32 | (p as i32) << 1 | (r as i32) << 2)
             })
-            .map(JsValue::from)
+            .map(Value::from)
         }),
-        ("stick", 0, |_, _, c| {
-            let s = with_api(|api, _| Ok(api.stick()))?;
-            array(&s.to_array(), c)
+        ("stick", 0, |_| with_bridge(|api, _| Ok(array(&api.stick().to_array())))),
+        ("pointer", 0, |_| {
+            with_bridge(|api, _| {
+                Ok(match api.pointer() {
+                    Some((p, down)) => array(&[p.x, p.y, down as u8 as f32]),
+                    None => Value::Null,
+                })
+            })
         }),
-        ("pointer", 0, |_, _, c| match with_api(|api, _| Ok(api.pointer()))? {
-            Some((p, down)) => array(&[p.x, p.y, down as u8 as f32], c),
-            None => Ok(JsValue::null()),
+        ("action", 1, |a| {
+            let n = string(a, 0);
+            with_bridge(|api, _| Ok(array(&api.action_value(&n).to_array())))
         }),
-        ("action", 1, |_, a, c| {
-            let n = string(a, 0, c)?;
-            let v = with_api(|api, _| Ok(api.action_value(&n)))?;
-            array(&v.to_array(), c)
+        ("actionTriggered", 1, |a| {
+            let n = string(a, 0);
+            with_bridge(|api, _| Ok(api.action_triggered(&n))).map(Value::from)
         }),
-        ("actionTriggered", 1, |_, a, c| {
-            let n = string(a, 0, c)?;
-            with_api(|api, _| Ok(api.action_triggered(&n))).map(JsValue::from)
+        ("actionPressed", 1, |a| {
+            let n = string(a, 0);
+            with_bridge(|api, _| Ok(api.action_pressed(&n))).map(Value::from)
         }),
-        ("actionPressed", 1, |_, a, c| {
-            let n = string(a, 0, c)?;
-            with_api(|api, _| Ok(api.action_pressed(&n))).map(JsValue::from)
-        }),
-        ("log", 2, |_, a, c| {
+        ("log", 2, |a| {
             use goat_core::log::Level;
-            let level = match num(a, 0, c)? as i32 {
+            let level = match num(a, 0) as i32 {
                 3 => Level::Warn,
                 4 => Level::Error,
                 _ => Level::Info,
             };
-            let msg = string(a, 1, c)?;
-            with_api(|api, _| Ok(api.log(level, &msg))).map(|_| JsValue::undefined())
+            let msg = string(a, 1);
+            with_bridge(|api, _| Ok(api.log(level, &msg))).map(unit)
         }),
-        ("getComponent", 2, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let n = string(a, 1, c)?;
-            match with_api(|api, _| Ok(api.get_component(e, &n)))? {
-                Some(v) => json(&v, c),
-                None => Ok(JsValue::null()),
-            }
+        ("getComponent", 2, |a| {
+            let e = entity(a, 0)?;
+            let n = string(a, 1);
+            with_bridge(|api, _| Ok(api.get_component(e, &n).unwrap_or(Value::Null)))
         }),
-        ("setComponent", 3, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let n = string(a, 1, c)?;
-            let v = a.get(2).cloned().unwrap_or_default().to_json(c)?.unwrap_or(Value::Null);
+        ("setComponent", 3, |a| {
+            let e = entity(a, 0)?;
+            let n = string(a, 1);
+            let v = a.get(2).cloned().unwrap_or(Value::Null);
             let v = if v.is_null() { Value::Object(Default::default()) } else { v };
-            with_api(|api, _| api.set_component(e, &n, &v)).map(|_| JsValue::undefined())
+            with_bridge(|api, _| api.set_component(e, &n, &v)).map(unit)
         }),
-        ("removeComponent", 2, |_, a, c| {
-            let e = entity(a, 0, c)?;
-            let n = string(a, 1, c)?;
-            with_api(|api, _| Ok(api.remove_component(e, &n))).map(|_| JsValue::undefined())
+        ("removeComponent", 2, |a| {
+            let e = entity(a, 0)?;
+            let n = string(a, 1);
+            with_bridge(|api, _| Ok(api.remove_component(e, &n))).map(unit)
         }),
-        ("call", 3, |_, a, c| {
-            let n = string(a, 0, c)?;
+        ("call", 3, |a| {
+            let n = string(a, 0);
             // -1: a call without an object (Tween.value, Tween.events...)
-            let e = if num(a, 1, c)? < 0.0 { Entity::DANGLING } else { entity(a, 1, c)? };
-            let args = match a.get(2).cloned().unwrap_or_default().to_json(c)? {
-                Some(Value::Array(v)) => v,
+            let e = if num(a, 1) < 0.0 { Entity::DANGLING } else { entity(a, 1)? };
+            let args = match a.get(2) {
+                Some(Value::Array(v)) => v.clone(),
                 _ => Vec::new(),
             };
-            let r = with_api(|api, hs| {
+            with_bridge(|api, hs| {
                 // GameObjects / Transforms ({ _h }) → {"$entity"}; results the other way ({"$go": handle})
                 let mut args = args;
                 for a in args.iter_mut() {
@@ -437,13 +442,36 @@ fn natives() -> Vec<(&'static str, usize, Native)> {
                     Some(serde_json::json!({ "$go": hs.borrow_mut().of(e) }))
                 });
                 Ok(r)
-            })?;
-            json(&r, c)
+            })
         }),
-        ("quit", 0, |_, _, _| with_api(|api, _| Ok(api.quit())).map(|_| JsValue::undefined())),
+        ("quit", 0, |_| with_bridge(|api, _| Ok(api.quit())).map(unit)),
+        ("debugBreak", 1, |a| {
+            let msg = string(a, 0);
+            with_bridge(|api, _| {
+                api.ctx.resources.get_or_default::<goat_script::ScriptDebug>().break_requested = Some(msg);
+                Ok(Value::Null)
+            })
+        }),
     ]
 }
 
+/// The script source of a ScriptableObject asset file and its data.
+pub(crate) fn asset_file(io: &AssetIo, key: &str) -> Result<(String, Option<Value>), String> {
+    let text = io.read_string(key).map_err(|e| format!("{key}: {e}"))?;
+    let json: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| format!("{key}: {e}"))?;
+    let script = json.get("script").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| format!("{key}: the asset has no script"))?.to_string();
+    Ok((script, json.get("data").filter(|d| d.is_object()).cloned()))
+}
+
+/// Entities in a message argument → GameObject handles ({"$go"}).
+pub(crate) fn message_arg(arg: &Value, handles: &RefCell<Handles>) -> Value {
+    let mut arg = arg.clone();
+    map_objects(&mut arg, &mut |o| {
+        let e = goat_script::entity_arg(&Value::Object(o.clone()))?;
+        Some(serde_json::json!({ "$go": handles.borrow_mut().of(e) }))
+    });
+    arg
+}
 // ------------------------------------------------------------------ modules
 
 /// Resolves `"goat"` and relative imports between scripts (asset keys).
@@ -535,6 +563,7 @@ impl ModuleLoader for Loader {
 
 struct Instance {
     object: JsObject,
+    src: String,
 }
 
 /// TypeScript / JavaScript scripts (`.ts`, `.js`).
@@ -566,9 +595,25 @@ impl JsHost {
         let loader = Rc::new(Loader { io: RefCell::new(io), goat: RefCell::new(None), modules: RefCell::new(HashMap::new()) });
         let mut ctx = Context::builder().module_loader(loader.clone()).build().expect("a JavaScript context");
         let mut natives = ObjectInitializer::new(&mut ctx);
-        for (name, len, f) in natives_list() {
-            natives.function(NativeFunction::from_fn_ptr(f), js_string!(name), len);
+        for (name, len, f) in crate::natives() {
+            let call = move |_: &JsValue, args: &[JsValue], ctx: &mut Context| -> JsResult<JsValue> {
+                let mut vals = Vec::with_capacity(args.len());
+                for a in args {
+                    vals.push(js_to_value(a, ctx)?);
+                }
+                let r = f(&vals).map_err(err)?;
+                JsValue::from_json(&r, ctx)
+            };
+            natives.function(NativeFunction::from_copy_closure(call), js_string!(name), len);
         }
+        natives.function(
+            NativeFunction::from_fn_ptr(|_, a, c| {
+                let key = a.first().cloned().unwrap_or_default().to_string(c)?.to_std_string_escaped();
+                load_asset(c, &key)
+            }),
+            js_string!("loadAsset"),
+            1,
+        );
         let natives = natives.build();
         ctx.register_global_property(js_string!("__goat"), natives, Attribute::all()).expect("__goat");
         let shared = HostShared { loader: loader.clone(), classes: Default::default(), assets: Default::default(), apply: Default::default() };
@@ -674,8 +719,18 @@ impl Default for JsHost {
     }
 }
 
-fn natives_list() -> Vec<(&'static str, usize, Native)> {
-    natives()
+/// A JavaScript value as JSON (numbers / strings directly; undefined = null).
+fn js_to_value(v: &JsValue, ctx: &mut Context) -> JsResult<Value> {
+    if let Some(n) = v.as_number() {
+        return Ok(serde_json::Number::from_f64(n).map(Value::Number).unwrap_or(Value::Null));
+    }
+    if let Some(s) = v.as_string() {
+        return Ok(Value::String(s.to_std_string_escaped()));
+    }
+    if v.is_undefined() || v.is_null() {
+        return Ok(Value::Null);
+    }
+    Ok(v.to_json(ctx)?.unwrap_or(Value::Null))
 }
 
 impl ScriptHost for JsHost {
@@ -699,8 +754,13 @@ impl ScriptHost for JsHost {
                     apply.call(&JsValue::undefined(), &[object.clone().into(), p], &mut h.ctx).map_err(|e| h.describe(e))?;
                 }
             }
+            // the console's $scripts
+            let goat = h.evaluate("goat")?;
+            if let Some(track) = goat.get(js_string!("__track"), &mut h.ctx).ok().and_then(|v| v.as_callable()) {
+                track.call(&JsValue::undefined(), &[object.clone().into()], &mut h.ctx).map_err(|e| h.describe(e))?;
+            }
             h.next += 1;
-            h.instances.insert(h.next, Instance { object });
+            h.instances.insert(h.next, Instance { object, src: src.to_string() });
             Ok(h.next)
         })
     }
@@ -725,13 +785,9 @@ impl ScriptHost for JsHost {
     fn message(&mut self, api: &mut Api, instance: u32, _entity: Entity, name: &str, arg: &Value) -> Result<(), String> {
         let (Some(obj), Some(dispatch)) = (self.instances.get(&instance).map(|i| i.object.clone()), self.message.clone()) else { return Ok(()) };
         let name = name.to_string();
-        let mut arg = arg.clone();
         self.enter(api, |h| {
             // entities → GameObject handles
-            map_objects(&mut arg, &mut |o| {
-                let e = goat_script::entity_arg(&Value::Object(o.clone()))?;
-                Some(serde_json::json!({ "$go": h.handles.borrow_mut().of(e) }))
-            });
+            let arg = message_arg(arg, &h.handles);
             let a = JsValue::from_json(&arg, &mut h.ctx).map_err(|e| h.describe(e))?;
             dispatch.call(&JsValue::undefined(), &[obj.into(), JsValue::from(js_string!(name.as_str())), a], &mut h.ctx).map_err(|e| h.describe(e))?;
             h.ctx.run_jobs().map_err(|e| h.describe(e))?;
@@ -754,6 +810,39 @@ impl ScriptHost for JsHost {
         // ScriptableObject assets are re-read (their file or their script changed)
         self.shared.assets.borrow_mut().clear();
     }
+
+    fn reload(&mut self, api: &mut Api, src: &str) -> Result<usize, String> {
+        self.invalidate(src);
+        let targets: Vec<JsObject> = self.instances.values().filter(|i| i.src == src).map(|i| i.object.clone()).collect();
+        if targets.is_empty() {
+            return Ok(0);
+        }
+        self.ensure_io(api)?;
+        self.enter(api, |h| {
+            let class = h.class_of(src)?;
+            let proto = class.get(js_string!("prototype"), &mut h.ctx).map_err(|e| h.describe(e))?;
+            let proto = proto.as_object().ok_or("the class has no prototype")?;
+            // the running objects keep their state and get the new methods
+            for o in &targets {
+                o.set_prototype(Some(proto.clone()));
+            }
+            Ok(targets.len())
+        })
+    }
+
+    fn eval(&mut self, api: &mut Api, code: &str, selected: Option<Entity>) -> Result<Value, String> {
+        self.ensure_io(api)?;
+        let code = code.to_string();
+        self.enter(api, |h| {
+            let goat = h.evaluate("goat")?;
+            let f = goat.get(js_string!("__console"), &mut h.ctx).map_err(|e| h.describe(e))?;
+            let f = f.as_callable().ok_or("goat.js has no __console")?;
+            let handle = selected.map(|e| h.handles.borrow_mut().of(e)).unwrap_or(-1.0);
+            let r = f.call(&JsValue::undefined(), &[JsValue::from(handle), JsValue::from(JsString::from(code.as_str()))], &mut h.ctx).map_err(|e| h.describe(e))?;
+            h.ctx.run_jobs().map_err(|e| h.describe(e))?;
+            Ok(Value::String(r.to_string(&mut h.ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default()))
+        })
+    }
 }
 
 /// The context a host call gets in Rust tests (no other way to build an `Api`).
@@ -763,3 +852,11 @@ pub fn api_of<'a, 'c>(ctx: &'a mut GameContext<'c>) -> Api<'a, 'c> {
 
 #[cfg(test)]
 mod tests;
+
+/// The same suite on QuickJS.
+#[cfg(all(test, feature = "quickjs"))]
+mod qjs_tests {
+    #[allow(unused_imports)]
+    use crate::QjsHost as JsHost;
+    include!("tests.rs");
+}

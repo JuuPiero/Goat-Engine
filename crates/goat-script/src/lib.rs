@@ -108,6 +108,17 @@ pub trait ScriptHost: 'static {
     }
     /// A source changed on disk: the next instances use the new code.
     fn invalidate(&mut self, _src: &str) {}
+    /// Hot reload while playing: the running instances of `src` keep their state (fields) and
+    /// take the new code (methods). Returns how many were updated.
+    fn reload(&mut self, _api: &mut Api, src: &str) -> Result<usize, String> {
+        self.invalidate(src);
+        Ok(0)
+    }
+    /// Evaluates an expression for the editor's console while playing (`$sel` = the selected
+    /// object as the language sees it).
+    fn eval(&mut self, _api: &mut Api, _code: &str, _selected: Option<Entity>) -> Result<Value, String> {
+        Err(format!("{}: no console", self.name()))
+    }
     /// Once per frame after every Update (Unity runs coroutines there): language-side
     /// schedulers (coroutines, awaitables, tween callbacks).
     fn tick(&mut self, _api: &mut Api) -> Result<(), String> {
@@ -457,6 +468,30 @@ struct Instance {
     failed: bool,
 }
 
+/// The editor's script tools while playing (a resource): hot reload requests, console
+/// expressions and their answers, recent script errors, `Debug.break()`.
+#[derive(Default)]
+pub struct ScriptDebug {
+    /// Script keys changed on disk (reloaded at the next update).
+    pub reloads: Vec<String>,
+    /// Console expressions: (id, code, selected object).
+    pub evals: Vec<(u32, String, Option<Entity>)>,
+    pub results: Vec<(u32, Result<Value, String>)>,
+    /// Script errors since the editor last looked (Error Pause).
+    pub errors: Vec<String>,
+    /// `Debug.break(message)` was called: the editor pauses.
+    pub break_requested: Option<String>,
+}
+
+impl ScriptDebug {
+    fn error(ctx: &mut Context, msg: String) {
+        let d = ctx.resources.get_or_default::<ScriptDebug>();
+        if d.errors.len() < 64 {
+            d.errors.push(msg);
+        }
+    }
+}
+
 /// Runs the [`Script`] components through the hosts given to it.
 pub struct ScriptPlugin {
     hosts: Vec<Box<dyn ScriptHost>>,
@@ -510,6 +545,7 @@ impl ScriptPlugin {
                 Ok(id) => self.instances.push(Instance { entity: e, slot, src: r.src, host, id, started: false, failed: false }),
                 Err(err) => {
                     goat_core::error!("{}: {err}", r.src);
+                    ScriptDebug::error(ctx, format!("{}: {err}", r.src));
                     self.instances.push(Instance { entity: e, slot, src: r.src, host, id: u32::MAX, started: true, failed: true });
                 }
             }
@@ -529,6 +565,8 @@ impl ScriptPlugin {
                 self.instances[i].started = true;
                 if let Err(err) = self.hosts[host].call(&mut api, id, e, Method::Start) {
                     goat_core::error!("{} start: {err}", self.instances[i].src);
+                    let msg = format!("{} start: {err}", self.instances[i].src);
+                    ScriptDebug::error(ctx, msg);
                     self.instances[i].failed = true;
                     continue;
                 }
@@ -538,6 +576,8 @@ impl ScriptPlugin {
             }
             if let Err(err) = self.hosts[host].call(&mut api, id, e, method) {
                 goat_core::error!("{} {}: {err} (script disabled)", self.instances[i].src, method.js_name());
+                let msg = format!("{} {}: {err}", self.instances[i].src, method.js_name());
+                ScriptDebug::error(ctx, msg);
                 self.instances[i].failed = true;
             }
         }
@@ -558,6 +598,42 @@ impl ScriptPlugin {
                     goat_core::error!("{} {name}: {err}", self.instances[i].src);
                 }
             }
+        }
+    }
+
+    /// Hot reloads and console expressions queued in [`ScriptDebug`].
+    fn debug_requests(&mut self, ctx: &mut Context) {
+        let Some(d) = ctx.resources.get_mut::<ScriptDebug>() else { return };
+        let reloads = std::mem::take(&mut d.reloads);
+        let evals = std::mem::take(&mut d.evals);
+        for src in reloads {
+            let Some(host) = self.hosts.iter().position(|h| h.handles(&src)) else { continue };
+            let mut api = Api::new(ctx);
+            match self.hosts[host].reload(&mut api, &src) {
+                Ok(n) => {
+                    // instances that failed get another chance with the new code
+                    for inst in self.instances.iter_mut().filter(|i| i.src == src && i.failed && i.id != u32::MAX) {
+                        inst.failed = false;
+                    }
+                    goat_core::info!("{src}: reloaded ({n} running)");
+                }
+                Err(e) => goat_core::error!("{src}: reload: {e}"),
+            }
+        }
+        for (id, code, selected) in evals {
+            // the first host that can (one console language: JavaScript)
+            let mut answer = Err("no script host has a console".to_string());
+            for h in self.hosts.iter_mut() {
+                let mut api = Api::new(ctx);
+                let r = h.eval(&mut api, &code, selected);
+                // a host without a console passes; the first one that has one answers (errors too)
+                if matches!(&r, Err(e) if e.ends_with("no console")) {
+                    continue;
+                }
+                answer = r;
+                break;
+            }
+            ctx.resources.get_or_default::<ScriptDebug>().results.push((id, answer));
         }
     }
 
@@ -583,6 +659,7 @@ impl Plugin for ScriptPlugin {
         self.run(ctx, Method::FixedUpdate);
     }
     fn update(&mut self, ctx: &mut Context) {
+        self.debug_requests(ctx);
         self.sync(ctx);
         self.deliver(ctx);
         self.run(ctx, Method::Update);

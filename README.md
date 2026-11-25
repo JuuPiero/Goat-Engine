@@ -620,8 +620,13 @@ API:
 - Audio: `Audio`, `AudioSource`, `AudioMixer`.
 - Animation: `Animator` (tham số, play, events), `SpriteAnimator`.
 - UI, lưu dữ liệu: `UI` (onClick, onValueChanged, onSubmit, value, setText, select...), `PlayerPrefs`, `SaveData`.
-Engine JS là Boa (viết bằng Rust thuần, cùng một bản chạy mọi nơi). TypeScript được biên dịch bằng oxc lúc nạp (desktop, editor); `goat build` biên dịch sẵn ra `.js` cho console.
+Engine JS: **QuickJS** trong các player (3DS, desktop: feature `quickjs` của goat-script-js — nhanh hơn Boa khoảng 4 lần: 100 behaviour tính vector mất 16 ms/frame thay vì 69 ms), **Boa** (Rust thuần) trong editor (WebAssembly). Hai engine dùng chung `goat.js` và cùng bộ native, bộ test chạy trên cả hai. TypeScript được biên dịch bằng oxc lúc nạp (desktop, editor); `goat build` biên dịch sẵn ra `.js` cho console.
 
+**Khi Play trong editor** (như Unity):
+- **Hot reload**: sửa và lưu script (`.ts` / `.js`, C# sau khi goat-cs dịch) thì các object đang chạy nhận code mới ngay, giữ nguyên giá trị field.
+- **Console**: ô nhập ở cuối Console chạy JavaScript trong game đang chạy — `$sel` là object đang chọn, `$scripts` là các behaviour của nó; `GameObject`, `Vector3`, `Debug`, `Time`... dùng trực tiếp. ↑ / ↓ để gọi lại lệnh cũ.
+- **Error Pause** (nút trên Console): dừng game khi script lỗi. **`Debug.break(msg)`** trong script: dừng game, Console ghi lý do.
+- Chưa có breakpoint / chạy từng dòng (cả Boa lẫn QuickJS không có API debugger).
 **C#** (`tools/goat-cs`, Roslyn) — viết như Unity, được kiểm tra kiểu theo API `GoatEngine` rồi dịch sang ES module `X.cs.js` chạy trên host JS:
 
 ```csharp

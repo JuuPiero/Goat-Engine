@@ -3,6 +3,7 @@
 
 pub mod animation;
 pub mod core;
+pub mod debugging;
 pub mod editing;
 pub mod gizmos;
 pub mod handles;

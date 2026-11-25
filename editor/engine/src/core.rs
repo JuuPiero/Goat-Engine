@@ -155,6 +155,10 @@ pub struct EditorCore {
     pub(crate) anim: crate::animation::AnimPreview,
     /// Play mode paused (the game view keeps drawing) / one frame requested.
     pub paused: bool,
+    /// Script debugging while playing (console, Error Pause, Debug.break, hot reload).
+    pub debug: crate::debugging::DebugState,
+    /// Paused, but a console expression needs a (zero-time) frame.
+    pub step_zero: bool,
     pub step_once: bool,
     pub tools: crate::tools::Tools,
     /// Scene view options (2D, orthographic, grid, gizmos, Scene view while playing).
@@ -201,6 +205,8 @@ impl EditorCore {
             scripts: Default::default(),
             anim: Default::default(),
             paused: false,
+            debug: Default::default(),
+            step_zero: false,
             step_once: false,
             tools: Default::default(),
             view: ViewOptions::default(),
@@ -554,12 +560,13 @@ impl EditorCore {
         }
         if let Some(play) = self.play.as_mut() {
             // Pause: draw only; Step: one 1/60 s frame
-            if self.paused && !self.step_once {
+            if self.paused && !self.step_once && !self.step_zero {
                 play.render_only(gfx);
                 return;
             }
-            let dt = if self.step_once { 1.0 / 60.0 } else { dt };
+            let dt = if self.step_once { 1.0 / 60.0 } else if self.step_zero && self.paused { 0.0 } else { dt };
             self.step_once = false;
+            self.step_zero = false;
             play.input.begin_frame();
             for (i, b) in Button::ALL.iter().enumerate() {
                 play.input.set(*b, self.held[i]);
@@ -569,7 +576,9 @@ impl EditorCore {
             play.frame(dt, gfx);
             if play.should_quit() {
                 self.play = None;
+                return;
             }
+            self.after_play_frame();
             return;
         }
         if let Ok(mut t) = self.edit.world.get::<&mut Transform>(self.camera) {

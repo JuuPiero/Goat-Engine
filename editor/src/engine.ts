@@ -13,10 +13,10 @@ export function getEngine(): EditorEngine | null {
 }
 
 /// Loads every project file into the engine's memory (small projects; streaming comes later).
-export async function syncFiles(e: EditorEngine) {
+export async function syncFiles(e: EditorEngine, only?: (key: string) => boolean) {
   const p = getState().project;
   if (!p) return;
-  const files = await api.search('');
+  const files = (await api.search('')).filter((f) => !only || only(f.key));
   await Promise.all(
     files.map(async (f) => {
       const r = await fetch(fileUrl(p.assets, f.key, Date.now()));
