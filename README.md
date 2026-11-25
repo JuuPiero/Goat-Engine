@@ -106,6 +106,14 @@ citra = "E:/App/nightly/citra.exe"   # emulator cho `goat run 3ds`
 
 `goat doctor` sẽ báo còn thiếu gì và cách cài.
 
+Trên Windows, ba script ở thư mục gốc làm sẵn mọi bước:
+
+| Script | Việc |
+|---|---|
+| `install.bat` | target wasm32, wasm-bindgen-cli 0.2.130, npm package của editor, goat-cs (nếu có .NET), CLI `goat`, rồi `goat doctor`. `install.bat 3ds` cài thêm Rust nightly + rust-src và cargo-3ds |
+| `run.bat` | mở editor ở chế độ dev (Vite + Tauri) trên project mẫu; `run.bat editor <thư mục project>`, `run.bat desktop [tham số game...]` (vd. `run.bat desktop --layout 3ds`), `run.bat 3ds` (emulator trong `goat.local.toml`) |
+| `build.bat` | game cho desktop + 3DS (bỏ qua 3DS khi chưa cài toolchain); `build.bat desktop` / `3ds` / `editor` (editor chạy độc lập, không cần Vite → `out\editor\goat-editor.exe`) / `all`, thêm `--debug` cho bản debug |
+
 ## Dùng CLI `goat`
 
 ```sh
