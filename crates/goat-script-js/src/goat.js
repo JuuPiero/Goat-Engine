@@ -7,20 +7,48 @@
 // Natives live on globalThis.__goat (crates/goat-script-js/src/lib.rs).
 const N = globalThis.__goat;
 
+const clampN = (v, a, b) => Math.min(b, Math.max(a, v));
+
 export class Vector2 {
   constructor(x = 0, y = 0) { this.x = x; this.y = y; }
   static get zero() { return new Vector2(0, 0); }
   static get one() { return new Vector2(1, 1); }
   static get up() { return new Vector2(0, 1); }
+  static get down() { return new Vector2(0, -1); }
   static get right() { return new Vector2(1, 0); }
+  static get left() { return new Vector2(-1, 0); }
+  set(x, y) { this.x = x; this.y = y; return this; }
+  clone() { return new Vector2(this.x, this.y); }
   add(o) { return new Vector2(this.x + o.x, this.y + o.y); }
   sub(o) { return new Vector2(this.x - o.x, this.y - o.y); }
-  mul(s) { return new Vector2(this.x * s, this.y * s); }
+  /** × a number, or component-wise × a Vector2. */
+  mul(s) { return typeof s === 'number' ? new Vector2(this.x * s, this.y * s) : new Vector2(this.x * s.x, this.y * s.y); }
+  div(s) { return this.mul(1 / s); }
+  neg() { return new Vector2(-this.x, -this.y); }
   dot(o) { return this.x * o.x + this.y * o.y; }
   get magnitude() { return Math.hypot(this.x, this.y); }
-  get normalized() { const m = this.magnitude; return m > 1e-6 ? this.mul(1 / m) : Vector2.zero; }
-  static lerp(a, b, t) { return new Vector2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t); }
+  get sqrMagnitude() { return this.x * this.x + this.y * this.y; }
+  get normalized() { const m = this.magnitude; return m > 1e-5 ? this.mul(1 / m) : Vector2.zero; }
+  normalize() { const n = this.normalized; this.x = n.x; this.y = n.y; return this; }
+  equals(o) { return o != null && Math.abs(this.x - o.x) < 1e-5 && Math.abs(this.y - o.y) < 1e-5; }
+  toArray() { return [this.x, this.y]; }
+  static dot(a, b) { return a.dot(b); }
+  static lerp(a, b, t) { return Vector2.lerpUnclamped(a, b, clampN(t, 0, 1)); }
+  static lerpUnclamped(a, b, t) { return new Vector2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t); }
   static distance(a, b) { return a.sub(b).magnitude; }
+  static angle(a, b) { const d = a.magnitude * b.magnitude; return d < 1e-10 ? 0 : Math.acos(clampN(a.dot(b) / d, -1, 1)) * 180 / Math.PI; }
+  static signedAngle(a, b) { return Vector2.angle(a, b) * Math.sign(a.x * b.y - a.y * b.x || 1); }
+  static moveTowards(a, b, maxDelta) { const d = b.sub(a); const m = d.magnitude; return m <= maxDelta || m < 1e-10 ? b.clone() : a.add(d.mul(maxDelta / m)); }
+  static clampMagnitude(v, max) { return v.sqrMagnitude > max * max ? v.normalized.mul(max) : v.clone(); }
+  static reflect(dir, normal) { return dir.sub(normal.mul(2 * dir.dot(normal))); }
+  static perpendicular(v) { return new Vector2(-v.y, v.x); }
+  static scale(a, b) { return new Vector2(a.x * b.x, a.y * b.y); }
+  static min(a, b) { return new Vector2(Math.min(a.x, b.x), Math.min(a.y, b.y)); }
+  static max(a, b) { return new Vector2(Math.max(a.x, b.x), Math.max(a.y, b.y)); }
+  /** Unity's SmoothDamp: `velocity` is a Vector2 kept by the caller (updated in place). */
+  static smoothDamp(current, target, velocity, smoothTime, maxSpeed = Infinity, deltaTime = Time.deltaTime) {
+    return new Vector2(...[0, 1].map((i) => { const k = i ? 'y' : 'x'; const r = { value: velocity[k] }; const v = Mathf.smoothDamp(current[k], target[k], r, smoothTime, maxSpeed, deltaTime); velocity[k] = r.value; return v; }));
+  }
   toString() { return `(${this.x.toFixed(2)}, ${this.y.toFixed(2)})`; }
 }
 
@@ -32,28 +60,161 @@ export class Vector3 {
   static get down() { return new Vector3(0, -1, 0); }
   static get right() { return new Vector3(1, 0, 0); }
   static get left() { return new Vector3(-1, 0, 0); }
+  /** GoatEngine is right-handed: forward is −Z (cameras look along it). */
   static get forward() { return new Vector3(0, 0, -1); }
   static get back() { return new Vector3(0, 0, 1); }
+  set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
+  clone() { return new Vector3(this.x, this.y, this.z); }
   add(o) { return new Vector3(this.x + o.x, this.y + o.y, this.z + o.z); }
   sub(o) { return new Vector3(this.x - o.x, this.y - o.y, this.z - o.z); }
-  mul(s) { return new Vector3(this.x * s, this.y * s, this.z * s); }
+  /** × a number, or component-wise × a Vector3. */
+  mul(s) { return typeof s === 'number' ? new Vector3(this.x * s, this.y * s, this.z * s) : new Vector3(this.x * s.x, this.y * s.y, this.z * s.z); }
+  div(s) { return this.mul(1 / s); }
+  neg() { return new Vector3(-this.x, -this.y, -this.z); }
   dot(o) { return this.x * o.x + this.y * o.y + this.z * o.z; }
   cross(o) { return new Vector3(this.y * o.z - this.z * o.y, this.z * o.x - this.x * o.z, this.x * o.y - this.y * o.x); }
   get magnitude() { return Math.hypot(this.x, this.y, this.z); }
-  get normalized() { const m = this.magnitude; return m > 1e-6 ? this.mul(1 / m) : Vector3.zero; }
-  static lerp(a, b, t) { return new Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t); }
+  get sqrMagnitude() { return this.x * this.x + this.y * this.y + this.z * this.z; }
+  get normalized() { const m = this.magnitude; return m > 1e-5 ? this.mul(1 / m) : Vector3.zero; }
+  normalize() { const n = this.normalized; this.set(n.x, n.y, n.z); return this; }
+  equals(o) { return o != null && Math.abs(this.x - o.x) < 1e-5 && Math.abs(this.y - o.y) < 1e-5 && Math.abs(this.z - o.z) < 1e-5; }
+  toArray() { return [this.x, this.y, this.z]; }
+  static dot(a, b) { return a.dot(b); }
+  static cross(a, b) { return a.cross(b); }
+  static lerp(a, b, t) { return Vector3.lerpUnclamped(a, b, clampN(t, 0, 1)); }
+  static lerpUnclamped(a, b, t) { return new Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t); }
+  /** Spherical interpolation of directions (magnitudes interpolated linearly). */
+  static slerp(a, b, t) {
+    t = clampN(t, 0, 1);
+    const ma = a.magnitude, mb = b.magnitude;
+    if (ma < 1e-6 || mb < 1e-6) return Vector3.lerp(a, b, t);
+    const na = a.mul(1 / ma), nb = b.mul(1 / mb);
+    const ang = Math.acos(clampN(na.dot(nb), -1, 1));
+    if (ang < 1e-5) return Vector3.lerp(a, b, t);
+    const s = Math.sin(ang);
+    const dir = na.mul(Math.sin((1 - t) * ang) / s).add(nb.mul(Math.sin(t * ang) / s));
+    return dir.mul(ma + (mb - ma) * t);
+  }
   static distance(a, b) { return a.sub(b).magnitude; }
+  static angle(a, b) { const d = a.magnitude * b.magnitude; return d < 1e-10 ? 0 : Math.acos(clampN(a.dot(b) / d, -1, 1)) * 180 / Math.PI; }
+  static signedAngle(a, b, axis) { const s = axis.dot(a.cross(b)); return Vector3.angle(a, b) * (s < 0 ? -1 : 1); }
+  static moveTowards(a, b, maxDelta) { const d = b.sub(a); const m = d.magnitude; return m <= maxDelta || m < 1e-10 ? b.clone() : a.add(d.mul(maxDelta / m)); }
+  static rotateTowards(current, target, maxRadians, maxMagnitudeDelta) {
+    const ang = Vector3.angle(current, target) * Math.PI / 180;
+    const t = ang < 1e-6 ? 1 : Math.min(1, maxRadians / ang);
+    const dir = Vector3.slerp(current.normalized, target.normalized, t).normalized;
+    return dir.mul(Mathf.moveTowards(current.magnitude, target.magnitude, maxMagnitudeDelta));
+  }
+  static clampMagnitude(v, max) { return v.sqrMagnitude > max * max ? v.normalized.mul(max) : v.clone(); }
+  static project(v, onNormal) { const d = onNormal.sqrMagnitude; return d < 1e-12 ? Vector3.zero : onNormal.mul(v.dot(onNormal) / d); }
+  static projectOnPlane(v, planeNormal) { return v.sub(Vector3.project(v, planeNormal)); }
+  static reflect(dir, normal) { return dir.sub(normal.mul(2 * dir.dot(normal))); }
+  static scale(a, b) { return new Vector3(a.x * b.x, a.y * b.y, a.z * b.z); }
+  static min(a, b) { return new Vector3(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.min(a.z, b.z)); }
+  static max(a, b) { return new Vector3(Math.max(a.x, b.x), Math.max(a.y, b.y), Math.max(a.z, b.z)); }
+  static normalize(v) { return v.normalized; }
+  /** Unity's SmoothDamp: `velocity` is a Vector3 kept by the caller (updated in place). */
+  static smoothDamp(current, target, velocity, smoothTime, maxSpeed = Infinity, deltaTime = Time.deltaTime) {
+    const out = ['x', 'y', 'z'].map((k) => { const r = { value: velocity[k] }; const v = Mathf.smoothDamp(current[k], target[k], r, smoothTime, maxSpeed, deltaTime); velocity[k] = r.value; return v; });
+    return new Vector3(out[0], out[1], out[2]);
+  }
   toString() { return `(${this.x.toFixed(2)}, ${this.y.toFixed(2)}, ${this.z.toFixed(2)})`; }
+}
+
+export class Vector4 {
+  constructor(x = 0, y = 0, z = 0, w = 0) { this.x = x; this.y = y; this.z = z; this.w = w; }
+  static get zero() { return new Vector4(); }
+  static get one() { return new Vector4(1, 1, 1, 1); }
+  add(o) { return new Vector4(this.x + o.x, this.y + o.y, this.z + o.z, this.w + o.w); }
+  sub(o) { return new Vector4(this.x - o.x, this.y - o.y, this.z - o.z, this.w - o.w); }
+  mul(s) { return typeof s === 'number' ? new Vector4(this.x * s, this.y * s, this.z * s, this.w * s) : new Vector4(this.x * s.x, this.y * s.y, this.z * s.z, this.w * s.w); }
+  dot(o) { return this.x * o.x + this.y * o.y + this.z * o.z + this.w * o.w; }
+  get magnitude() { return Math.sqrt(this.dot(this)); }
+  get normalized() { const m = this.magnitude; return m > 1e-5 ? this.mul(1 / m) : Vector4.zero; }
+  static lerp(a, b, t) { t = clampN(t, 0, 1); return a.add(b.sub(a).mul(t)); }
+  toArray() { return [this.x, this.y, this.z, this.w]; }
+  toString() { return `(${this.x.toFixed(2)}, ${this.y.toFixed(2)}, ${this.z.toFixed(2)}, ${this.w.toFixed(2)})`; }
 }
 
 export class Quaternion {
   constructor(x = 0, y = 0, z = 0, w = 1) { this.x = x; this.y = y; this.z = z; this.w = w; }
   static get identity() { return new Quaternion(); }
+  set(x, y, z, w) { this.x = x; this.y = y; this.z = z; this.w = w; return this; }
+  clone() { return new Quaternion(this.x, this.y, this.z, this.w); }
   /** Degrees, Unity's order (Z, X, then Y). */
-  static euler(x, y, z) { const q = N.eulerToQuat(x, y, z); return new Quaternion(q[0], q[1], q[2], q[3]); }
+  static euler(x, y, z) { if (typeof x === 'object') ({ x, y, z } = x); const q = N.eulerToQuat(x, y, z); return new Quaternion(q[0], q[1], q[2], q[3]); }
   get eulerAngles() { const e = N.quatToEuler(this.x, this.y, this.z, this.w); return new Vector3(e[0], e[1], e[2]); }
+  set eulerAngles(v) { const q = Quaternion.euler(v.x, v.y, v.z); this.set(q.x, q.y, q.z, q.w); }
+  /** `q * q2` (rotate by q2, then q), or `q * v` (the vector rotated). */
+  mul(o) {
+    if (o instanceof Quaternion) {
+      const { x, y, z, w } = this;
+      return new Quaternion(w * o.x + x * o.w + y * o.z - z * o.y, w * o.y - x * o.z + y * o.w + z * o.x, w * o.z + x * o.y - y * o.x + z * o.w, w * o.w - x * o.x - y * o.y - z * o.z);
+    }
+    // v' = v + 2w(u×v) + 2u×(u×v)
+    const u = new Vector3(this.x, this.y, this.z);
+    const c1 = u.cross(o);
+    return o.add(c1.mul(2 * this.w)).add(u.cross(c1).mul(2));
+  }
+  dot(o) { return this.x * o.x + this.y * o.y + this.z * o.z + this.w * o.w; }
+  get normalized() { const m = Math.sqrt(this.dot(this)); return m < 1e-10 ? Quaternion.identity : new Quaternion(this.x / m, this.y / m, this.z / m, this.w / m); }
+  normalize() { const n = this.normalized; return this.set(n.x, n.y, n.z, n.w); }
+  equals(o) { return o != null && Math.abs(this.dot(o)) > 1 - 1e-6; }
+  toArray() { return [this.x, this.y, this.z, this.w]; }
+  static dot(a, b) { return a.dot(b); }
+  static inverse(q) { const d = q.dot(q) || 1; return new Quaternion(-q.x / d, -q.y / d, -q.z / d, q.w / d); }
+  static angleAxis(degrees, axis) { const n = axis.normalized; const h = degrees * Math.PI / 360; const s = Math.sin(h); return new Quaternion(n.x * s, n.y * s, n.z * s, Math.cos(h)); }
+  /** Degrees between two rotations. */
+  static angle(a, b) { const d = Math.min(Math.abs(a.dot(b)), 1); return d > 1 - 1e-6 ? 0 : Math.acos(d) * 2 * 180 / Math.PI; }
+  static slerp(a, b, t) { return Quaternion.slerpUnclamped(a, b, clampN(t, 0, 1)); }
+  static slerpUnclamped(a, b, t) {
+    let d = a.dot(b);
+    let bx = b.x, by = b.y, bz = b.z, bw = b.w;
+    if (d < 0) { d = -d; bx = -bx; by = -by; bz = -bz; bw = -bw; }
+    if (d > 0.9995) return Quaternion.lerpUnclamped(a, new Quaternion(bx, by, bz, bw), t);
+    const th = Math.acos(d), s = Math.sin(th);
+    const ka = Math.sin((1 - t) * th) / s, kb = Math.sin(t * th) / s;
+    return new Quaternion(a.x * ka + bx * kb, a.y * ka + by * kb, a.z * ka + bz * kb, a.w * ka + bw * kb);
+  }
+  static lerp(a, b, t) { return Quaternion.lerpUnclamped(a, b, clampN(t, 0, 1)); }
+  static lerpUnclamped(a, b, t) {
+    const s = a.dot(b) < 0 ? -1 : 1;
+    return new Quaternion(a.x + (b.x * s - a.x) * t, a.y + (b.y * s - a.y) * t, a.z + (b.z * s - a.z) * t, a.w + (b.w * s - a.w) * t).normalized;
+  }
+  static rotateTowards(from, to, maxDegrees) { const ang = Quaternion.angle(from, to); return ang < 1e-5 ? to.clone() : Quaternion.slerpUnclamped(from, to, Math.min(1, maxDegrees / ang)); }
+  /** The rotation turning direction `a` onto `b`. */
+  static fromToRotation(a, b) {
+    const na = a.normalized, nb = b.normalized;
+    const d = na.dot(nb);
+    if (d > 1 - 1e-6) return Quaternion.identity;
+    if (d < -1 + 1e-6) {
+      let axis = Vector3.right.cross(na);
+      if (axis.sqrMagnitude < 1e-6) axis = Vector3.up.cross(na);
+      return Quaternion.angleAxis(180, axis);
+    }
+    const c = na.cross(nb);
+    return new Quaternion(c.x, c.y, c.z, 1 + d).normalized;
+  }
+  /** Looking along `forward` (the object's −Z goes there), `up` kept as close as possible. */
+  static lookRotation(forward, up = Vector3.up) {
+    const z = forward.normalized.neg();
+    if (z.sqrMagnitude < 1e-10) return Quaternion.identity;
+    let x = up.cross(z);
+    if (x.sqrMagnitude < 1e-10) x = (Math.abs(z.y) < 0.99 ? Vector3.up : Vector3.right).cross(z);
+    x = x.normalized;
+    const y = z.cross(x);
+    // rotation matrix columns x, y, z → quaternion
+    const m00 = x.x, m01 = y.x, m02 = z.x, m10 = x.y, m11 = y.y, m12 = z.y, m20 = x.z, m21 = y.z, m22 = z.z;
+    const tr = m00 + m11 + m22;
+    let q;
+    if (tr > 0) { const s = Math.sqrt(tr + 1) * 2; q = new Quaternion((m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, 0.25 * s); }
+    else if (m00 > m11 && m00 > m22) { const s = Math.sqrt(1 + m00 - m11 - m22) * 2; q = new Quaternion(0.25 * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s); }
+    else if (m11 > m22) { const s = Math.sqrt(1 + m11 - m00 - m22) * 2; q = new Quaternion((m01 + m10) / s, 0.25 * s, (m12 + m21) / s, (m02 - m20) / s); }
+    else { const s = Math.sqrt(1 + m22 - m00 - m11) * 2; q = new Quaternion((m02 + m20) / s, (m12 + m21) / s, 0.25 * s, (m10 - m01) / s); }
+    return q.normalized;
+  }
+  toString() { return `(${this.x.toFixed(3)}, ${this.y.toFixed(3)}, ${this.z.toFixed(3)}, ${this.w.toFixed(3)})`; }
 }
-
 const v3 = (a) => new Vector3(a[0], a[1], a[2]);
 /** Engine call results: {"$go": handle} → GameObject (deep). */
 function fromNative(v) {
@@ -66,22 +227,60 @@ function fromNative(v) {
 }
 const handle = (go) => (go == null ? -1 : typeof go === 'number' ? go : go._h);
 
+/** Unity's Space: Transform.translate / rotate relative to the object's axes or the world's. */
+export const Space = Object.freeze({ World: 'world', Self: 'self' });
+
 export class Transform {
   constructor(h) { this._h = h; }
   get gameObject() { return new GameObject(this._h); }
-  get position() { return v3(N.getPos(this._h)); }
-  set position(v) { N.setPos(this._h, v.x, v.y, v.z); }
-  get localPosition() { return this.position; }
-  set localPosition(v) { this.position = v; }
-  get worldPosition() { return v3(N.worldPos(this._h)); }
-  get eulerAngles() { return v3(N.getEuler(this._h)); }
-  set eulerAngles(v) { N.setEuler(this._h, v.x, v.y, v.z); }
-  get rotation() { const q = N.getRot(this._h); return new Quaternion(q[0], q[1], q[2], q[3]); }
-  set rotation(q) { N.setRot(this._h, q.x, q.y, q.z, q.w); }
+  get name() { return N.name(this._h); }
+  _world() { return N.call('Transform.world', this._h, []); }
+  /** World position (Unity's position); `localPosition` is relative to the parent. */
+  get position() { return v3(this._world().position); }
+  set position(v) { N.call('Transform.setWorldPosition', this._h, [v.x, v.y, v.z]); }
+  get localPosition() { return v3(N.getPos(this._h)); }
+  set localPosition(v) { N.setPos(this._h, v.x, v.y, v.z); }
+  get worldPosition() { return this.position; }
+  /** World rotation (Unity's rotation); `localRotation` is relative to the parent. */
+  get rotation() { const q = this._world().rotation; return new Quaternion(q[0], q[1], q[2], q[3]); }
+  set rotation(q) { N.call('Transform.setWorldRotation', this._h, [q.x, q.y, q.z, q.w]); }
+  get localRotation() { const q = N.getRot(this._h); return new Quaternion(q[0], q[1], q[2], q[3]); }
+  set localRotation(q) { N.setRot(this._h, q.x, q.y, q.z, q.w); }
+  get eulerAngles() { return this.rotation.eulerAngles; }
+  set eulerAngles(v) { this.rotation = Quaternion.euler(v.x, v.y, v.z); }
+  get localEulerAngles() { return v3(N.getEuler(this._h)); }
+  set localEulerAngles(v) { N.setEuler(this._h, v.x, v.y, v.z); }
   get localScale() { return v3(N.getScale(this._h)); }
   set localScale(v) { N.setScale(this._h, v.x, v.y, v.z); }
+  get lossyScale() { return v3(this._world().lossyScale); }
+  /** The object's −Z in world space (where it looks). */
+  get forward() { return this.rotation.mul(Vector3.forward); }
+  set forward(v) { this.rotation = Quaternion.lookRotation(v, this.up); }
+  get right() { return this.rotation.mul(Vector3.right); }
+  get up() { return this.rotation.mul(Vector3.up); }
+  setPositionAndRotation(p, q) { this.position = p; this.rotation = q; }
   get parent() { const p = N.parent(this._h); return p < 0 ? null : new Transform(p); }
+  set parent(p) { this.setParent(p); }
   setParent(p) { N.setParent(this._h, p == null ? -1 : p._h); }
+  get root() { return new Transform(fromNative(N.call('Transform.root', this._h, []))._h); }
+  get childCount() { return (N.call('Transform.children', this._h, []) || []).length; }
+  /** The i-th child (in creation order). */
+  getChild(i) { const c = fromNative(N.call('Transform.children', this._h, []))[i]; return c ? c.transform : null; }
+  /** Unity's Find: a child by name or path ("Arm/Hand"), or null. */
+  find(path) { const c = fromNative(N.call('Transform.find', this._h, [path])); return c ? c.transform : null; }
+  isChildOf(t) { for (let p = this; p; p = p.parent) if (p._h === t._h) return true; return false; }
+  /** Local point → world point. */
+  transformPoint(v) { return this.rotation.mul(Vector3.scale(v, this.lossyScale)).add(this.position); }
+  inverseTransformPoint(v) { const s = this.lossyScale; const l = Quaternion.inverse(this.rotation).mul(v.sub(this.position)); return new Vector3(l.x / (s.x || 1), l.y / (s.y || 1), l.z / (s.z || 1)); }
+  transformDirection(v) { return this.rotation.mul(v); }
+  inverseTransformDirection(v) { return Quaternion.inverse(this.rotation).mul(v); }
+  transformVector(v) { return this.rotation.mul(Vector3.scale(v, this.lossyScale)); }
+  /** Rotates around a world point and axis by `angle` degrees. */
+  rotateAround(point, axis, angle) {
+    const q = Quaternion.angleAxis(angle, axis);
+    this.position = point.add(q.mul(this.position.sub(point)));
+    this.rotation = q.mul(this.rotation);
+  }
   /** Moves by (x, y, z) or a Vector3. */
   translate(x, y, z) { if (typeof x === 'object') ({ x, y, z } = x); const p = N.getPos(this._h); N.setPos(this._h, p[0] + x, p[1] + y, p[2] + z); }
   /** Rotates by Euler degrees in local space (Unity's Rotate). */
@@ -114,9 +313,24 @@ export class GameObject {
   static find(name) { const h = N.find(name); return h < 0 ? null : new GameObject(h); }
   /** A new empty GameObject. */
   static create(name = 'GameObject') { return new GameObject(N.spawn(name)); }
-  /** A prefab / model instance: GameObject.instantiate("prefabs/Coin.prefab.json"). */
-  static instantiate(key, parent) { return new GameObject(N.instantiate(key, handle(parent))); }
-  static destroy(go) { N.destroy(handle(go)); }
+  /** A prefab / model instance: GameObject.instantiate("prefabs/Coin.prefab.json"),
+   *  (key, parent), or (key, position, rotation[, parent]) like Unity's Instantiate. */
+  static instantiate(key, a, b, c) {
+    const pos = a instanceof Vector3 ? a : null;
+    const parent = pos ? c : a;
+    const go = new GameObject(N.instantiate(key, handle(parent)));
+    if (pos) go.transform.position = pos;
+    if (b instanceof Quaternion) go.transform.rotation = b;
+    return go;
+  }
+  /** Destroys now, or after `delay` seconds (Unity's Destroy(obj, t)). */
+  static destroy(go, delay = 0) {
+    const h = handle(go);
+    if (delay > 0) startCoroutine(h, (function* () { yield new WaitForSeconds(delay); N.destroy(h); })());
+    else N.destroy(h);
+  }
+  get renderer() { return new Renderer(this._h); }
+  get camera() { return N.getComponent(this._h, 'Camera') ? new Camera(this._h) : null; }
   get name() { return N.name(this._h); }
   set name(n) { N.setName(this._h, n); }
   get transform() { return new Transform(this._h); }
@@ -159,6 +373,15 @@ export class Behaviour {
   startCoroutine(routine) { return startCoroutine(this._h, typeof routine === 'function' ? routine.call(this) : routine); }
   stopCoroutine(co) { if (co) co.stopped = true; }
   stopAllCoroutines() { for (const c of coroutines) if (c.owner === this._h) c.stopped = true; }
+  /** Unity's Invoke: calls the method `name` after `delay` seconds. */
+  invoke(name, delay = 0) { this._invokes ??= new Map(); const self = this; const co = this.startCoroutine(function* () { yield new WaitForSeconds(delay); self._invokes.delete(name); self[name]?.(); }); this._invokes.set(name, [...(this._invokes.get(name) ?? []), co]); }
+  /** Unity's InvokeRepeating: after `delay`, then every `rate` seconds. */
+  invokeRepeating(name, delay, rate) { this._invokes ??= new Map(); const self = this; const co = this.startCoroutine(function* () { yield new WaitForSeconds(delay); for (;;) { self[name]?.(); yield new WaitForSeconds(rate); } }); this._invokes.set(name, [...(this._invokes.get(name) ?? []), co]); }
+  /** Cancels the pending invokes of `name` (all of them without a name). */
+  cancelInvoke(name) { if (!this._invokes) return; for (const [k, list] of this._invokes) if (name == null || k === name) { list.forEach((c) => (c.stopped = true)); this._invokes.delete(k); } }
+  isInvoking(name) { return !!this._invokes && (name == null ? this._invokes.size > 0 : this._invokes.has(name)); }
+  /** Unity's GetComponent<Renderer>() for meshes: material access. */
+  get renderer() { return new Renderer(this._h); }
 }
 export { Behaviour as MonoBehaviour };
 
@@ -168,6 +391,7 @@ export const Time = {
   get fixedDeltaTime() { return N.fixedDt(); },
   get unscaledDeltaTime() { return N.unscaledDt(); },
   get unscaledTime() { return N.unscaledTime(); },
+  get realtimeSinceStartup() { return N.unscaledTime(); },
   get frameCount() { return N.frameCount(); },
   /** 0 = paused, 0.5 = slow motion (applies from the next frame). */
   get timeScale() { return N.timeScale(); },
@@ -367,7 +591,11 @@ const a2 = (v) => (Array.isArray(v) ? v : [v.x, v.y]);
 /** 3D physics. layerMask: bits of layers (-1 = all), like Unity. */
 export const Physics = {
   /** { gameObject, point, normal, distance } or null. */
-  raycast(origin, direction, maxDistance = 1e6, layerMask = -1) { return hit3(call('Physics.raycast', null, [arr(origin), arr(direction), maxDistance, layerMask])); },
+  raycast(origin, direction, maxDistance = 1e6, layerMask = -1) {
+    // raycast(ray[, maxDistance, layerMask])
+    if (origin instanceof Ray) return Physics.raycast(origin.origin, origin.direction, direction ?? 1e6, maxDistance === 1e6 ? -1 : maxDistance);
+    return hit3(call('Physics.raycast', null, [arr(origin), arr(direction), maxDistance, layerMask]));
+  },
   overlapSphere(center, radius, layerMask = -1) { return call('Physics.overlapSphere', null, [arr(center), radius, layerMask]); },
   /** This frame's collisions of an object: [{ other, kind: "enter" | "exit" | "triggerEnter" | "triggerExit" }]. */
   collisions(go) { return call('Physics.collisions', go, []); },
@@ -648,7 +876,13 @@ export const Debug = {
 };
 globalThis.console = { log: Debug.log, info: Debug.log, warn: Debug.warn, error: Debug.error, debug: Debug.log };
 
-export const Application = { quit() { N.quit(); } };
+export const Application = {
+  quit() { N.quit(); },
+  /** "3DS", "Windows", "Linux", "macOS", "Web" (the editor reports "Web"). */
+  get platform() { return N.call('Application.info', -1, []).platform; },
+  get isEditor() { return N.call('Application.info', -1, []).editor; },
+  get isPlaying() { return true; },
+};
 
 /** Unity's PlayerPrefs (crates/goat-save): written automatically, `save()` forces it. */
 export const PlayerPrefs = {
@@ -672,15 +906,374 @@ export const SaveData = {
   exists(slot) { return N.call('Save.exists', -1, [slot]); },
   slots() { return N.call('Save.slots', -1, []); },
 };
+// Ken Perlin's improved noise (2D), for Mathf.perlinNoise
+const PERM = (() => {
+  const p = [151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30, 69, 142, 8, 99, 37, 240, 21, 10, 23, 190, 6, 148, 247, 120, 234, 75, 0, 26, 197, 62, 94, 252, 219, 203, 117, 35, 11, 32, 57, 177, 33, 88, 237, 149, 56, 87, 174, 20, 125, 136, 171, 168, 68, 175, 74, 165, 71, 134, 139, 48, 27, 166, 77, 146, 158, 231, 83, 111, 229, 122, 60, 211, 133, 230, 220, 105, 92, 41, 55, 46, 245, 40, 244, 102, 143, 54, 65, 25, 63, 161, 1, 216, 80, 73, 209, 76, 132, 187, 208, 89, 18, 169, 200, 196, 135, 130, 116, 188, 159, 86, 164, 100, 109, 198, 173, 186, 3, 64, 52, 217, 226, 250, 124, 123, 5, 202, 38, 147, 118, 126, 255, 82, 85, 212, 207, 206, 59, 227, 47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170, 213, 119, 248, 152, 2, 44, 154, 163, 70, 221, 153, 101, 155, 167, 43, 172, 9, 129, 22, 39, 253, 19, 98, 108, 110, 79, 113, 224, 232, 178, 185, 112, 104, 218, 246, 97, 228, 251, 34, 242, 193, 238, 210, 144, 12, 191, 179, 162, 241, 81, 51, 145, 235, 249, 14, 239, 107, 49, 192, 214, 31, 181, 199, 106, 157, 184, 84, 204, 176, 115, 121, 50, 45, 127, 4, 150, 254, 138, 236, 205, 93, 222, 114, 67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61, 156, 180];
+  return p.concat(p);
+})();
+const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+const grad2 = (h, x, y) => ((h & 1) ? -x : x) + ((h & 2) ? -y : y);
+
 export const Mathf = {
-  PI: Math.PI, Deg2Rad: Math.PI / 180, Rad2Deg: 180 / Math.PI,
+  PI: Math.PI, Deg2Rad: Math.PI / 180, Rad2Deg: 180 / Math.PI, Infinity: Infinity, NegativeInfinity: -Infinity, Epsilon: 1.401298e-45,
   clamp: (v, a, b) => Math.min(b, Math.max(a, v)),
   clamp01: (v) => Math.min(1, Math.max(0, v)),
   lerp: (a, b, t) => a + (b - a) * Math.min(1, Math.max(0, t)),
+  lerpUnclamped: (a, b, t) => a + (b - a) * t,
+  inverseLerp: (a, b, v) => (a === b ? 0 : Math.min(1, Math.max(0, (v - a) / (b - a)))),
   moveTowards: (a, b, d) => (Math.abs(b - a) <= d ? b : a + Math.sign(b - a) * d),
-  pingPong: (t, l) => { const m = t % (2 * l); return m < l ? m : 2 * l - m; },
-  sin: Math.sin, cos: Math.cos, abs: Math.abs, sqrt: Math.sqrt, min: Math.min, max: Math.max, sign: Math.sign,
+  pingPong: (t, l) => { const m = ((t % (2 * l)) + 2 * l) % (2 * l); return m < l ? m : 2 * l - m; },
+  repeat: (t, l) => t - Math.floor(t / l) * l,
+  /** Shortest difference between two angles (degrees, −180..180). */
+  deltaAngle: (a, b) => { let d = Mathf.repeat(b - a, 360); if (d > 180) d -= 360; return d; },
+  lerpAngle: (a, b, t) => a + Mathf.deltaAngle(a, b) * Math.min(1, Math.max(0, t)),
+  moveTowardsAngle: (a, b, d) => { const delta = Mathf.deltaAngle(a, b); return -d < delta && delta < d ? b : Mathf.moveTowards(a, a + delta, d); },
+  smoothStep: (from, to, t) => { t = Math.min(1, Math.max(0, t)); t = -2 * t * t * t + 3 * t * t; return to * t + from * (1 - t); },
+  /** Unity's SmoothDamp: `velocity` is `{ value }`, updated in place. */
+  smoothDamp(current, target, velocity, smoothTime, maxSpeed = Infinity, deltaTime = Time.deltaTime) {
+    smoothTime = Math.max(0.0001, smoothTime);
+    const omega = 2 / smoothTime, x = omega * deltaTime;
+    const exp = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+    const maxChange = maxSpeed * smoothTime;
+    let change = Math.min(maxChange, Math.max(-maxChange, current - target));
+    const origTarget = target;
+    target = current - change;
+    const temp = (velocity.value + omega * change) * deltaTime;
+    velocity.value = (velocity.value - omega * temp) * exp;
+    let out = target + (change + temp) * exp;
+    if (origTarget - current > 0 === out > origTarget) { out = origTarget; velocity.value = (out - origTarget) / deltaTime; }
+    return out;
+  },
+  approximately: (a, b) => Math.abs(b - a) < Math.max(1e-6 * Math.max(Math.abs(a), Math.abs(b)), 1.1754944e-38 * 8),
+  roundToInt: (v) => Math.round(v), floorToInt: (v) => Math.floor(v), ceilToInt: (v) => Math.ceil(v),
+  isPowerOfTwo: (v) => v > 0 && (v & (v - 1)) === 0,
+  nextPowerOfTwo: (v) => { let p = 1; while (p < v) p <<= 1; return p; },
+  closestPowerOfTwo: (v) => { const n = Mathf.nextPowerOfTwo(v); return n - v > v - n / 2 ? n / 2 : n; },
+  /** 2D Perlin noise in 0..1 (Unity's PerlinNoise). */
+  perlinNoise(x, y) {
+    const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255;
+    x -= Math.floor(x); y -= Math.floor(y);
+    const u = fade(x), v = fade(y);
+    const a = PERM[xi] + yi, b = PERM[xi + 1] + yi;
+    const n = Mathf.lerpUnclamped(Mathf.lerpUnclamped(grad2(PERM[a], x, y), grad2(PERM[b], x - 1, y), u), Mathf.lerpUnclamped(grad2(PERM[a + 1], x, y - 1), grad2(PERM[b + 1], x - 1, y - 1), u), v);
+    return Math.min(1, Math.max(0, (n + 1) / 2));
+  },
+  sin: Math.sin, cos: Math.cos, tan: Math.tan, asin: Math.asin, acos: Math.acos, atan: Math.atan, atan2: Math.atan2,
+  abs: Math.abs, sqrt: Math.sqrt, pow: Math.pow, exp: Math.exp, log: (v, b) => (b ? Math.log(v) / Math.log(b) : Math.log(v)), log10: Math.log10,
+  min: Math.min, max: Math.max, sign: (v) => (v >= 0 ? 1 : -1), floor: Math.floor, ceil: Math.ceil, round: Math.round,
 };
+
+// ------------------------------------------------------------------ Random
+
+let rngState = (Date.now() ^ 0x9e3779b9) >>> 0;
+const nextRandom = () => {
+  // mulberry32
+  rngState = (rngState + 0x6d2b79f5) >>> 0;
+  let t = rngState;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+/** Unity's Random (seeded with initState). */
+export const Random = {
+  initState(seed) { rngState = seed >>> 0; },
+  get state() { return rngState; },
+  set state(s) { rngState = s >>> 0; },
+  /** 0..1 */
+  get value() { return nextRandom(); },
+  /** Integers: min..max−1 (max exclusive, like Unity); otherwise min..max. */
+  range(min, max) { return Number.isInteger(min) && Number.isInteger(max) ? min + Math.floor(nextRandom() * (max - min)) : min + nextRandom() * (max - min); },
+  /** min..max as floats (C#'s Random.Range(float, float)). */
+  rangeFloat(min, max) { return min + nextRandom() * (max - min); },
+  get insideUnitCircle() { const a = nextRandom() * Math.PI * 2, r = Math.sqrt(nextRandom()); return new Vector2(Math.cos(a) * r, Math.sin(a) * r); },
+  get onUnitSphere() { const z = nextRandom() * 2 - 1, a = nextRandom() * Math.PI * 2, r = Math.sqrt(1 - z * z); return new Vector3(Math.cos(a) * r, Math.sin(a) * r, z); },
+  get insideUnitSphere() { return Random.onUnitSphere.mul(Math.cbrt(nextRandom())); },
+  get rotation() { const u = nextRandom(), v = nextRandom() * Math.PI * 2, w = nextRandom() * Math.PI * 2; const a = Math.sqrt(1 - u), b = Math.sqrt(u); return new Quaternion(a * Math.sin(v), a * Math.cos(v), b * Math.sin(w), b * Math.cos(w)); },
+  colorHSV(hMin = 0, hMax = 1, sMin = 0, sMax = 1, vMin = 0, vMax = 1) { return Color.HSVToRGB(Random.range(hMin, hMax), Random.range(sMin, sMax), Random.range(vMin, vMax)); },
+};
+
+// ------------------------------------------------------------------ Color, geometry, curves
+
+/** A color (0..1 floats, sRGB-authored like every engine color). */
+export class Color {
+  constructor(r = 0, g = 0, b = 0, a = 1) { this.r = r; this.g = g; this.b = b; this.a = a; }
+  static get red() { return new Color(1, 0, 0); }
+  static get green() { return new Color(0, 1, 0); }
+  static get blue() { return new Color(0, 0, 1); }
+  static get white() { return new Color(1, 1, 1); }
+  static get black() { return new Color(0, 0, 0); }
+  static get yellow() { return new Color(1, 0.92, 0.016); }
+  static get cyan() { return new Color(0, 1, 1); }
+  static get magenta() { return new Color(1, 0, 1); }
+  static get gray() { return new Color(0.5, 0.5, 0.5); }
+  static get grey() { return Color.gray; }
+  static get clear() { return new Color(0, 0, 0, 0); }
+  add(o) { return new Color(this.r + o.r, this.g + o.g, this.b + o.b, this.a + o.a); }
+  sub(o) { return new Color(this.r - o.r, this.g - o.g, this.b - o.b, this.a - o.a); }
+  /** × a number or component-wise × a Color. */
+  mul(s) { return typeof s === 'number' ? new Color(this.r * s, this.g * s, this.b * s, this.a * s) : new Color(this.r * s.r, this.g * s.g, this.b * s.b, this.a * s.a); }
+  get grayscale() { return 0.299 * this.r + 0.587 * this.g + 0.114 * this.b; }
+  get linear() { const f = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)); return new Color(f(this.r), f(this.g), f(this.b), this.a); }
+  get gamma() { const f = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055); return new Color(f(this.r), f(this.g), f(this.b), this.a); }
+  get maxColorComponent() { return Math.max(this.r, this.g, this.b); }
+  equals(o) { return o != null && ['r', 'g', 'b', 'a'].every((k) => Math.abs(this[k] - o[k]) < 1e-5); }
+  toArray() { return [this.r, this.g, this.b, this.a]; }
+  /** "#rrggbb" or "#rrggbbaa" (with alpha below 1). */
+  toHex() { const h = (v) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0'); return '#' + h(this.r) + h(this.g) + h(this.b) + (this.a < 1 ? h(this.a) : ''); }
+  static fromHex(s) { const h = String(s).replace('#', ''); const n = (i) => parseInt(h.slice(i, i + 2), 16) / 255; return h.length >= 6 ? new Color(n(0), n(2), n(4), h.length >= 8 ? n(6) : 1) : null; }
+  static lerp(a, b, t) { t = clampN(t, 0, 1); return Color.lerpUnclamped(a, b, t); }
+  static lerpUnclamped(a, b, t) { return new Color(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t); }
+  static HSVToRGB(h, s, v) {
+    h = Mathf.repeat(h, 1) * 6;
+    const i = Math.floor(h), f = h - i, p = v * (1 - s), q = v * (1 - s * f), t = v * (1 - s * (1 - f));
+    const [r, g, b] = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i % 6];
+    return new Color(r, g, b, 1);
+  }
+  /** { h, s, v } (0..1). */
+  static RGBToHSV(c) {
+    const max = Math.max(c.r, c.g, c.b), min = Math.min(c.r, c.g, c.b), d = max - min;
+    let h = 0;
+    if (d > 1e-6) h = max === c.r ? ((c.g - c.b) / d + 6) % 6 : max === c.g ? (c.b - c.r) / d + 2 : (c.r - c.g) / d + 4;
+    return { h: h / 6, s: max > 0 ? d / max : 0, v: max };
+  }
+  toString() { return `RGBA(${this.r.toFixed(3)}, ${this.g.toFixed(3)}, ${this.b.toFixed(3)}, ${this.a.toFixed(3)})`; }
+}
+
+const colorArray = (c) => (c instanceof Color ? c.toArray() : c instanceof Vector4 || c instanceof Quaternion ? [c.x, c.y, c.z, c.w] : c instanceof Vector3 ? [c.x, c.y, c.z, 0] : c instanceof Vector2 ? [c.x, c.y, 0, 0] : c);
+
+/** A 2D rectangle (x, y = its minimum corner). */
+export class Rect {
+  constructor(x = 0, y = 0, width = 0, height = 0) { this.x = x; this.y = y; this.width = width; this.height = height; }
+  static minMaxRect(xmin, ymin, xmax, ymax) { return new Rect(xmin, ymin, xmax - xmin, ymax - ymin); }
+  get xMin() { return this.x; }
+  get yMin() { return this.y; }
+  get xMax() { return this.x + this.width; }
+  get yMax() { return this.y + this.height; }
+  get center() { return new Vector2(this.x + this.width / 2, this.y + this.height / 2); }
+  get size() { return new Vector2(this.width, this.height); }
+  get min() { return new Vector2(this.x, this.y); }
+  get max() { return new Vector2(this.xMax, this.yMax); }
+  contains(p) { return p.x >= this.x && p.x < this.xMax && p.y >= this.y && p.y < this.yMax; }
+  overlaps(o) { return o.xMax > this.x && o.x < this.xMax && o.yMax > this.y && o.y < this.yMax; }
+  toString() { return `(x:${this.x}, y:${this.y}, width:${this.width}, height:${this.height})`; }
+}
+
+/** An axis-aligned box. */
+export class Bounds {
+  constructor(center = Vector3.zero, size = Vector3.zero) { this.center = center.clone(); this.size = size.clone(); }
+  get extents() { return this.size.mul(0.5); }
+  get min() { return this.center.sub(this.extents); }
+  get max() { return this.center.add(this.extents); }
+  setMinMax(min, max) { this.center = min.add(max).mul(0.5); this.size = max.sub(min); }
+  contains(p) { const a = this.min, b = this.max; return p.x >= a.x && p.x <= b.x && p.y >= a.y && p.y <= b.y && p.z >= a.z && p.z <= b.z; }
+  encapsulate(p) { if (p instanceof Bounds) { this.encapsulate(p.min); this.encapsulate(p.max); return; } this.setMinMax(Vector3.min(this.min, p), Vector3.max(this.max, p)); }
+  expand(amount) { this.size = this.size.add(typeof amount === 'number' ? new Vector3(amount, amount, amount) : amount); }
+  intersects(o) { const a = this.min, b = this.max, c = o.min, d = o.max; return a.x <= d.x && b.x >= c.x && a.y <= d.y && b.y >= c.y && a.z <= d.z && b.z >= c.z; }
+  closestPoint(p) { return Vector3.max(this.min, Vector3.min(this.max, p)); }
+  /** The distance along the ray where it enters the box, or null. */
+  intersectRay(ray) {
+    let t0 = 0, t1 = Infinity;
+    for (const k of ['x', 'y', 'z']) {
+      const inv = 1 / ray.direction[k];
+      let a = (this.min[k] - ray.origin[k]) * inv, b = (this.max[k] - ray.origin[k]) * inv;
+      if (a > b) [a, b] = [b, a];
+      t0 = Math.max(t0, a); t1 = Math.min(t1, b);
+      if (t0 > t1) return null;
+    }
+    return t0;
+  }
+}
+
+export class Ray {
+  constructor(origin = Vector3.zero, direction = Vector3.forward) { this.origin = origin.clone(); this.direction = direction.normalized; }
+  getPoint(distance) { return this.origin.add(this.direction.mul(distance)); }
+  toString() { return `Origin: ${this.origin}, Dir: ${this.direction}`; }
+}
+
+/** A plane: normal · p + distance = 0. */
+export class Plane {
+  /** new Plane(normal, distance) or new Plane(normal, pointOnIt). */
+  constructor(normal = Vector3.up, d = 0) { this.normal = normal.normalized; this.distance = typeof d === 'number' ? d : -this.normal.dot(d); }
+  static fromPoints(a, b, c) { return new Plane(b.sub(a).cross(c.sub(a)), a); }
+  getDistanceToPoint(p) { return this.normal.dot(p) + this.distance; }
+  getSide(p) { return this.getDistanceToPoint(p) > 0; }
+  sameSide(a, b) { return this.getSide(a) === this.getSide(b); }
+  closestPointOnPlane(p) { return p.sub(this.normal.mul(this.getDistanceToPoint(p))); }
+  /** Distance along the ray to the plane, or null (parallel / behind). */
+  raycast(ray) { const d = this.normal.dot(ray.direction); if (Math.abs(d) < 1e-8) return null; const t = -(this.normal.dot(ray.origin) + this.distance) / d; return t >= 0 ? t : null; }
+  get flipped() { return new Plane(this.normal.neg(), -this.distance); }
+}
+
+/** A 4×4 matrix, column-major like the engine (m[col * 4 + row]); multiplies column vectors. */
+export class Matrix4x4 {
+  constructor(m) { this.m = m ? [...m] : [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]; }
+  static get identity() { return new Matrix4x4(); }
+  get(row, col) { return this.m[col * 4 + row]; }
+  set(row, col, v) { this.m[col * 4 + row] = v; }
+  /** Translation × rotation × scale. */
+  static TRS(pos, rot, scale) {
+    const { x, y, z, w } = rot;
+    const xx = x * x, yy = y * y, zz = z * z, xy = x * y, xz = x * z, yz = y * z, wx = w * x, wy = w * y, wz = w * z;
+    return new Matrix4x4([
+      (1 - 2 * (yy + zz)) * scale.x, 2 * (xy + wz) * scale.x, 2 * (xz - wy) * scale.x, 0,
+      2 * (xy - wz) * scale.y, (1 - 2 * (xx + zz)) * scale.y, 2 * (yz + wx) * scale.y, 0,
+      2 * (xz + wy) * scale.z, 2 * (yz - wx) * scale.z, (1 - 2 * (xx + yy)) * scale.z, 0,
+      pos.x, pos.y, pos.z, 1,
+    ]);
+  }
+  static translate(v) { return Matrix4x4.TRS(v, Quaternion.identity, Vector3.one); }
+  static rotate(q) { return Matrix4x4.TRS(Vector3.zero, q, Vector3.one); }
+  static scale(v) { return Matrix4x4.TRS(Vector3.zero, Quaternion.identity, v); }
+  mul(o) {
+    if (o instanceof Matrix4x4) {
+      const r = new Array(16).fill(0);
+      for (let c = 0; c < 4; c++) for (let rr = 0; rr < 4; rr++) for (let k = 0; k < 4; k++) r[c * 4 + rr] += this.m[k * 4 + rr] * o.m[c * 4 + k];
+      return new Matrix4x4(r);
+    }
+    return o instanceof Vector4 ? new Vector4(...[0, 1, 2, 3].map((r) => this.m[r] * o.x + this.m[4 + r] * o.y + this.m[8 + r] * o.z + this.m[12 + r] * o.w)) : this.multiplyPoint(o);
+  }
+  multiplyPoint3x4(p) { const m = this.m; return new Vector3(m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12], m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13], m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14]); }
+  multiplyPoint(p) { const m = this.m; const w = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15]; return this.multiplyPoint3x4(p).mul(1 / (w || 1)); }
+  multiplyVector(v) { const m = this.m; return new Vector3(m[0] * v.x + m[4] * v.y + m[8] * v.z, m[1] * v.x + m[5] * v.y + m[9] * v.z, m[2] * v.x + m[6] * v.y + m[10] * v.z); }
+  get transpose() { const r = []; for (let c = 0; c < 4; c++) for (let rr = 0; rr < 4; rr++) r[c * 4 + rr] = this.m[rr * 4 + c]; return new Matrix4x4(r); }
+  get inverse() {
+    const m = this.m, inv = new Array(16);
+    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+    const det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+    return new Matrix4x4(inv.map((v) => v / (det || 1)));
+  }
+}
+
+/** A key of an AnimationCurve (Unity's Keyframe): time, value and the slopes on both sides. */
+export class Keyframe {
+  constructor(time = 0, value = 0, inTangent = 0, outTangent = 0) { this.time = time; this.value = value; this.inTangent = inTangent; this.outTangent = outTangent; }
+}
+
+/** Unity's AnimationCurve: Hermite segments between keys; clamped outside them. */
+export class AnimationCurve {
+  constructor(...keys) { this.keys = keys.map((k) => (k instanceof Keyframe ? k : new Keyframe(k.time, k.value, k.inTangent ?? 0, k.outTangent ?? 0))).sort((a, b) => a.time - b.time); }
+  static linear(t0, v0, t1, v1) { const s = (v1 - v0) / (t1 - t0 || 1); return new AnimationCurve(new Keyframe(t0, v0, 0, s), new Keyframe(t1, v1, s, 0)); }
+  static easeInOut(t0, v0, t1, v1) { return new AnimationCurve(new Keyframe(t0, v0, 0, 0), new Keyframe(t1, v1, 0, 0)); }
+  static constant(t0, t1, v) { return new AnimationCurve(new Keyframe(t0, v), new Keyframe(t1, v)); }
+  get length() { return this.keys.length; }
+  addKey(time, value) { const k = time instanceof Keyframe ? time : new Keyframe(time, value); this.keys.push(k); this.keys.sort((a, b) => a.time - b.time); return this.keys.indexOf(k); }
+  evaluate(t) {
+    const k = this.keys;
+    if (!k.length) return 0;
+    if (t <= k[0].time) return k[0].value;
+    if (t >= k[k.length - 1].time) return k[k.length - 1].value;
+    let i = 0;
+    while (k[i + 1].time < t) i++;
+    const a = k[i], b = k[i + 1], dt = b.time - a.time;
+    const u = (t - a.time) / dt, u2 = u * u, u3 = u2 * u;
+    return (2 * u3 - 3 * u2 + 1) * a.value + (u3 - 2 * u2 + u) * a.outTangent * dt + (-2 * u3 + 3 * u2) * b.value + (u3 - u2) * b.inTangent * dt;
+  }
+}
+
+/** Unity's Gradient: color keys and alpha keys (linear blends). */
+export class Gradient {
+  constructor(colorKeys = [{ color: Color.white, time: 0 }, { color: Color.white, time: 1 }], alphaKeys = [{ alpha: 1, time: 0 }, { alpha: 1, time: 1 }]) { this.setKeys(colorKeys, alphaKeys); }
+  setKeys(colorKeys, alphaKeys) { this.colorKeys = [...colorKeys].sort((a, b) => a.time - b.time); this.alphaKeys = [...alphaKeys].sort((a, b) => a.time - b.time); }
+  evaluate(t) {
+    const find = (list, get) => {
+      if (t <= list[0].time) return get(list[0]);
+      for (let i = 0; i < list.length - 1; i++) if (t <= list[i + 1].time) { const u = (t - list[i].time) / (list[i + 1].time - list[i].time || 1); return [get(list[i]), get(list[i + 1]), u]; }
+      return get(list[list.length - 1]);
+    };
+    const c = find(this.colorKeys, (k) => k.color), a = find(this.alphaKeys, (k) => k.alpha);
+    const col = Array.isArray(c) ? Color.lerp(c[0], c[1], c[2]) : c;
+    const alpha = Array.isArray(a) ? a[0] + (a[1] - a[0]) * a[2] : a;
+    return new Color(col.r, col.g, col.b, alpha);
+  }
+}
+
+/** Pia's / Unity's event: listeners added and removed, invoked in order. */
+export class GoatEvent {
+  constructor() { this._l = []; }
+  addListener(fn) { this._l.push(fn); }
+  removeListener(fn) { this._l = this._l.filter((f) => f !== fn); }
+  removeAllListeners() { this._l = []; }
+  get listenerCount() { return this._l.length; }
+  invoke(...args) { for (const f of [...this._l]) f(...args); }
+}
+
+// ------------------------------------------------------------------ Screen, Camera, Renderer
+
+/** Unity's Screen: the main display in pixels (3DS top screen 400×240). */
+export const Screen = {
+  get width() { return N.call('Screen.info', -1, []).width; },
+  get height() { return N.call('Screen.info', -1, []).height; },
+  /** Every display ({ width, height, stereo }); the 3DS has two. */
+  get displays() { return N.call('Screen.info', -1, []).displays; },
+};
+
+/** Unity's Camera (the Camera component of an object): Camera.main, rays and screen points. */
+export class Camera {
+  constructor(go) { this._h = handle(go); }
+  static of(go) { return new Camera(go); }
+  /** The camera tagged MainCamera, else the first camera of the main display. */
+  static get main() { const g = fromNative(N.call('Camera.main', -1, [])); return g ? new Camera(g) : null; }
+  get gameObject() { return new GameObject(this._h); }
+  get transform() { return new Transform(this._h); }
+  _c() { return N.getComponent(this._h, 'Camera') ?? {}; }
+  _patch(f) { const c = this._c(); f(c); N.setComponent(this._h, 'Camera', c); }
+  get fieldOfView() { return this._c().projection?.perspective?.fov ?? 60; }
+  set fieldOfView(v) { this._patch((c) => { c.projection = { perspective: { ...(c.projection?.perspective ?? { near: 0.1, far: 100 }), fov: v } }; }); }
+  get orthographic() { return !!this._c().projection?.orthographic; }
+  get orthographicSize() { return (this._c().projection?.orthographic?.height ?? 10) / 2; }
+  set orthographicSize(v) { this._patch((c) => { c.projection = { orthographic: { ...(c.projection?.orthographic ?? { near: 0.1, far: 100 }), height: v * 2 } }; }); }
+  /** The ray through a pixel (x, y from the top-left of the camera's display). */
+  screenPointToRay(p) { const r = N.call('Camera.screenPointToRay', this._h, [p.x, p.y]); return new Ray(v3(r.origin), v3(r.direction)); }
+  /** World point → (x, y pixels, z = distance along the view). */
+  worldToScreenPoint(p) { const r = N.call('Camera.worldToScreenPoint', this._h, [p.x, p.y, p.z]); return new Vector3(r[0], r[1], r[2]); }
+  /** (x, y pixels, z = distance along the view) → world point. */
+  screenToWorldPoint(p) {
+    const ray = this.screenPointToRay(p);
+    const fwd = this.transform.forward;
+    const d = ray.direction.dot(fwd);
+    return ray.getPoint(Math.abs(d) < 1e-6 ? p.z : (p.z ?? 0) / d);
+  }
+}
+
+/** A material of an object's renderer (Unity's renderer.material: the first change gives the
+ *  object its own copy). Properties by name: a Goat shader's, or `_Color` / `_EmissionColor` of
+ *  the standard material. Colors as Color, vectors as Vector4 / arrays. */
+export class Material {
+  constructor(h) { this._h = h; }
+  setColor(name, c) { N.call('Renderer.setProperty', this._h, [name, colorArray(c)]); }
+  setFloat(name, v) { N.call('Renderer.setProperty', this._h, [name, v]); }
+  setInt(name, v) { this.setFloat(name, Math.trunc(v)); }
+  setVector(name, v) { N.call('Renderer.setProperty', this._h, [name, colorArray(v)]); }
+  getColor(name) { const v = N.call('Renderer.getProperty', this._h, [name]); return new Color(v[0], v[1], v[2], v[3]); }
+  getFloat(name) { return N.call('Renderer.getProperty', this._h, [name])[0]; }
+  getVector(name) { const v = N.call('Renderer.getProperty', this._h, [name]); return new Vector4(v[0], v[1], v[2], v[3]); }
+  get color() { return this.getColor('_Color'); }
+  set color(c) { this.setColor('_Color', c); }
+}
+
+/** Unity's Renderer of a mesh object: enabled, material. */
+export class Renderer {
+  constructor(go) { this._h = handle(go); }
+  static of(go) { return new Renderer(go); }
+  get material() { return new Material(this._h); }
+  get enabled() { return N.call('Renderer.enabled', this._h, []); }
+  set enabled(on) { N.call('Renderer.setEnabled', this._h, [!!on]); }
+}
 
 // ------------------------------------------------------------------ ScriptableObject
 

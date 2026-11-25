@@ -19,9 +19,9 @@ public class JsWriter(SemanticModel model, string fileStem)
     // engine members whose JS name isn't just camelCase
     static readonly Dictionary<string, string> Renames = new()
     {
-        ["Debug.LogWarning"] = "warn", ["Debug.LogError"] = "error",
+        ["Debug.LogWarning"] = "warn", ["Debug.LogError"] = "error", ["Color.HSVToRGB"] = "HSVToRGB", ["Matrix4x4.TRS"] = "TRS", ["Color.ToHex"] = "toHex",
     };
-    const string Exports = "Behaviour, MonoBehaviour, ScriptableObject, Resources, Vector2, Vector3, Quaternion, Transform, GameObject, Time, Input, Debug, Mathf, Application, WaitForSeconds, WaitForSecondsRealtime, WaitUntil, WaitWhile, WaitForEndOfFrame, WaitForFixedUpdate, Awaitable, DOTween, Ease, LoopType, PathType, Tween, Sequence, PlayerPrefs, SaveData, UI, Physics, Physics2D, Audio, AudioSource, AudioMixer, Animator, Animation, SpriteAnimator, NavMeshAgent, NavMesh, SceneManager, LoadSceneMode, Collision, PointerEventData";
+    const string Exports = "Behaviour, MonoBehaviour, ScriptableObject, Resources, Vector2, Vector3, Vector4, Quaternion, Color, Rect, Bounds, Ray, Plane, Matrix4x4, Keyframe, AnimationCurve, Gradient, GoatEvent, Random, Screen, Camera, Renderer, Material, Space, Transform, GameObject, Time, Input, Debug, Mathf, Application, WaitForSeconds, WaitForSecondsRealtime, WaitUntil, WaitWhile, WaitForEndOfFrame, WaitForFixedUpdate, Awaitable, DOTween, Ease, LoopType, PathType, Tween, Sequence, PlayerPrefs, SaveData, UI, Physics, Physics2D, Audio, AudioSource, AudioMixer, Animator, Animation, SpriteAnimator, NavMeshAgent, NavMesh, SceneManager, LoadSceneMode, Collision, PointerEventData";
 
     // ------------------------------------------------------------------ output helpers
     void Line(string s) => sb.Append(new string(' ', indent * 2)).Append(s).Append('\n');
@@ -312,7 +312,7 @@ public class JsWriter(SemanticModel model, string fileStem)
     }
 
     // ------------------------------------------------------------------ expressions
-    static bool IsVector(ITypeSymbol? t) => t is { Name: "Vector2" or "Vector3" } && t.ContainingNamespace?.Name == "GoatEngine";
+    static bool IsVector(ITypeSymbol? t) => t is { Name: "Vector2" or "Vector3" or "Vector4" or "Quaternion" or "Color" } && t.ContainingNamespace?.Name == "GoatEngine";
     static bool IsEngine(ISymbol? s) => s?.ContainingNamespace is { Name: "GoatEngine" } || s?.ContainingType?.ContainingNamespace?.Name == "GoatEngine";
     static bool IsInteger(ITypeSymbol? t) => t?.SpecialType is SpecialType.System_Int32 or SpecialType.System_Int64 or SpecialType.System_Int16 or SpecialType.System_Byte or SpecialType.System_UInt32 or SpecialType.System_SByte or SpecialType.System_UInt16;
     static string Camel(string s) => s.Length > 2 && s.StartsWith("DO") && char.IsUpper(s[2]) ? "do" + s[2..] : s.Length == 0 ? s : char.ToLowerInvariant(s[0]) + s[1..];
@@ -536,7 +536,22 @@ public class JsWriter(SemanticModel model, string fileStem)
             return SymbolDisplay.FormatLiteral(inv.ArgumentList.Arguments[0].ToString().Split('.').Last(), true);
         if (s != null)
         {
-            var on = inv.Expression is MemberAccessExpressionSyntax ma ? Expr(ma.Expression) : null;
+            var on = inv.Expression is MemberAccessExpressionSyntax ma && model.GetSymbolInfo(ma.Expression).Symbol is not INamedTypeSymbol ? Expr(ma.Expression) : null;
+            // string.Join / string.IsNullOrEmpty / string.Concat
+            if (s.ContainingType?.SpecialType == SpecialType.System_String && s.IsStatic)
+            {
+                var a = inv.ArgumentList.Arguments.Select(x => Expr(x.Expression)).ToList();
+                switch (s.Name)
+                {
+                    case "Join":
+                        return a.Count == 2 && s.Parameters[1].IsParams && s.Parameters[1].Type is IArrayTypeSymbol && model.GetTypeInfo(inv.ArgumentList.Arguments[1].Expression).Type is IArrayTypeSymbol or INamedTypeSymbol { Name: "List" or "IEnumerable" }
+                            ? $"[...{a[1]}].join({a[0]})"
+                            : $"[{string.Join(", ", a.Skip(1))}].join({a[0]})";
+                    case "IsNullOrEmpty": return $"!({a[0]})";
+                    case "IsNullOrWhiteSpace": return $"!(({a[0]}) ?? \"\").trim()";
+                    case "Concat": return $"[{string.Join(", ", a)}].join(\"\")";
+                }
+            }
             // collections and strings
             if (s.ContainingType is { Name: "List" })
             {
@@ -562,6 +577,9 @@ public class JsWriter(SemanticModel model, string fileStem)
             // ScriptableObject.CreateInstance<EnemyData>() → ScriptableObject.createInstance(EnemyData)
             if (s.ContainingType is { Name: "ScriptableObject" } && s.Name == "CreateInstance" && s.TypeArguments.Length == 1 && args.Length == 0)
                 return $"ScriptableObject.createInstance({s.TypeArguments[0].Name})";
+            // Random.Range(0f, 1f): floats even when the literals look like integers in JavaScript
+            if (s.ContainingType is { Name: "Random" } && s.Name == "Range" && s.Parameters.Length == 2 && s.Parameters[0].Type.SpecialType == SpecialType.System_Single)
+                return $"Random.rangeFloat({args})";
             if (s.Name == "ToString" && s.Parameters.Length == 0 && on != null) return $"String({on})";
             if (s.ContainingType is { Name: "Console" } && s.Name.StartsWith("Write")) return $"Debug.log({args})";
             if (s.ContainingType?.SpecialType == SpecialType.System_Single || s.ContainingType?.SpecialType == SpecialType.System_Int32)

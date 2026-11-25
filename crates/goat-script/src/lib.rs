@@ -15,6 +15,7 @@
 //!   frame (after the Rust behaviours), FixedUpdate at the fixed rate, OnDestroy when the entity
 //!   or the script goes away. A script that throws is logged and disabled.
 
+pub mod core_api;
 pub mod pointer;
 use std::collections::HashMap;
 
@@ -153,6 +154,7 @@ pub fn entity_arg(v: &Value) -> Option<Entity> {
 /// Core GameObject calls every host gets: active state and tags (Unity's SetActive,
 /// activeSelf, activeInHierarchy, tag, CompareTag, FindWithTag, FindGameObjectsWithTag).
 fn register_core(x: &mut Extensions) {
+    core_api::register(x);
     fn set_active(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
         goat_runtime::set_active(api.ctx.world, e, a.first().and_then(|v| v.as_bool()).unwrap_or(true));
         Ok(Value::Null)

@@ -308,6 +308,13 @@ impl AssetServer {
         r.map_err(|e| AssetError::Format(key.into(), e))
     }
 
+    /// The Goat shader a loaded material is drawn with (None: the standard material).
+    pub fn material_shader(&mut self, id: MaterialId) -> Option<std::sync::Arc<goat_shader::Shader>> {
+        let key = self.material_keys.get(&id)?.clone();
+        let sk = self.material_shaders.get(&key)?.clone();
+        self.shader(&sk).ok()
+    }
+
     /// Forgets compiled shaders and the materials using them (the editor: a `.shader` changed).
     pub fn forget_shader(&mut self, key: &str) {
         self.shaders.remove(key);

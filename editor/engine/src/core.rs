@@ -497,6 +497,7 @@ impl EditorCore {
         }
         let mut engine = Engine::new(PlayGame { scene: self.scene.clone(), inner: game::HelloGame });
         engine.resources.insert(AssetServer::new(self.io.clone()));
+        engine.resources.insert(goat_script::core_api::EditorMarker);
         engine.resources.get_or_default::<Profiler>().keep_history = 300;
         self.play = Some(engine);
         // ids belong to one world: the Hierarchy now lists the play world

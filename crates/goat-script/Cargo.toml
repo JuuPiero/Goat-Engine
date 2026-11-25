@@ -11,8 +11,8 @@ goat-runtime.workspace = true
 goat-assets.workspace = true
 goat-scene.workspace = true
 goat-input.workspace = true
+goat-gfx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-goat-gfx.workspace = true

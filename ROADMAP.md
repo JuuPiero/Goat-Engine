@@ -127,3 +127,4 @@ Mỗi nền tảng = backend đồ họa + platform + `Builder` trong `tools/goa
 - Không cấp phát trong vòng lặp frame ở đường nóng: dùng pool, buffer dùng lại, typed handle.
 - Mỗi tính năng đều được kiểm chứng thật: 3DS trên emulator (và máy thật khi có thể), desktop bằng ảnh chụp tự động.
 - ✅ Cửa sổ Animation (dopesheet, Preview, Record, Add Property) + component Animation + API script (2026-11-25)
+- ✅ API core như Pia / Unity cho script (JS / TS / C#): Vector4, Quaternion đủ hàm, Mathf / Random đủ bộ, Color, Rect, Bounds, Ray, Plane, Matrix4x4, AnimationCurve, Gradient, GoatEvent; Transform world / local + cây con; Invoke; Camera.main / ScreenPointToRay; renderer.material.SetColor... (bản sao vật liệu theo object); Screen, Application.platform (2026-11-25)

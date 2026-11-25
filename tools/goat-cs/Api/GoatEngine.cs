@@ -5,6 +5,8 @@
 #pragma warning disable CS1591
 namespace GoatEngine
 {
+    public enum Space { World, Self }
+
     public struct Vector2
     {
         public float x, y;
@@ -12,17 +14,34 @@ namespace GoatEngine
         public static Vector2 zero => default;
         public static Vector2 one => default;
         public static Vector2 up => default;
+        public static Vector2 down => default;
         public static Vector2 right => default;
+        public static Vector2 left => default;
         public float magnitude => 0;
+        public float sqrMagnitude => 0;
         public Vector2 normalized => default;
+        public void Normalize() { }
+        public void Set(float x, float y) { }
         public float Dot(Vector2 o) => 0;
+        public static float Dot(Vector2 a, Vector2 b) => 0;
         public static Vector2 Lerp(Vector2 a, Vector2 b, float t) => default;
+        public static Vector2 LerpUnclamped(Vector2 a, Vector2 b, float t) => default;
         public static float Distance(Vector2 a, Vector2 b) => 0;
+        public static float Angle(Vector2 a, Vector2 b) => 0;
+        public static float SignedAngle(Vector2 a, Vector2 b) => 0;
+        public static Vector2 MoveTowards(Vector2 a, Vector2 b, float maxDelta) => default;
+        public static Vector2 ClampMagnitude(Vector2 v, float max) => default;
+        public static Vector2 Reflect(Vector2 dir, Vector2 normal) => default;
+        public static Vector2 Perpendicular(Vector2 v) => default;
+        public static Vector2 Scale(Vector2 a, Vector2 b) => default;
+        public static Vector2 Min(Vector2 a, Vector2 b) => default;
+        public static Vector2 Max(Vector2 a, Vector2 b) => default;
         public static Vector2 operator +(Vector2 a, Vector2 b) => default;
         public static Vector2 operator -(Vector2 a, Vector2 b) => default;
         public static Vector2 operator -(Vector2 a) => default;
         public static Vector2 operator *(Vector2 a, float s) => default;
         public static Vector2 operator *(float s, Vector2 a) => default;
+        public static Vector2 operator *(Vector2 a, Vector2 b) => default;
         public static Vector2 operator /(Vector2 a, float s) => default;
     }
 
@@ -36,48 +55,328 @@ namespace GoatEngine
         public static Vector3 down => default;
         public static Vector3 right => default;
         public static Vector3 left => default;
+        /// <summary>GoatEngine is right-handed: forward is −Z.</summary>
         public static Vector3 forward => default;
         public static Vector3 back => default;
         public float magnitude => 0;
+        public float sqrMagnitude => 0;
         public Vector3 normalized => default;
+        public void Normalize() { }
+        public void Set(float x, float y, float z) { }
         public float Dot(Vector3 o) => 0;
         public Vector3 Cross(Vector3 o) => default;
+        public static float Dot(Vector3 a, Vector3 b) => 0;
+        public static Vector3 Cross(Vector3 a, Vector3 b) => default;
         public static Vector3 Lerp(Vector3 a, Vector3 b, float t) => default;
+        public static Vector3 LerpUnclamped(Vector3 a, Vector3 b, float t) => default;
+        public static Vector3 Slerp(Vector3 a, Vector3 b, float t) => default;
         public static float Distance(Vector3 a, Vector3 b) => 0;
+        public static float Angle(Vector3 a, Vector3 b) => 0;
+        public static float SignedAngle(Vector3 a, Vector3 b, Vector3 axis) => 0;
+        public static Vector3 MoveTowards(Vector3 a, Vector3 b, float maxDelta) => default;
+        public static Vector3 RotateTowards(Vector3 current, Vector3 target, float maxRadians, float maxMagnitudeDelta) => default;
+        public static Vector3 ClampMagnitude(Vector3 v, float max) => default;
+        public static Vector3 Project(Vector3 v, Vector3 onNormal) => default;
+        public static Vector3 ProjectOnPlane(Vector3 v, Vector3 planeNormal) => default;
+        public static Vector3 Reflect(Vector3 dir, Vector3 normal) => default;
+        public static Vector3 Scale(Vector3 a, Vector3 b) => default;
+        public static Vector3 Min(Vector3 a, Vector3 b) => default;
+        public static Vector3 Max(Vector3 a, Vector3 b) => default;
+        public static Vector3 Normalize(Vector3 v) => default;
         public static Vector3 operator +(Vector3 a, Vector3 b) => default;
         public static Vector3 operator -(Vector3 a, Vector3 b) => default;
         public static Vector3 operator -(Vector3 a) => default;
         public static Vector3 operator *(Vector3 a, float s) => default;
         public static Vector3 operator *(float s, Vector3 a) => default;
+        public static Vector3 operator *(Vector3 a, Vector3 b) => default;
         public static Vector3 operator /(Vector3 a, float s) => default;
+    }
+
+    public struct Vector4
+    {
+        public float x, y, z, w;
+        public Vector4(float x, float y, float z, float w) { this.x = x; this.y = y; this.z = z; this.w = w; }
+        public static Vector4 zero => default;
+        public static Vector4 one => default;
+        public float magnitude => 0;
+        public Vector4 normalized => default;
+        public float Dot(Vector4 o) => 0;
+        public static Vector4 Lerp(Vector4 a, Vector4 b, float t) => default;
+        public static Vector4 operator +(Vector4 a, Vector4 b) => default;
+        public static Vector4 operator -(Vector4 a, Vector4 b) => default;
+        public static Vector4 operator *(Vector4 a, float s) => default;
     }
 
     public struct Quaternion
     {
         public float x, y, z, w;
+        public Quaternion(float x, float y, float z, float w) { this.x = x; this.y = y; this.z = z; this.w = w; }
         public static Quaternion identity => default;
         public static Quaternion Euler(float x, float y, float z) => default;
-        public Vector3 eulerAngles => default;
+        public static Quaternion Euler(Vector3 euler) => default;
+        public Vector3 eulerAngles { get; set; }
+        public Quaternion normalized => default;
+        public void Normalize() { }
+        public static float Dot(Quaternion a, Quaternion b) => 0;
+        public static Quaternion Inverse(Quaternion q) => default;
+        public static Quaternion AngleAxis(float degrees, Vector3 axis) => default;
+        public static float Angle(Quaternion a, Quaternion b) => 0;
+        public static Quaternion Slerp(Quaternion a, Quaternion b, float t) => default;
+        public static Quaternion SlerpUnclamped(Quaternion a, Quaternion b, float t) => default;
+        public static Quaternion Lerp(Quaternion a, Quaternion b, float t) => default;
+        public static Quaternion RotateTowards(Quaternion from, Quaternion to, float maxDegrees) => default;
+        public static Quaternion FromToRotation(Vector3 a, Vector3 b) => default;
+        public static Quaternion LookRotation(Vector3 forward) => default;
+        public static Quaternion LookRotation(Vector3 forward, Vector3 up) => default;
+        public static Quaternion operator *(Quaternion a, Quaternion b) => default;
+        public static Vector3 operator *(Quaternion a, Vector3 v) => default;
+    }
+
+    /// <summary>A color (0..1, sRGB-authored like every engine color).</summary>
+    public struct Color
+    {
+        public float r, g, b, a;
+        public Color(float r, float g, float b, float a = 1) { this.r = r; this.g = g; this.b = b; this.a = a; }
+        public static Color red => default;
+        public static Color green => default;
+        public static Color blue => default;
+        public static Color white => default;
+        public static Color black => default;
+        public static Color yellow => default;
+        public static Color cyan => default;
+        public static Color magenta => default;
+        public static Color gray => default;
+        public static Color grey => default;
+        public static Color clear => default;
+        public float grayscale => 0;
+        public Color linear => default;
+        public Color gamma => default;
+        public float maxColorComponent => 0;
+        public string ToHex() => "";
+        public static Color? FromHex(string hex) => default;
+        public static Color Lerp(Color a, Color b, float t) => default;
+        public static Color LerpUnclamped(Color a, Color b, float t) => default;
+        public static Color HSVToRGB(float h, float s, float v) => default;
+        public static Color operator +(Color a, Color b) => default;
+        public static Color operator -(Color a, Color b) => default;
+        public static Color operator *(Color a, float s) => default;
+        public static Color operator *(float s, Color a) => default;
+        public static Color operator *(Color a, Color b) => default;
+    }
+
+    public struct Rect
+    {
+        public float x, y, width, height;
+        public Rect(float x, float y, float width, float height) { this.x = x; this.y = y; this.width = width; this.height = height; }
+        public static Rect MinMaxRect(float xmin, float ymin, float xmax, float ymax) => default;
+        public float xMin => 0;
+        public float yMin => 0;
+        public float xMax => 0;
+        public float yMax => 0;
+        public Vector2 center => default;
+        public Vector2 size => default;
+        public Vector2 min => default;
+        public Vector2 max => default;
+        public bool Contains(Vector2 p) => false;
+        public bool Overlaps(Rect o) => false;
+    }
+
+    public class Bounds
+    {
+        public Bounds(Vector3 center, Vector3 size) { }
+        public Vector3 center;
+        public Vector3 size;
+        public Vector3 extents => default;
+        public Vector3 min => default;
+        public Vector3 max => default;
+        public void SetMinMax(Vector3 min, Vector3 max) { }
+        public bool Contains(Vector3 p) => false;
+        public void Encapsulate(Vector3 p) { }
+        public void Encapsulate(Bounds b) { }
+        public void Expand(float amount) { }
+        public bool Intersects(Bounds o) => false;
+        public Vector3 ClosestPoint(Vector3 p) => default;
+        /// <summary>The distance along the ray where it enters the box, or null.</summary>
+        public float? IntersectRay(Ray ray) => null;
+    }
+
+    public class Ray
+    {
+        public Ray(Vector3 origin, Vector3 direction) { }
+        public Vector3 origin;
+        public Vector3 direction;
+        public Vector3 GetPoint(float distance) => default;
+    }
+
+    public class Plane
+    {
+        public Plane(Vector3 normal, float distance) { }
+        public Plane(Vector3 normal, Vector3 point) { }
+        public static Plane FromPoints(Vector3 a, Vector3 b, Vector3 c) => null!;
+        public Vector3 normal;
+        public float distance;
+        public float GetDistanceToPoint(Vector3 p) => 0;
+        public bool GetSide(Vector3 p) => false;
+        public bool SameSide(Vector3 a, Vector3 b) => false;
+        public Vector3 ClosestPointOnPlane(Vector3 p) => default;
+        /// <summary>Distance along the ray to the plane, or null.</summary>
+        public float? Raycast(Ray ray) => null;
+        public Plane flipped => null!;
+    }
+
+    /// <summary>A 4×4 matrix (column vectors, like the engine).</summary>
+    public class Matrix4x4
+    {
+        public static Matrix4x4 identity => null!;
+        public static Matrix4x4 TRS(Vector3 pos, Quaternion rot, Vector3 scale) => null!;
+        public static Matrix4x4 Translate(Vector3 v) => null!;
+        public static Matrix4x4 Rotate(Quaternion q) => null!;
+        public static Matrix4x4 Scale(Vector3 v) => null!;
+        public float Get(int row, int column) => 0;
+        public void Set(int row, int column, float v) { }
+        public Matrix4x4 Mul(Matrix4x4 o) => null!;
+        public Vector3 MultiplyPoint(Vector3 p) => default;
+        public Vector3 MultiplyPoint3x4(Vector3 p) => default;
+        public Vector3 MultiplyVector(Vector3 v) => default;
+        public Matrix4x4 inverse => null!;
+        public Matrix4x4 transpose => null!;
+    }
+
+    public class Keyframe
+    {
+        public Keyframe(float time, float value, float inTangent = 0, float outTangent = 0) { }
+        public float time, value, inTangent, outTangent;
+    }
+
+    public class AnimationCurve
+    {
+        public AnimationCurve(params Keyframe[] keys) { }
+        public Keyframe[] keys = [];
+        public int length => 0;
+        public static AnimationCurve Linear(float t0, float v0, float t1, float v1) => null!;
+        public static AnimationCurve EaseInOut(float t0, float v0, float t1, float v1) => null!;
+        public static AnimationCurve Constant(float t0, float t1, float v) => null!;
+        public int AddKey(float time, float value) => 0;
+        public float Evaluate(float t) => 0;
+    }
+
+    public class GradientColorKey { public Color color; public float time; }
+    public class GradientAlphaKey { public float alpha; public float time; }
+
+    public class Gradient
+    {
+        public GradientColorKey[] colorKeys = [];
+        public GradientAlphaKey[] alphaKeys = [];
+        public void SetKeys(GradientColorKey[] colorKeys, GradientAlphaKey[] alphaKeys) { }
+        public Color Evaluate(float t) => default;
+    }
+
+    /// <summary>An event with listeners (Pia's PiaEvent / Unity's UnityEvent).</summary>
+    public class GoatEvent
+    {
+        public void AddListener(System.Action listener) { }
+        public void RemoveListener(System.Action listener) { }
+        public void RemoveAllListeners() { }
+        public int listenerCount => 0;
+        public void Invoke() { }
+    }
+
+    public static class Random
+    {
+        public static void InitState(int seed) { }
+        public static float value => 0;
+        /// <summary>Integers: min..max−1.</summary>
+        public static int Range(int min, int max) => 0;
+        /// <summary>Floats: min..max.</summary>
+        public static float Range(float min, float max) => 0;
+        public static Vector2 insideUnitCircle => default;
+        public static Vector3 insideUnitSphere => default;
+        public static Vector3 onUnitSphere => default;
+        public static Quaternion rotation => default;
+        public static Color ColorHSV(float hMin = 0, float hMax = 1, float sMin = 0, float sMax = 1, float vMin = 0, float vMax = 1) => default;
+    }
+
+    /// <summary>The main display (3DS top screen 400×240).</summary>
+    public static class Screen
+    {
+        public static int width => 0;
+        public static int height => 0;
+    }
+
+    /// <summary>The Camera of an object: Camera.main, rays and screen points.</summary>
+    public class Camera
+    {
+        public static Camera? main => null;
+        public static Camera Of(GameObject go) => null!;
+        public GameObject gameObject => null!;
+        public Transform transform => null!;
+        public float fieldOfView { get; set; }
+        public bool orthographic => false;
+        public float orthographicSize { get; set; }
+        public Ray ScreenPointToRay(Vector2 p) => null!;
+        public Ray ScreenPointToRay(Vector3 p) => null!;
+        public Vector3 WorldToScreenPoint(Vector3 p) => default;
+        public Vector3 ScreenToWorldPoint(Vector3 p) => default;
+    }
+
+    /// <summary>renderer.material: the first change gives the object its own copy. Properties by name
+    /// (a Goat shader's, or _Color / _EmissionColor of the standard material).</summary>
+    public class Material
+    {
+        public void SetColor(string name, Color c) { }
+        public void SetFloat(string name, float v) { }
+        public void SetInt(string name, int v) { }
+        public void SetVector(string name, Vector4 v) { }
+        public Color GetColor(string name) => default;
+        public float GetFloat(string name) => 0;
+        public Vector4 GetVector(string name) => default;
+        public Color color { get; set; }
+    }
+
+    public class Renderer
+    {
+        public static Renderer Of(GameObject go) => null!;
+        public Material material => null!;
+        public bool enabled { get; set; }
     }
 
     public class Transform
     {
         public GameObject gameObject => null!;
+        public string name => "";
+        /// <summary>World position; localPosition is relative to the parent.</summary>
         public Vector3 position { get; set; }
         public Vector3 localPosition { get; set; }
         public Vector3 worldPosition => default;
-        public Vector3 eulerAngles { get; set; }
         public Quaternion rotation { get; set; }
+        public Quaternion localRotation { get; set; }
+        public Vector3 eulerAngles { get; set; }
+        public Vector3 localEulerAngles { get; set; }
         public Vector3 localScale { get; set; }
-        public Transform? parent => null;
+        public Vector3 lossyScale => default;
+        public Vector3 forward { get; set; }
+        public Vector3 right => default;
+        public Vector3 up => default;
+        public Transform? parent { get; set; }
+        public Transform root => null!;
+        public int childCount => 0;
+        public Transform GetChild(int index) => null!;
+        public Transform? Find(string path) => null;
+        public bool IsChildOf(Transform t) => false;
         public void SetParent(Transform? parent) { }
+        public void SetPositionAndRotation(Vector3 position, Quaternion rotation) { }
+        public Vector3 TransformPoint(Vector3 p) => default;
+        public Vector3 InverseTransformPoint(Vector3 p) => default;
+        public Vector3 TransformDirection(Vector3 d) => default;
+        public Vector3 InverseTransformDirection(Vector3 d) => default;
+        public Vector3 TransformVector(Vector3 v) => default;
+        public void RotateAround(Vector3 point, Vector3 axis, float angle) { }
         public void Translate(float x, float y, float z) { }
         public void Translate(Vector3 delta) { }
         public void Rotate(float x, float y, float z) { }
         public void Rotate(Vector3 eulers) { }
         public void LookAt(Vector3 target) { }
-        public void LookAt(Transform target) { }
-        // DOTween shortcuts
+        public void LookAt(Transform target) { }        // DOTween shortcuts
         public Tween DOMove(Vector3 to, float duration) => null!;
         public Tween DOLocalMove(Vector3 to, float duration) => null!;
         public Tween DOMoveX(float to, float duration) => null!;
@@ -154,6 +453,7 @@ namespace GoatEngine
         public static int Kill(object targetOrId, bool complete = false) => 0;
         public static int KillAll(bool complete = false) => 0;
         public static float timeScale { get; set; }
+        public static float realtimeSinceStartup => 0;
     }
 
     // coroutines (Unity's yield instructions)
@@ -186,7 +486,10 @@ namespace GoatEngine
         public static GameObject? Find(string name) => null;
         public static GameObject Create(string name = "GameObject") => null!;
         public static GameObject Instantiate(string assetKey, GameObject? parent = null) => null!;
-        public static void Destroy(GameObject? go) { }
+        public static GameObject Instantiate(string assetKey, Vector3 position, Quaternion rotation, GameObject? parent = null) => null!;
+        public static void Destroy(GameObject? go, float delay = 0) { }
+        public Renderer renderer => null!;
+        public Camera? camera => null;
         public static GameObject? FindWithTag(string tag) => null;
         public static GameObject? FindGameObjectWithTag(string tag) => null;
         public static GameObject[] FindGameObjectsWithTag(string tag) => [];
@@ -224,6 +527,11 @@ namespace GoatEngine
         public Coroutine StartCoroutine(System.Collections.IEnumerator routine) => null!;
         public void StopCoroutine(Coroutine routine) { }
         public void StopAllCoroutines() { }
+        public void Invoke(string methodName, float delay) { }
+        public void InvokeRepeating(string methodName, float delay, float repeatRate) { }
+        public void CancelInvoke(string? methodName = null) { }
+        public bool IsInvoking(string? methodName = null) => false;
+        public Renderer renderer => null!;
     }
 
     public class MonoBehaviour : Behaviour { }
@@ -268,6 +576,7 @@ namespace GoatEngine
         public static float unscaledTime => 0;
         public static int frameCount => 0;
         public static float timeScale { get; set; }
+        public static float realtimeSinceStartup => 0;
     }
 
     public class InputAction
@@ -306,6 +615,10 @@ namespace GoatEngine
     public static class Application
     {
         public static void Quit() { }
+        /// <summary>"3DS", "Windows", "Linux", "macOS", "Web".</summary>
+        public static string platform => "";
+        public static bool isEditor => false;
+        public static bool isPlaying => true;
     }
 
     public class AnimationEvent { public string name = ""; public string parameter = ""; public string clip = ""; }
@@ -582,5 +895,36 @@ namespace GoatEngine
         public static float Min(float a, float b) => 0;
         public static float Max(float a, float b) => 0;
         public static float Sign(float x) => 0;
+        public const float Infinity = float.PositiveInfinity;
+        public const float NegativeInfinity = float.NegativeInfinity;
+        public const float Epsilon = 1.401298E-45f;
+        public static float LerpUnclamped(float a, float b, float t) => 0;
+        public static float InverseLerp(float a, float b, float v) => 0;
+        public static float Repeat(float t, float length) => 0;
+        public static float DeltaAngle(float a, float b) => 0;
+        public static float LerpAngle(float a, float b, float t) => 0;
+        public static float MoveTowardsAngle(float a, float b, float maxDelta) => 0;
+        public static float SmoothStep(float from, float to, float t) => 0;
+        public static bool Approximately(float a, float b) => false;
+        public static int RoundToInt(float v) => 0;
+        public static int FloorToInt(float v) => 0;
+        public static int CeilToInt(float v) => 0;
+        public static bool IsPowerOfTwo(int v) => false;
+        public static int NextPowerOfTwo(int v) => 0;
+        public static int ClosestPowerOfTwo(int v) => 0;
+        public static float PerlinNoise(float x, float y) => 0;
+        public static float Tan(float x) => 0;
+        public static float Asin(float x) => 0;
+        public static float Acos(float x) => 0;
+        public static float Atan(float x) => 0;
+        public static float Atan2(float y, float x) => 0;
+        public static float Pow(float x, float p) => 0;
+        public static float Exp(float x) => 0;
+        public static float Log(float x) => 0;
+        public static float Log(float x, float b) => 0;
+        public static float Log10(float x) => 0;
+        public static float Floor(float x) => 0;
+        public static float Ceil(float x) => 0;
+        public static float Round(float x) => 0;
     }
 }

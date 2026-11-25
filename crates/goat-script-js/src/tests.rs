@@ -298,6 +298,50 @@ fn csharp_coroutines_and_tweens() {
     assert!(x.abs() < 1e-3, "back home: {x}");
 }
 
+/// The core API from C# (tools/goat-cs/tests/Core.cs): math operators, Random, curves, events, Invoke.
+#[test]
+fn csharp_core_api() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/goat-cs");
+    let tool = format!("{root}/bin/goat-cs.dll");
+    if !std::path::Path::new(&tool).exists() {
+        eprintln!("skipped: build tools/goat-cs first");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("goat-cs-core-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::copy(format!("{root}/tests/Core.cs"), dir.join("scripts/Core.cs")).unwrap();
+    let Ok(out) = std::process::Command::new("dotnet").arg(&tool).arg(&dir).output() else {
+        eprintln!("skipped: no dotnet");
+        return;
+    };
+    assert!(out.status.success(), "goat-cs failed: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let js = std::fs::read_to_string(dir.join("scripts/Core.cs.js")).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let io = AssetIo::new("/nonexistent-cs-core");
+    io.put("scripts/Core.cs.js", js.into_bytes());
+    struct Cs(AssetIo);
+    impl Game for Cs {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(self.0.clone()));
+            ctx.world.spawn((Name("core".into()), Transform::default(), GlobalTransform::default(), Script::one("scripts/Core.cs")));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(self.0.clone())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(Cs(io));
+    e.frame(0.0, &mut gfx);
+    for _ in 0..3 {
+        e.frame(0.1, &mut gfx);
+    }
+    let name = e.world.query::<&Name>().iter().next().map(|(_, n)| n.0.clone()).unwrap();
+    let parts: Vec<&str> = name.split('|').collect();
+    assert_eq!(parts.len(), 14, "{name}");
+    assert!(parts[0].contains('1') && parts[0].contains('2') && parts[0].contains('4'), "a + right×up = (1, 2, 4): {name}");
+    assert_eq!(&parts[1..], &["-1", "1", "1", "3", "2.5", "true", "true", "4", "true", "8", "100", "false", "later"], "{name}");
+}
+
 /// Physics from TypeScript: raycast returns a GameObject; a character controller walks.
 #[cfg(feature = "typescript")]
 #[test]
@@ -594,4 +638,118 @@ fn scriptable_objects_load_as_shared_assets() {
     assert_eq!(Value::Object(map), serde_json::json!({ "hp": 10, "speed": 2.5, "tint": [1, 1, 1], "next": null, "tags": ["a"], "enabledCount": 0 }));
     assert_eq!(p.is_so.clone().unwrap(), Ok(true));
     assert_eq!(p.behaviour_is_so.clone().unwrap(), Ok(false));
+}
+
+// ------------------------------------------------------------------ core API (math, transforms, camera, materials)
+
+fn core_io() -> AssetIo {
+    let io = AssetIo::new("/nonexistent-goat-test-root-core");
+    io.put(
+        "scripts/CoreCheck.ts",
+        br##"
+import { Behaviour, Vector3, Vector2, Quaternion, Color, Mathf, Random, Plane, Ray, Matrix4x4, AnimationCurve, Keyframe, Gradient, Bounds, Rect, Camera, Screen, GameObject, Application, GoatEvent, Space } from "goat";
+export default class CoreCheck extends Behaviour {
+  start() {
+    const fails = [];
+    const near = (a, b, what, eps = 1e-3) => { if (Math.abs(a - b) > eps) fails.push(`${what}: ${a} != ${b}`); };
+    const nearV = (a, b, what, eps = 1e-3) => { near(a.x, b.x, what + ".x", eps); near(a.y, b.y, what + ".y", eps); near(a.z, b.z, what + ".z", eps); };
+    // quaternions agree with the engine's euler conversion and rotate like it
+    const q = Quaternion.euler(0, 90, 0);
+    nearV(q.mul(Vector3.right), new Vector3(0, 0, -1), "90 deg about Y turns +X to -Z");
+    nearV(Quaternion.angleAxis(90, Vector3.up).mul(Vector3.right), new Vector3(0, 0, -1), "angleAxis");
+    nearV(Quaternion.lookRotation(new Vector3(1, 0, 0)).mul(Vector3.forward), new Vector3(1, 0, 0), "lookRotation forward");
+    near(Quaternion.angle(Quaternion.identity, q), 90, "angle");
+    nearV(Quaternion.slerp(Quaternion.identity, q, 0.5).eulerAngles, new Vector3(0, 45, 0), "slerp");
+    nearV(Quaternion.inverse(q).mul(q).mul(Vector3.up), Vector3.up, "inverse");
+    nearV(Quaternion.fromToRotation(Vector3.up, Vector3.right).mul(Vector3.up), Vector3.right, "fromTo");
+    // vectors
+    near(Vector3.angle(Vector3.up, Vector3.right), 90, "Vector3.angle");
+    nearV(Vector3.project(new Vector3(1, 1, 0), Vector3.right), Vector3.right, "project");
+    nearV(Vector3.reflect(new Vector3(1, -1, 0), Vector3.up), new Vector3(1, 1, 0), "reflect");
+    near(Vector2.signedAngle(Vector2.right, Vector2.up), 90, "signedAngle");
+    // transforms: parent at (1, 0, 0) turned 90 deg about Y, child at local (1, 0, 0)
+    const parent = GameObject.find("Parent").transform;
+    const child = GameObject.find("Child").transform;
+    nearV(child.position, new Vector3(1, 0, -1), "child world position");
+    nearV(child.localPosition, new Vector3(1, 0, 0), "child local position");
+    nearV(child.forward, new Vector3(-1, 0, 0), "child forward (parent turned)");
+    nearV(parent.transformPoint(new Vector3(0, 0, -2)), new Vector3(-1, 0, 0), "transformPoint");
+    nearV(parent.inverseTransformPoint(new Vector3(1, 0, -1)), new Vector3(1, 0, 0), "inverseTransformPoint");
+    child.position = new Vector3(1, 2, 0);
+    nearV(child.localPosition, new Vector3(0, 2, 0), "world position set through the parent");
+    if (parent.childCount !== 1 || parent.getChild(0).name !== "Child" || parent.find("Child") === null || !child.isChildOf(parent)) fails.push("hierarchy");
+    child.rotation = Quaternion.identity;
+    nearV(child.localEulerAngles, new Vector3(0, -90, 0), "world rotation set through the parent");
+    // camera
+    const cam = Camera.main;
+    if (!cam || cam.gameObject.name !== "Main Camera") fails.push("Camera.main");
+    else {
+      const sp = cam.worldToScreenPoint(new Vector3(0, 0, -5));
+      near(sp.x, Screen.width / 2, "screen x"); near(sp.y, Screen.height / 2, "screen y"); near(sp.z, 5, "depth");
+      const ray = cam.screenPointToRay(new Vector2(Screen.width / 2, Screen.height / 2));
+      nearV(ray.direction, new Vector3(0, 0, -1), "center ray");
+      nearV(cam.screenToWorldPoint(new Vector3(Screen.width / 2, Screen.height / 2, 5)), new Vector3(0, 0, -5), "screenToWorldPoint");
+    }
+    // random, color, math helpers
+    Random.initState(42); const a = [Random.value, Random.range(0, 10), Random.range(1.5, 2.5)];
+    Random.initState(42); const b = [Random.value, Random.range(0, 10), Random.range(1.5, 2.5)];
+    if (JSON.stringify(a) !== JSON.stringify(b) || !Number.isInteger(a[1]) || a[2] < 1.5 || a[2] > 2.5) fails.push("Random");
+    if (Color.fromHex("#ff8000").toHex() !== "#ff8000") fails.push("Color hex");
+    const hsv = Color.RGBToHSV(Color.HSVToRGB(0.3, 0.5, 0.8)); near(hsv.h, 0.3, "hsv h"); near(hsv.s, 0.5, "hsv s");
+    near(Mathf.deltaAngle(350, 10), 20, "deltaAngle");
+    near(Mathf.inverseLerp(10, 20, 15), 0.5, "inverseLerp");
+    const n = Mathf.perlinNoise(1.3, 2.7); if (!(n >= 0 && n <= 1)) fails.push("perlin");
+    const vel = { value: 0 }; let x = 0; for (let i = 0; i < 200; i++) x = Mathf.smoothDamp(x, 10, vel, 0.3, Infinity, 1 / 60); near(x, 10, "smoothDamp", 0.05);
+    near(new Plane(Vector3.up, 0).raycast(new Ray(new Vector3(0, 5, 0), Vector3.down)), 5, "plane raycast");
+    const m = Matrix4x4.TRS(new Vector3(1, 2, 3), q, new Vector3(2, 2, 2));
+    nearV(m.inverse.multiplyPoint(m.multiplyPoint(new Vector3(0.3, -1, 4))), new Vector3(0.3, -1, 4), "matrix inverse");
+    near(AnimationCurve.linear(0, 0, 2, 10).evaluate(1), 5, "curve");
+    near(new Gradient([{ color: Color.black, time: 0 }, { color: Color.white, time: 1 }]).evaluate(0.25).r, 0.25, "gradient");
+    const bounds = new Bounds(Vector3.zero, new Vector3(2, 2, 2)); bounds.encapsulate(new Vector3(3, 0, 0)); near(bounds.max.x, 3, "bounds");
+    if (!new Rect(0, 0, 2, 2).contains(new Vector2(1, 1))) fails.push("rect");
+    let fired = 0; const ev = new GoatEvent(); const fn = () => fired++; ev.addListener(fn); ev.invoke(); ev.removeListener(fn); ev.invoke(); if (fired !== 1) fails.push("event");
+    if (!Application.platform) fails.push("platform");
+    // materials: the object gets its own copy, the shared material stays
+    const box = GameObject.find("Box");
+    box.renderer.material.color = new Color(1, 0, 0, 1);
+    const c = box.renderer.material.color; near(c.r, 1, "material color r"); near(c.g, 0, "material color g");
+    this.gameObject.name = fails.length ? "FAIL " + fails.join("; ") : "core ok";
+  }
+}
+"##
+        .to_vec(),
+    );
+    io
+}
+
+struct CoreGame;
+impl Game for CoreGame {
+    fn start(&mut self, ctx: &mut GameContext) {
+        ctx.resources.insert(goat_assets::AssetServer::new(core_io()));
+        let parent = ctx.world.spawn((Name("Parent".into()), Transform::from_position(Vec3::X).with_rotation(goat_core::math::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)), GlobalTransform::default()));
+        ctx.world.spawn((Name("Child".into()), Transform::from_position(Vec3::X), GlobalTransform::default(), goat_runtime::Parent(parent)));
+        ctx.world.spawn((Name("Main Camera".into()), Transform::default(), GlobalTransform::default(), goat_runtime::Camera::default()));
+        let mesh = ctx.gfx.create_mesh(&goat_gfx::MeshData::cube(1.0)).unwrap();
+        let mat = ctx.gfx.create_material(&goat_gfx::MaterialDesc::default()).unwrap();
+        ctx.world.spawn((Name("Box".into()), Transform::default(), GlobalTransform::default(), goat_runtime::MeshRenderer::new(mesh, mat)));
+        ctx.world.spawn((Name("Checker".into()), Transform::default(), GlobalTransform::default(), Script::one("scripts/CoreCheck.ts")));
+    }
+    fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+        vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(core_io())))]
+    }
+}
+
+#[test]
+fn core_api_math_transforms_camera_materials() {
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(CoreGame);
+    e.frame(0.1, &mut gfx);
+    e.frame(0.1, &mut gfx);
+    let names: Vec<String> = e.world.query::<&Name>().iter().map(|(_, n)| n.0.clone()).collect();
+    assert!(names.iter().any(|n| n == "core ok"), "{names:?}");
+    // the box's material was copied, the original kept white
+    let box_e = find(&e, "Box").unwrap();
+    let id = e.world.get::<&goat_runtime::MeshRenderer>(box_e).unwrap().material;
+    let d = goat_gfx::GraphicsBackend::material_desc(&gfx, id).unwrap();
+    assert_eq!(d.base_color.to_array(), [1.0, 0.0, 0.0, 1.0]);
 }
