@@ -11,7 +11,7 @@ fn main() {
     let exe = if cfg!(windows) { "picasso.exe" } else { "picasso" };
     let picasso = PathBuf::from(&devkitpro).join("tools").join("bin").join(exe);
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    for name in ["standard", "reflect", "outline"] {
+    for name in ["standard", "reflect", "outline", "receive", "shadow"] {
         let src = PathBuf::from("shaders").join(format!("{name}.v.pica"));
         let dst = out.join(format!("{name}.shbin"));
         let status = Command::new(&picasso).arg("-o").arg(&dst).arg(&src).status().unwrap_or_else(|e| panic!("running {}: {e}", picasso.display()));

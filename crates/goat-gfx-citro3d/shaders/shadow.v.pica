@@ -1,0 +1,27 @@
+; GoatEngine shadow caster vertex shader for the PICA200 (Nintendo 3DS): the vertex seen from the
+; shadow-casting light (lightMvp: model -> light clip space, z = -depth so the w-buffer depth
+; map writes the depth from the light, 0 near .. 1 far). Color black: the shadow pass writes
+; depth only (green = 0).
+; Attributes: v0 position (goat_gfx::Vertex layout).
+
+.fvec lightMvp[4]
+
+.constf myconst(0.0, 1.0, -1.0, 0.5)
+.alias  zeros myconst.xxxx
+.alias  ones  myconst.yyyy
+
+.out outpos position
+.out outclr color
+
+.alias inpos v0
+
+.proc main
+	mov r0.xyz, inpos
+	mov r0.w,   ones
+	dp4 outpos.x, lightMvp[0], r0
+	dp4 outpos.y, lightMvp[1], r0
+	dp4 outpos.z, lightMvp[2], r0
+	dp4 outpos.w, lightMvp[3], r0
+	mov outclr, zeros
+	end
+.end

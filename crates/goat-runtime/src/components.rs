@@ -216,7 +216,8 @@ impl LightMode {
 pub struct DirectionalLight {
     pub color: Color,
     pub intensity: f32,
-    /// Casts shadow maps (the first such light; desktop — the 3DS uses blob shadows).
+    /// Casts shadow maps (the first such light; desktop shadow maps, on the 3DS the PICA's own
+    /// shadow hardware: a 256² map around where the camera looks).
     pub shadows: bool,
     pub mode: LightMode,
 }

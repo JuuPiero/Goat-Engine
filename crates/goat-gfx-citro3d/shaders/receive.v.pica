@@ -1,0 +1,83 @@
+; GoatEngine shadow-receiving vertex shader for the PICA200 (Nintendo 3DS): standard.v.pica, but
+; texture unit 0 samples the shadow map: texcoord0 = the vertex in the shadow map (lightMtx:
+; model -> (s, t, depth from the light)), texcoord0w = that depth; the base texture moves to
+; unit 1 (texcoord1 = uv x uvST[1]).
+; Attributes: v0 position, v1 normal, v2 uv, v3 color (goat_gfx::Vertex layout).
+
+.fvec projection[4], modelView[4], uvST[2], lightMtx[4]
+
+.constf myconst(0.0, 1.0, -1.0, 0.5)
+.alias  zeros myconst.xxxx
+.alias  ones  myconst.yyyy
+.alias  half  myconst.wwww
+
+.out outpos position
+.out outtc0 texcoord0
+.out outtc0w texcoord0w
+.out outtc1 texcoord1
+.out outclr color
+.out outview view
+.out outnq normalquat
+
+.alias inpos v0
+.alias innrm v1
+.alias intex v2
+.alias inclr v3
+
+.proc main
+	; r0 = (position, 1)
+	mov r0.xyz, inpos
+	mov r0.w,   ones
+
+	; r1 = modelView * position (view space)
+	dp4 r1.x, modelView[0], r0
+	dp4 r1.y, modelView[1], r0
+	dp4 r1.z, modelView[2], r0
+	dp4 r1.w, modelView[3], r0
+
+	; view vector = vertex → eye
+	mov outview, -r1
+
+	; clip position
+	dp4 outpos.x, projection[0], r1
+	dp4 outpos.y, projection[1], r1
+	dp4 outpos.z, projection[2], r1
+	dp4 outpos.w, projection[3], r1
+
+	; the shadow map coordinates of the vertex (orthographic light: no division)
+	dp4 r2.x, lightMtx[0], r0
+	dp4 r2.y, lightMtx[1], r0
+	dp4 r2.z, lightMtx[2], r0
+	mov r2.w, zeros
+	mov outtc0, r2
+	mov outtc0w, r2.zzzz
+	mul r3.xy, uvST[1].xy, intex.xy
+	add r3.xy, uvST[1].zw, r3.xy
+	mov r3.zw, zeros
+	mov outtc1, r3
+	mov outclr, inclr
+
+	; view-space normal, normalized
+	dp3 r14.x, modelView[0], innrm
+	dp3 r14.y, modelView[1], innrm
+	dp3 r14.z, modelView[2], innrm
+	dp3 r6.x, r14, r14
+	rsq r6.x, r6.x
+	mul r14.xyz, r14.xyz, r6.x
+
+	; quaternion rotating +Z onto the normal: (n.xy / (2c), c, 0), c = sqrt((1 + n.z) / 2)
+	mov r0, myconst.yxxx
+	add r4, ones, r14.z
+	mul r4, half, r4
+	cmp zeros, ge, ge, r4.x
+	rsq r4, r4.x
+	mul r5, half, r14
+	jmpc cmp.x, degenerate
+
+	rcp r0.z, r4.x
+	mul r0.xy, r5, r4
+
+degenerate:
+	mov outnq, r0
+	end
+.end

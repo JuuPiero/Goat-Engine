@@ -290,6 +290,7 @@ Các trường dưới đây ghi được trong `*.mat.json`, chạy được tr
 Thêm vào đó:
 - `RenderSettings.ambient_ground`: ambient bán cầu (trên là màu trời, dưới là màu đất).
 - `BlobShadow`: bóng tròn mềm dưới vật.
+- **Shadow map** của đèn directional đầu tiên có `shadows` (mặc định bật): desktop 2048² + PCF; **3DS dùng phần cứng shadow của PICA** — một pass vẽ độ sâu các vật opaque từ phía đèn vào texture shadow 256² (thiếu VRAM thì 128²) phủ 20×20 đơn vị quanh chỗ camera nhìn, vật liệu lit chuẩn nhận bóng qua fragment lighting (vật liệu có cubemap / emission map / Goat shader TEV thì không). Tắt bằng `shadows: false`. Scene mẫu: `scenes/shadows.scene.json`.
 - `StaticBatching { bake_lighting }`: gộp vật tĩnh và nướng ánh sáng vào vertex.
 - `LodGroup`: tự chọn mesh theo kích thước vật trên màn hình.
 - **Light Mode** của đèn (`"mode"` như Unity): `realtime` (chỉ chiếu lúc chạy, không nướng), `mixed` (mặc định: nướng vào static batch và chiếu lúc chạy cho vật di chuyển), `baked` (chỉ nướng: static batch + light probe, không tốn đèn phần cứng — 3DS chỉ có 8).

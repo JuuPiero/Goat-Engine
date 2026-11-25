@@ -27,7 +27,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ Alpha test cho lá cây / rào (`alpha_cutoff`), desktop thêm dither Bayer 4×4 (`alpha_dither`) như alpha-to-coverage giả
 - ✅ Ánh sáng nướng vào vertex cho vật tĩnh (`StaticBatching { bake_lighting }`: ambient / bán cầu + mọi đèn, vẽ unlit) + fragment lighting cho vật động. Lightmap UV2 chưa có.
 - ✅ Bóng blob (`BlobShadow`, goat-physics feature `render`: raycast xuống đất, theo độ dốc, nhỏ và nhạt dần theo độ cao)
-- ⬜ Shadow map bằng tính năng shadow của PICA cho 1 đèn
+- ✅ Shadow map bằng tính năng shadow của PICA cho 1 đèn (pass độ sâu chế độ shadow, texture GPU_TEX_SHADOW_2D 256², fragment lighting nhận bóng)
 - ✅ Toon: viền (`outline_width` / `outline_color`, vẽ lại mặt sau đẩy theo normal; 3DS: shader PICA thứ ba), cel shading (`toon_steps`; 3DS: specular0 × LUT D0 theo L·N)
 - ✅ Rim light (`rim_color` / `rim_power`; 3DS: specular1 × LUT D1 theo N·V), phản chiếu cubemap
 - ✅ Procedural texture (`procedural`: water / fire / noise; 3DS: đơn vị proctex của PICA, desktop: noise trong shader)
@@ -35,7 +35,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ Goat Shader trên 3DS: hàm fragment → texture combiner (TEV) của PICA (kiểm bằng bộ mô phỏng TEV + Citra)
 - ✅ Goat Shader: keyword, nhiều Pass, alpha test (`clip`) và uv transform trên 3DS
 - ⬜ Fog gas cho khói
-- ✅ Shadow map trên desktop (đèn directional `shadows`, 2048², PCF 3×3, đi theo camera); 3DS dùng blob shadow
+- ✅ Shadow map trên desktop (đèn directional `shadows`, 2048², PCF 3×3, đi theo camera); 3DS dùng shadow map phần cứng PICA (xem trên) hoặc blob shadow
 - ✅ Post-process (`RenderSettings.post`): desktop có exposure / contrast / saturation / tint / vignette / bloom; 3DS pha màu exposure × tint trong texenv stage 4
 - ✅ Sprite / 2D (crate `goat-sprites`): Sprite + sprite sheet, SpriteRenderer (tint, flip, layer, sorting order), gom lô theo texture → 1 draw call mỗi lô
 - ✅ Plugin (cách subsystem gắn vào frame: build / fixed_update / update / late_update), fixed timestep, `Behaviour::fixed_update` / `late_update`

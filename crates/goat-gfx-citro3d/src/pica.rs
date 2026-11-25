@@ -15,11 +15,24 @@ use crate::tile_texture;
 static SHADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/standard.shbin"));
 static SHADER_REFLECT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reflect.shbin"));
 static SHADER_OUTLINE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/outline.shbin"));
+static SHADER_RECEIVE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/receive.shbin"));
+static SHADER_SHADOW: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shadow.shbin"));
 
 /// Vertex shader programs: 0 = standard (base texture on unit 0, emissive map on unit 1),
 /// 1 = reflect (cube map on unit 0 from the reflection vector, base texture on unit 1),
 /// 2 = outline (pushed along the normals, flat color).
-const PROGRAMS: usize = 3;
+/// Programs: 0 standard, 1 reflect, 2 outline, 3 shadow receiver, 4 shadow caster.
+const PROGRAMS: usize = 5;
+const PROGRAM_RECEIVE: usize = 3;
+const PROGRAM_CASTER: usize = 4;
+/// Uniform slots of `locs`.
+const LOC_UV_ST: usize = 4;
+const LOC_LIGHT_MTX: usize = 5;
+const LOC_LIGHT_MVP: usize = 6;
+/// Half size of the square the shadow map covers (world units) and the depth range from the
+/// light's eye point to the far side.
+const SHADOW_EXTENT: f32 = 10.0;
+const SHADOW_DEPTH: f32 = 60.0;
 
 /// Debug switches set at build time: `GOAT_3DS_DEBUG=nodraw,nodrawcall,unlit,notex,nossaa`
 /// (comma-separated) — for bisecting GPU problems.
@@ -125,8 +138,9 @@ struct Fixed {
 pub struct Citro3dBackend {
     dvlbs: [*mut ctru::DVLB_s; PROGRAMS],
     fixed: Box<Fixed>,
-    /// Uniform locations per program: projection, modelView, viewInv, outline (-1 = none).
-    locs: [[i32; 5]; PROGRAMS],
+    /// Uniform locations per program: projection, modelView, viewInv, outline, uvST, lightMtx,
+    /// lightMvp (-1 = none).
+    locs: [[i32; 7]; PROGRAMS],
     loc_projection: i32,
     loc_model_view: i32,
     /// The program bound now and the view's matrices (re-uploaded when switching program).
@@ -161,10 +175,51 @@ pub struct Citro3dBackend {
     probe_light: Option<LightProbeSample>,
     /// uv tiling / offset of texture units 0 / 1 (the standard vertex shader's `uvST`).
     uv_st: [[f32; 4]; 2],
+    /// The PICA's shadow map (None: no VRAM left for it).
+    shadow: Option<ShadowMap>,
+    /// This frame's shadow: world → (s, t, depth) of the map, and the light it follows.
+    shadow_tex_mtx: Option<Mat4>,
+    shadow_dir: Option<Vec3>,
+    /// The view being drawn receives the shadow through this light (index in its lights).
+    view_shadow: Option<usize>,
     stereo: bool,
 }
 
+/// A shadow texture (RGBA8 = 24-bit depth + 8-bit intensity, GPU_TEX_SHADOW_2D) and the render
+/// target drawing into it.
+struct ShadowMap {
+    tex: Box<c3d::C3D_Tex>,
+    target: *mut c3d::C3D_RenderTarget,
+    size: u16,
+}
+
 const UV_IDENTITY: [[f32; 4]; 2] = [[1.0, 1.0, 0.0, 0.0]; 2];
+
+impl ShadowMap {
+    /// A VRAM shadow texture: 256² if it fits, else 128².
+    fn new() -> Option<ShadowMap> {
+        for size in [256u16, 128] {
+            // SAFETY: citro3d allocates the texture in VRAM; failures are reported.
+            unsafe {
+                let mut tex: Box<c3d::C3D_Tex> = Box::new(std::mem::zeroed());
+                if !c3d::C3D_TexInitShadow(&mut *tex, size, size) {
+                    continue;
+                }
+                c3d::C3D_TexSetFilter(&mut *tex, ctru::GPU_NEAREST, ctru::GPU_NEAREST);
+                c3d::C3D_TexSetWrap(&mut *tex, ctru::GPU_CLAMP_TO_EDGE, ctru::GPU_CLAMP_TO_EDGE);
+                let target = c3d::C3D_RenderTargetCreateFromTex(&mut *tex, ctru::GPU_TEXFACE_2D, 0, c3d::C3D_DEPTHTYPE { __i: -1 });
+                if target.is_null() {
+                    c3d::C3D_TexDelete(&mut *tex);
+                    continue;
+                }
+                goat_core::info!("shadow map: {size}×{size}");
+                return Some(ShadowMap { tex, target, size });
+            }
+        }
+        goat_core::warn!("shadow map: no VRAM left (blob shadows only)");
+        None
+    }
+}
 
 fn depth24() -> c3d::C3D_DEPTHTYPE {
     c3d::C3D_DEPTHTYPE { __e: ctru::GPU_RB_DEPTH24_STENCIL8 }
@@ -277,7 +332,7 @@ impl Citro3dBackend {
 
             // shaders
             let mut dvlbs = [std::ptr::null_mut(); PROGRAMS];
-            for (k, bin) in [SHADER, SHADER_REFLECT, SHADER_OUTLINE].iter().enumerate() {
+            for (k, bin) in [SHADER, SHADER_REFLECT, SHADER_OUTLINE, SHADER_RECEIVE, SHADER_SHADOW].iter().enumerate() {
                 let size = bin.len();
                 let words = ctru::linearAlloc(size) as *mut u32;
                 std::ptr::copy_nonoverlapping(bin.as_ptr(), words as *mut u8, size);
@@ -301,16 +356,17 @@ impl Citro3dBackend {
                 pt_color: std::mem::zeroed(),
             });
             // ctru-sys and citro3d-sys generate the same struct twice: same layout, cast.
-            let mut locs = [[-1i32; 5]; PROGRAMS];
+            let mut locs = [[-1i32; 7]; PROGRAMS];
             for k in 0..PROGRAMS {
                 let prog = &mut fixed.programs[k] as *mut c3d::shaderProgram_s as *mut ctru::shaderProgram_s;
                 let _ = ctru::shaderProgramInit(prog);
                 let _ = ctru::shaderProgramSetVsh(prog, (*dvlbs[k]).DVLE);
                 let vsh = fixed.programs[k].vertexShader as *mut ctru::shaderInstance_s;
-                for (j, name) in [c"projection", c"modelView", c"viewInv", c"outline", c"uvST"].iter().enumerate() {
+                for (j, name) in [c"projection", c"modelView", c"viewInv", c"outline", c"uvST", c"lightMtx", c"lightMvp"].iter().enumerate() {
                     locs[k][j] = ctru::shaderInstanceGetUniformLocation(vsh, name.as_ptr()) as i32;
                 }
-                if locs[k][0] < 0 || locs[k][1] < 0 {
+                let ok = if k == PROGRAM_CASTER { locs[k][LOC_LIGHT_MVP] >= 0 } else { locs[k][0] >= 0 && locs[k][1] >= 0 };
+                if !ok {
                     return Err(GfxError::Backend("shader uniforms not found".into()));
                 }
             }
@@ -371,6 +427,10 @@ impl Citro3dBackend {
                 view_grade: None,
                 probe_light: None,
                 uv_st: UV_IDENTITY,
+                shadow: ShadowMap::new(),
+                shadow_tex_mtx: None,
+                shadow_dir: None,
+                view_shadow: None,
                 stereo: false,
             })
         }
@@ -435,7 +495,7 @@ impl Citro3dBackend {
         // SAFETY: programs live in `fixed` (boxed); uniform uploads of stack values.
         unsafe {
             c3d::C3D_BindProgram(&mut self.fixed.programs[k]);
-            if let Some(p) = self.view_proj.as_ref() {
+            if let (Some(p), true) = (self.view_proj.as_ref(), self.loc_projection >= 0) {
                 c3d::C3D_FVUnifMtx4x4(ctru::GPU_VERTEX_SHADER, self.loc_projection, p);
             }
             let inv = self.locs[k][2];
@@ -459,7 +519,7 @@ impl Citro3dBackend {
 
     fn upload_uv_st(&mut self, st: [[f32; 4]; 2]) {
         self.uv_st = st;
-        let loc = self.locs.get(self.bound_program).map(|l| l[4]).unwrap_or(-1);
+        let loc = self.locs.get(self.bound_program).map(|l| l[LOC_UV_ST]).unwrap_or(-1);
         if loc >= 0 {
             // SAFETY: uniform upload to the bound program's registers.
             unsafe {
@@ -554,6 +614,7 @@ impl Citro3dBackend {
                 // SAFETY: as above.
                 unsafe {
                     c3d::C3D_LightEnable(light, true);
+                    c3d::C3D_LightShadowEnable(light, false);
                     let mut p: c3d::C3D_FVec = std::mem::zeroed();
                     p.c = [0.0, up.z, up.y, up.x];
                     c3d::C3D_LightPosition(light, &mut p);
@@ -582,8 +643,10 @@ impl Citro3dBackend {
                 _ => (v.view.transform_point3(l.position), 1.0),
             };
             // SAFETY: as above.
+            let shadowed = self.view_shadow == Some(i);
             unsafe {
                 c3d::C3D_LightEnable(light, true);
+                c3d::C3D_LightShadowEnable(light, shadowed);
                 let mut p: c3d::C3D_FVec = std::mem::zeroed();
                 p.c = [w, pos.z, pos.y, pos.x];
                 c3d::C3D_LightPosition(light, &mut p);
@@ -652,6 +715,7 @@ impl Citro3dBackend {
                 let d = v.view.transform_vector3(-p.direction).normalize_or(Vec3::Y);
                 let c = cap(p.color);
                 c3d::C3D_LightEnable(light, true);
+                c3d::C3D_LightShadowEnable(light, false);
                 let mut pos: c3d::C3D_FVec = std::mem::zeroed();
                 pos.c = [0.0, d.z, d.y, d.x];
                 c3d::C3D_LightPosition(light, &mut pos);
@@ -664,6 +728,107 @@ impl Citro3dBackend {
                 c3d::C3D_LightSpotEnable(light, false);
             }
         }
+    }
+
+    /// The shadow receiver program's model → shadow map matrix.
+    fn upload_light_mtx(&self, model: &Mat4) {
+        if self.bound_program != PROGRAM_RECEIVE {
+            return;
+        }
+        let (Some(m), loc) = (self.shadow_tex_mtx, self.locs[PROGRAM_RECEIVE][LOC_LIGHT_MTX]) else { return };
+        if loc >= 0 {
+            // SAFETY: uniform upload.
+            unsafe { c3d::C3D_FVUnifMtx4x4(ctru::GPU_VERTEX_SHADER, loc, &to_c3d(m * *model)) };
+        }
+    }
+
+    /// Draws the opaque objects of the first main-screen view with a directional shadow light
+    /// into the shadow map, from the light (orthographic, a square around where the camera
+    /// looks). Depth only: the PICA keeps the nearest depth per texel.
+    fn shadow_pass(&mut self, views: &[RenderView], stats: &mut FrameStats) {
+        self.shadow_tex_mtx = None;
+        self.shadow_dir = None;
+        if debug("noshadow") {
+            return;
+        }
+        let Some(v) = views.iter().find(|v| v.display == Display::Main && matches!(v.projection, Projection::Perspective { .. }) && v.lighting.shadow.is_some()) else { return };
+        let Some(l) = v.lighting.shadow.and_then(|i| v.lighting.lights.get(i)).filter(|l| l.kind == LightKind::Directional) else { return };
+        let Some((target, size)) = self.shadow.as_ref().map(|s| (s.target, s.size)) else { return };
+        let cam = v.view.inverse();
+        let focus = cam.w_axis.truncate() + cam.transform_vector3(Vec3::NEG_Z).normalize_or(Vec3::NEG_Z) * (SHADOW_EXTENT * 0.8);
+        let d = l.direction.normalize_or(Vec3::NEG_Y);
+        let up = if d.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
+        // snap the focus to whole texels in light space (no shimmering when the camera moves)
+        let raw = Mat4::look_at_rh(Vec3::ZERO, d, up);
+        let texel = 2.0 * SHADOW_EXTENT / size as f32;
+        let f = raw.transform_point3(focus);
+        let snapped = raw.inverse().transform_point3(Vec3::new((f.x / texel).floor() * texel, (f.y / texel).floor() * texel, f.z));
+        let view = Mat4::look_at_rh(snapped - d * (SHADOW_DEPTH * 0.5), snapped, up);
+        // casters: x, y in −1..1, z = −depth (the w-buffer writes depth = −z: 0 near .. 1 far)
+        let caster = Mat4::from_scale(Vec3::new(1.0 / SHADOW_EXTENT, 1.0 / SHADOW_EXTENT, 1.0 / SHADOW_DEPTH)) * view;
+        // receivers: (s, t) in 0..1, depth like the casters'
+        let tex = Mat4::from_translation(Vec3::new(0.5, 0.5, 0.0)) * Mat4::from_scale(Vec3::new(0.5 / SHADOW_EXTENT, 0.5 / SHADOW_EXTENT, -1.0 / SHADOW_DEPTH)) * view;
+        self.shadow_tex_mtx = Some(tex);
+        self.shadow_dir = Some(d);
+        self.use_program(PROGRAM_CASTER);
+        let loc = self.locs[PROGRAM_CASTER][LOC_LIGHT_MVP];
+        // SAFETY: draws into the shadow target with fixed-function state set here.
+        unsafe {
+            c3d::C3D_RenderTargetClear(target, c3d::C3D_CLEAR_COLOR, 0xFFFF_FFFF, 0);
+            c3d::C3D_FrameDrawOn(target);
+            c3d::C3D_SetViewport(0, 0, size as u32, size as u32);
+            c3d::C3D_FragOpMode(ctru::GPU_FRAGOPMODE_SHADOW);
+            c3d::C3D_DepthMap(false, -1.0, 0.0);
+            c3d::C3D_DepthTest(false, ctru::GPU_ALWAYS, ctru::GPU_WRITE_COLOR);
+            c3d::C3D_CullFace(ctru::GPU_CULL_NONE);
+            c3d::C3D_AlphaTest(false, ctru::GPU_ALWAYS, 0);
+            c3d::C3D_FogGasMode(ctru::GPU_NO_FOG, ctru::GPU_PLAIN_DENSITY, false);
+            c3d::C3D_LightEnvBind(std::ptr::null_mut());
+            c3d::C3D_TexBind(0, std::ptr::null_mut());
+            c3d::C3D_TexBind(1, std::ptr::null_mut());
+            // black: intensity (green) 0 = write the depth only
+            let env0 = c3d::C3D_GetTexEnv(0);
+            c3d::C3D_TexEnvInit(env0);
+            c3d::C3D_TexEnvSrc(env0, c3d::C3D_Both, ctru::GPU_CONSTANT, 0, 0);
+            c3d::C3D_TexEnvFunc(env0, c3d::C3D_Both, ctru::GPU_REPLACE);
+            c3d::C3D_TexEnvColor(env0, 0xFF00_0000);
+            for k in 1..6 {
+                c3d::C3D_TexEnvInit(c3d::C3D_GetTexEnv(k));
+            }
+            c3d::C3D_TexEnvBufUpdate(c3d::C3D_Both as i32, 0);
+        }
+        for it in &v.items {
+            let Some(m) = self.materials.get(it.material) else { continue };
+            if m.blend != BlendMode::Opaque || !m.depth_write || !m.depth_test {
+                continue;
+            }
+            let Some(mesh) = self.gpu_meshes.get(&it.mesh.index()) else { continue };
+            if mesh.index_count == 0 {
+                continue;
+            }
+            // outside the shadow square: skip
+            if let Some(b) = self.mesh_bounds(it.mesh) {
+                let c = view.transform_point3(it.model.transform_point3(b.center));
+                let s = it.model.x_axis.truncate().length().max(it.model.y_axis.truncate().length()).max(it.model.z_axis.truncate().length());
+                let r = b.radius * s;
+                if c.x.abs() > SHADOW_EXTENT + r || c.y.abs() > SHADOW_EXTENT + r || -c.z + r < 0.0 || -c.z - r > SHADOW_DEPTH {
+                    continue;
+                }
+            }
+            let mvp = to_c3d(caster * it.model);
+            let (vbo, ibo, count) = (mesh.vertices(), mesh.indices(), mesh.index_count);
+            // SAFETY: buffers live in linear memory owned by `gpu_meshes`.
+            unsafe {
+                c3d::C3D_FVUnifMtx4x4(ctru::GPU_VERTEX_SHADER, loc, &mvp);
+                let buf = c3d::C3D_GetBufInfo();
+                c3d::BufInfo_Init(buf);
+                c3d::BufInfo_Add(buf, vbo, Vertex::SIZE as isize, 4, 0x3210);
+                c3d::C3D_DrawElements(ctru::GPU_TRIANGLES, count, c3d::C3D_UNSIGNED_SHORT as i32, ibo);
+            }
+            stats.draw_calls += 1;
+        }
+        // SAFETY: back to normal fragment operations.
+        unsafe { c3d::C3D_FragOpMode(ctru::GPU_FRAGOPMODE_GL) };
     }
 
     /// Linear fog through the PICA fog unit (LUT indexed by depth: 0 = far, 1 = near).
@@ -747,23 +912,39 @@ impl Citro3dBackend {
         let gpu = |id: Option<TextureId>, cube: bool, s: &mut Self| id.filter(|t| s.cubes.contains(&t.index()) == cube).and_then(|t| s.gpu_textures.get_mut(&t.index())).map(|t| &mut *t.tex as *mut c3d::C3D_Tex);
         let env_map = if m.reflectivity > 0.0 { gpu(m.env_map, true, self) } else { None };
         let emissive_map = if env_map.is_none() { gpu(m.emissive_texture, false, self) } else { None };
-        self.use_program(if env_map.is_some() { 1 } else { 0 });
+        // shadow receivers: lit, opaque-ish standard materials without a cube / emission map
+        // (the shadow map takes texture unit 0)
+        let receive = self.view_shadow.is_some() && m.lighting == LightingModel::Lit && env_map.is_none() && emissive_map.is_none() && !debug("unlit");
+        self.use_program(if env_map.is_some() { 1 } else if receive { PROGRAM_RECEIVE } else { 0 });
         self.set_uv_st(UV_IDENTITY);
+        // SAFETY: light env / texture state owned by the backend.
+        unsafe {
+            if let (true, Some(s)) = (receive, self.shadow.as_mut()) {
+                c3d::C3D_TexBind(0, &mut *s.tex);
+                // a small bias against acne (fraction of the depth range)
+                c3d::C3D_TexShadowParams(false, 0.004);
+                c3d::C3D_LightEnvShadowMode(&mut self.fixed.light_env, c3d::GPU_SHADOW_PRIMARY | c3d::GPU_SHADOW_SECONDARY);
+                c3d::C3D_LightEnvShadowSel(&mut self.fixed.light_env, 0);
+            } else {
+                c3d::C3D_LightEnvShadowMode(&mut self.fixed.light_env, 0);
+            }
+        }
         self.set_procedural(m.procedural.as_ref());
         // SAFETY: texenv / light env / blend calls with valid pointers owned by the backend.
         unsafe {
             let tex = if debug("notex") { None } else { tex };
-            // units: standard = base 0 / emissive 1; reflect = cube 0 / base 1
-            let (base_unit, base_src) = if env_map.is_some() { (1, ctru::GPU_TEXTURE1) } else { (0, ctru::GPU_TEXTURE0) };
+            // units: standard = base 0 / emissive 1; reflect = cube 0 / base 1; receive = shadow 0 / base 1
+            let (base_unit, base_src) = if env_map.is_some() || receive { (1, ctru::GPU_TEXTURE1) } else { (0, ctru::GPU_TEXTURE0) };
             if let Some(t) = tex {
                 c3d::C3D_TexBind(base_unit, t);
             }
             match (env_map, emissive_map) {
                 (Some(c), _) => c3d::C3D_TexBind(0, c),
                 (None, Some(e)) => c3d::C3D_TexBind(1, e),
+                (None, None) if receive => {}
                 (None, None) => c3d::C3D_TexBind(1, std::ptr::null_mut()),
             }
-            if env_map.is_some() && tex.is_none() {
+            if (env_map.is_some() || receive) && tex.is_none() {
                 c3d::C3D_TexBind(1, std::ptr::null_mut());
             }
             let env0 = c3d::C3D_GetTexEnv(0);
@@ -861,6 +1042,8 @@ impl Citro3dBackend {
         use goat_gfx::{TevFunc, TevOperand, TevSource};
         self.use_program(0);
         self.set_uv_st(p.uv);
+        // SAFETY: light env owned by the backend.
+        unsafe { c3d::C3D_LightEnvShadowMode(&mut self.fixed.light_env, 0) };
         self.set_procedural(None);
         let tex = |i: usize, s: &mut Self| p.textures[i].and_then(|u| m.shader_textures.get(u).copied().flatten()).and_then(|t| s.gpu_textures.get_mut(&t.index())).map(|t| &mut *t.tex as *mut c3d::C3D_Tex);
         let (t0, t1) = (tex(0, self), tex(1, self));
@@ -1066,6 +1249,11 @@ impl Citro3dBackend {
         self.view_proj = Some(proj);
         let k = self.bound_program;
         self.bound_program = usize::MAX;
+        // the shadow map follows this view's shadow light (when it is the one the pass used)
+        self.view_shadow = match (v.lighting.shadow, self.shadow_dir) {
+            (Some(i), Some(d)) => v.lighting.lights.get(i).filter(|l| l.kind == LightKind::Directional && (l.direction.normalize_or(Vec3::NEG_Y) - d).length() < 1e-3).map(|_| i),
+            _ => None,
+        };
         self.use_program(k);
         self.set_lights(v);
         self.probe_light = None;
@@ -1095,6 +1283,7 @@ impl Citro3dBackend {
             }
             self.set_probe_light(v, it.light_probe);
             let mv = to_c3d(v.view * it.model);
+            self.upload_light_mtx(&it.model);
             // SAFETY: buffers live in linear memory owned by `gpu_meshes`.
             unsafe {
                 c3d::C3D_FVUnifMtx4x4(ctru::GPU_VERTEX_SHADER, self.loc_model_view, &mv);
@@ -1147,6 +1336,7 @@ impl Citro3dBackend {
                 let tex = m.texture.and_then(|t| self.gpu_textures.get_mut(&t.index())).map(|t| &mut *t.tex as *mut c3d::C3D_Tex);
                 self.set_material(&m, tex);
                 last_material = None;
+                self.upload_light_mtx(&it.model);
                 // SAFETY: one more draw of the same buffers (the program may have changed).
                 unsafe {
                     c3d::C3D_FVUnifMtx4x4(ctru::GPU_VERTEX_SHADER, self.loc_model_view, &mv);
@@ -1174,6 +1364,10 @@ impl Drop for Citro3dBackend {
         self.clear_quad = None;
         // SAFETY: tear down in reverse order of creation.
         unsafe {
+            if let Some(mut s) = self.shadow.take() {
+                c3d::C3D_RenderTargetDelete(s.target);
+                c3d::C3D_TexDelete(&mut *s.tex);
+            }
             for t in [self.top_ssaa, self.top_left, self.top_right, self.bottom] {
                 if !t.is_null() {
                     c3d::C3D_RenderTargetDelete(t);
@@ -1388,6 +1582,7 @@ impl GraphicsBackend for Citro3dBackend {
         }
         self.bound_program = usize::MAX;
         self.view_proj = None;
+        self.shadow_pass(views, &mut stats);
         self.use_program(0);
         let trace = debug("logstereo") && self.stereo;
         if trace {

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "entities": [
+    { "id": 1, "name": "Render Settings", "components": { "RenderSettings": { "ambient": "#262a36" } } },
+    { "id": 2, "name": "Main Camera", "components": {
+        "Transform": { "position": [0, 5.5, 9], "euler": [-28, 0, 0] },
+        "Camera": { "projection": { "perspective": { "fov": 55, "near": 0.1, "far": 100 } }, "clear": "#10131a" } } },
+    { "id": 3, "name": "Sun", "components": { "Transform": { "euler": [-50, 35, 0] }, "DirectionalLight": { "color": "#fff4e0", "intensity": 1.0, "mode": "realtime" } } },
+    { "id": 4, "name": "Ground", "components": {
+        "Transform": { "scale": [2, 1, 2] },
+        "MeshRenderer": { "mesh": "builtin:plane", "material": "materials/matte.mat.json" } } },
+    { "id": 5, "name": "Cube", "components": {
+        "Transform": { "position": [-2.5, 0.75, 0], "euler": [0, 30, 0], "scale": [1.5, 1.5, 1.5] },
+        "MeshRenderer": { "mesh": "builtin:cube", "material": "materials/blue.mat.json" } } },
+    { "id": 6, "name": "Pillar", "components": {
+        "Transform": { "position": [0.5, 1.5, -1.5], "scale": [0.6, 3, 0.6] },
+        "MeshRenderer": { "mesh": "builtin:cube", "material": "materials/matte.mat.json" } } },
+    { "id": 7, "name": "Floating Ball", "components": {
+        "Transform": { "position": [2.6, 1.8, 1.0] },
+        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/blue.mat.json" } } }
+  ]
+}
