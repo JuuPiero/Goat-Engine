@@ -69,6 +69,8 @@ struct GpuMaterial {
     texture: Option<TextureId>,
     /// A custom shader's parameter block (materials without one bind a shared zero block).
     params: Option<wgpu::Buffer>,
+    /// The same bindings with a reflection probe's cube map instead of the env map.
+    probe_groups: HashMap<u32, wgpu::BindGroup>,
 }
 
 struct GpuShader {
@@ -224,6 +226,10 @@ struct ObjectUniform {
     procedural: [f32; 4],
     proc_a: [f32; 4],
     proc_b: [f32; 4],
+    /// Light probes: ambient (w = 1 when on), direction, color.
+    probe_ambient: [f32; 4],
+    probe_dir: [f32; 4],
+    probe_color: [f32; 4],
 }
 
 const UNIFORM_ALIGN: u64 = 256;
@@ -640,6 +646,17 @@ impl WgpuBackend {
     }
 
     fn material_bind_group(&self, m: &MaterialDesc) -> (wgpu::BindGroup, Option<wgpu::Buffer>) {
+        let custom = m.shader.is_some_and(|s| self.gpu_shaders.contains_key(&s.index()));
+        let params = custom.then(|| {
+            let b = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("shader params"), size: PARAMS_SIZE, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            self.queue.write_buffer(&b, 0, &self.params_bytes(m));
+            b
+        });
+        (self.bind_group_with(m, m.env_map, params.as_ref()), params)
+    }
+
+    /// A material's bindings with `env` as the cube map.
+    fn bind_group_with(&self, m: &MaterialDesc, env: Option<TextureId>, params: Option<&wgpu::Buffer>) -> wgpu::BindGroup {
         let get = |id: Option<TextureId>, cube: bool| id.filter(|t| self.cubes.contains(&t.index()) == cube).and_then(|t| self.gpu_textures.get(&t.index()));
         let custom = m.shader.is_some_and(|s| self.gpu_shaders.contains_key(&s.index()));
         // custom shaders: units 0..4 from shader_textures; standard: base + emissive
@@ -649,13 +666,8 @@ impl WgpuBackend {
         } else {
             (get(m.texture, false).unwrap_or(&self.white), get(m.emissive_texture, false).unwrap_or(&self.white), &self.white, &self.white)
         };
-        let c = get(m.env_map, true).unwrap_or(&self.black_cube);
-        let params = custom.then(|| {
-            let b = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("shader params"), size: PARAMS_SIZE, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-            self.queue.write_buffer(&b, 0, &self.params_bytes(m));
-            b
-        });
-        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let c = get(env, true).unwrap_or(&self.black_cube);
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material"),
             layout: &self.material_layout,
             entries: &[
@@ -664,12 +676,11 @@ impl WgpuBackend {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&e.view) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&c.view) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&c.sampler) },
-                wgpu::BindGroupEntry { binding: 5, resource: params.as_ref().unwrap_or(&self.zero_params).as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: params.unwrap_or(&self.zero_params).as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&t2.view) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&t3.view) },
             ],
-        });
-        (group, params)
+        })
     }
 
     #[cfg(feature = "screenshot")]
@@ -921,7 +932,7 @@ impl GraphicsBackend for WgpuBackend {
     fn create_material(&mut self, mat: &MaterialDesc) -> Result<MaterialId, GfxError> {
         let (bind_group, params) = self.material_bind_group(mat);
         let id = self.materials.insert(mat.clone());
-        self.gpu_materials.insert(id.index(), GpuMaterial { desc: mat.clone(), bind_group, texture: mat.texture, params });
+        self.gpu_materials.insert(id.index(), GpuMaterial { desc: mat.clone(), bind_group, texture: mat.texture, params, probe_groups: HashMap::new() });
         Ok(id)
     }
 
@@ -943,6 +954,7 @@ impl GraphicsBackend for WgpuBackend {
                 Some((b, p)) => {
                     g.bind_group = b;
                     g.params = p;
+                    g.probe_groups.clear();
                 }
                 // same textures: only the parameter values changed
                 None => {
@@ -1017,7 +1029,7 @@ impl GraphicsBackend for WgpuBackend {
             clear_off: Option<u32>,
             clear_depth: bool,
             frame_off: u32,
-            objects: Vec<(MeshId, MaterialId, u32)>,
+            objects: Vec<(MeshId, MaterialId, u32, Option<TextureId>)>,
         }
         let lin = self.config.format.is_srgb();
         // the shadow map follows the first perspective view with a shadow-casting light
@@ -1085,18 +1097,35 @@ impl GraphicsBackend for WgpuBackend {
                     procedural: d.procedural.map(|p| [p.kind as u8 as f32 + 1.0, p.scale, p.speed, v.time]).unwrap_or([0.0; 4]),
                     proc_a: d.procedural.map(|p| c4(p.color_a, lin)).unwrap_or([0.0; 4]),
                     proc_b: d.procedural.map(|p| c4(p.color_b, lin)).unwrap_or([0.0; 4]),
-                    flags: [if d.lighting == LightingModel::Lit { 1.0 } else { 0.0 }, if d.fog { 1.0 } else { 0.0 }, if d.env_map.is_some() { d.reflectivity } else { 0.0 }, if d.alpha_dither { -d.alpha_cutoff } else { d.alpha_cutoff }],
+                    flags: [if d.lighting == LightingModel::Lit { 1.0 } else { 0.0 }, if d.fog { 1.0 } else { 0.0 }, if d.env_map.is_some() || it.reflection.is_some() { d.reflectivity } else { 0.0 }, if d.alpha_dither { -d.alpha_cutoff } else { d.alpha_cutoff }],
+                    probe_ambient: it.light_probe.map(|p| { let c = c4(p.ambient, lin); [c[0], c[1], c[2], 1.0] }).unwrap_or([0.0; 4]),
+                    probe_dir: it.light_probe.map(|p| p.direction.normalize_or(Vec3::NEG_Y).extend(0.0).into()).unwrap_or([0.0; 4]),
+                    probe_color: it.light_probe.map(|p| c4(p.color, lin)).unwrap_or([0.0; 4]),
                 };
-                objects.push((it.mesh, it.material, put(bytemuck::bytes_of(&ou))));
+                // a reflection probe's cube map (only reflective materials care)
+                let env = it.reflection.filter(|r| d.reflectivity > 0.0 && Some(*r) != d.env_map && self.cubes.contains(&r.index()));
+                objects.push((it.mesh, it.material, put(bytemuck::bytes_of(&ou)), env));
             }
             planned.push(Planned { rect, clear_off, clear_depth: v.clear_depth, frame_off, objects });
         }
         self.queue.write_buffer(&self.uniforms, 0, &data);
 
         // pipelines for every material drawn
-        let mats: Vec<MaterialDesc> = planned.iter().flat_map(|p| p.objects.iter()).filter_map(|(_, m, _)| self.gpu_materials.get(&m.index()).map(|g| g.desc.clone())).collect();
+        let mats: Vec<MaterialDesc> = planned.iter().flat_map(|p| p.objects.iter()).filter_map(|(_, m, _, _)| self.gpu_materials.get(&m.index()).map(|g| g.desc.clone())).collect();
         for m in &mats {
             self.pipeline(m);
+        }
+        // bind groups with reflection probes' cube maps
+        let wanted: Vec<(MaterialId, TextureId)> = planned.iter().flat_map(|p| p.objects.iter()).filter_map(|&(_, m, _, env)| env.map(|e| (m, e))).collect();
+        for (m, e) in wanted {
+            let Some(g) = self.gpu_materials.get(&m.index()) else { continue };
+            if g.probe_groups.contains_key(&e.index()) {
+                continue;
+            }
+            let group = self.bind_group_with(&g.desc, Some(e), g.params.as_ref());
+            if let Some(g) = self.gpu_materials.get_mut(&m.index()) {
+                g.probe_groups.insert(e.index(), group);
+            }
         }
 
         let frame_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1156,7 +1185,7 @@ impl GraphicsBackend for WgpuBackend {
                 if let Some(p) = planned.get(plan_index) {
                     pass.set_pipeline(&self.shadow_pipeline);
                     pass.set_bind_group(0, &frame_bg, &[p.frame_off]);
-                    for &(mesh, material, off) in &p.objects {
+                    for &(mesh, material, off, _) in &p.objects {
                         let (Some(gm), Some(mat)) = (self.gpu_meshes.get(&mesh.index()), self.gpu_materials.get(&material.index())) else { continue };
                         if gm.index_count == 0 || mat.desc.blend != BlendMode::Opaque || !mat.desc.depth_write {
                             continue;
@@ -1205,17 +1234,18 @@ impl GraphicsBackend for WgpuBackend {
                     pass.draw(0..3, 0..1);
                 }
                 pass.set_bind_group(0, &frame_bg, &[p.frame_off]);
-                for &(mesh, material, off) in &p.objects {
+                for &(mesh, material, off, env) in &p.objects {
                     let (Some(gm), Some(mat)) = (self.gpu_meshes.get(&mesh.index()), self.gpu_materials.get(&material.index())) else { continue };
                     if gm.index_count == 0 {
                         continue;
                     }
+                    let material_group = env.and_then(|e| mat.probe_groups.get(&e.index())).unwrap_or(&mat.bind_group);
                     let shader = mat.desc.shader.filter(|s| self.gpu_shaders.contains_key(&s.index())).map(|s| s.index() + 1).unwrap_or(0);
                     let key = PipelineKey { blend: mat.desc.blend as u8, cull: mat.desc.cull as u8, depth_write: mat.desc.depth_write, depth_test: mat.desc.depth_test, outline: false, shader };
                     let Some(pipe) = self.pipelines.get(&key) else { continue };
                     pass.set_pipeline(pipe);
                     pass.set_bind_group(1, &object_bg, &[off]);
-                    pass.set_bind_group(2, &mat.bind_group, &[]);
+                    pass.set_bind_group(2, material_group, &[]);
                     pass.set_bind_group(3, &self.shadow_bind, &[]);
                     pass.set_vertex_buffer(0, gm.vertices.slice(..));
                     pass.set_index_buffer(gm.indices.slice(..), wgpu::IndexFormat::Uint16);

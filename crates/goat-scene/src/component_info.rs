@@ -15,8 +15,20 @@ pub(crate) fn describe_engine_components(r: &mut SceneRegistry) {
         "hinge": { "axis": [0, 1, 0], "limits": null, "motor_speed": 0, "motor_force": 0 },
         "slider": { "axis": [1, 0, 0], "limits": null },
         "spring": { "rest_length": 1, "stiffness": 20, "damping": 1 },
-        "rope": { "max_length": 2 }
+        "rope": { "max_length": 2 },
+        "character": { "axis": [1, 0, 0], "swing_axis": [0, 1, 0], "low_twist": -20, "high_twist": 70, "swing1": 40, "swing2": 40 },
+        "configurable": {
+            "axis": [1, 0, 0], "secondary_axis": [0, 1, 0],
+            "x_motion": "free", "y_motion": "free", "z_motion": "free",
+            "angular_x_motion": "free", "angular_y_motion": "free", "angular_z_motion": "free",
+            "linear_limit": 1, "low_angular_x_limit": -45, "high_angular_x_limit": 45, "angular_y_limit": 45, "angular_z_limit": 45,
+            "target_position": [0, 0, 0], "position_spring": 0, "position_damper": 0,
+            "target_rotation": [0, 0, 0], "rotation_spring": 0, "rotation_damper": 0
+        }
     });
+    const MOTION: &[&str] = &["locked", "limited", "free"];
+    const LIGHT_MODE: &[&str] = &["realtime", "mixed", "baked"];
+    const LIGHT_MODE_TIP: &str = "realtime: not baked · mixed: baked into static batches + real time for moving objects · baked: static batches and light probes only (no hardware light)";
     let joint2d_kinds = json!({
         "fixed": null,
         "hinge": { "limits": null, "motor_speed": 0, "motor_torque": 0 },
@@ -41,9 +53,17 @@ pub(crate) fn describe_engine_components(r: &mut SceneRegistry) {
                 .tip("depth", "Cameras render in increasing depth order")
                 .tip("viewport", "Normalized rect x, y, width, height"),
         ),
-        ("DirectionalLight", I::new("Rendering/Directional Light").range("intensity", 0.0, 8.0)),
-        ("PointLight", I::new("Rendering/Point Light").range("intensity", 0.0, 8.0)),
-        ("SpotLight", I::new("Rendering/Spot Light").range("intensity", 0.0, 8.0).range("spot_angle", 1.0, 179.0).range("inner_spot_angle", 0.0, 179.0)),
+        ("DirectionalLight", I::new("Rendering/Directional Light").range("intensity", 0.0, 8.0).options("mode", LIGHT_MODE).tip("mode", LIGHT_MODE_TIP)),
+        ("PointLight", I::new("Rendering/Point Light").range("intensity", 0.0, 8.0).options("mode", LIGHT_MODE).tip("mode", LIGHT_MODE_TIP)),
+        ("SpotLight", I::new("Rendering/Spot Light").range("intensity", 0.0, 8.0).range("spot_angle", 1.0, 179.0).range("inner_spot_angle", 0.0, 179.0).options("mode", LIGHT_MODE).tip("mode", LIGHT_MODE_TIP)),
+        ("LightProbeGroup", I::new("Rendering/Light Probe Group").tip("positions", "Probe positions (local). They capture the Baked lights + ambient for moving objects")),
+        (
+            "ReflectionProbe",
+            I::new("Rendering/Reflection Probe")
+                .defaults(json!({ "size": [10, 10, 10], "center": [0, 0, 0], "cubemap": "builtin:sky", "importance": 1 }))
+                .asset("cubemap", "cubemap")
+                .tip("size", "Objects whose center is inside this box (world axes) reflect the probe's cube map"),
+        ),
         ("RenderSettings", I::new("Rendering/Render Settings").kind("ambient", "color").tip("fog", "null = no fog; { color, start, end }")),
         (
             "MeshRenderer",
@@ -89,7 +109,23 @@ pub(crate) fn describe_engine_components(r: &mut SceneRegistry) {
                 .range("friction", 0.0, 1.0)
                 .range("restitution", 0.0, 1.0),
         ),
-        ("Joint", I::new("Physics/Joint").variants("kind", joint_kinds).kind("connected", "entity")),
+        (
+            "Joint",
+            I::new("Physics/Joint")
+                .variants("kind", joint_kinds)
+                .kind("connected", "entity")
+                .options("kind.configurable.x_motion", MOTION)
+                .options("kind.configurable.y_motion", MOTION)
+                .options("kind.configurable.z_motion", MOTION)
+                .options("kind.configurable.angular_x_motion", MOTION)
+                .options("kind.configurable.angular_y_motion", MOTION)
+                .options("kind.configurable.angular_z_motion", MOTION)
+                .range("kind.character.low_twist", -180.0, 180.0)
+                .range("kind.character.high_twist", -180.0, 180.0)
+                .range("kind.character.swing1", 0.0, 180.0)
+                .range("kind.character.swing2", 0.0, 180.0)
+                .tip("kind.configurable.target_position", "Like Unity: the body is pulled to −target (the anchor's position seen from the body)"),
+        ),
         ("CharacterController", I::new("Physics/Character Controller").kind("layer", "layer").range("slope_limit", 0.0, 90.0)),
         ("Rigidbody2D", I::new("Physics 2D/Rigidbody 2D").options("body_type", &["Dynamic", "Kinematic", "Static"])),
         (

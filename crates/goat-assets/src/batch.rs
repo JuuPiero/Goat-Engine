@@ -51,24 +51,11 @@ struct SceneLights {
 
 impl SceneLights {
     fn gather(ctx: &Context) -> Self {
-        use goat_runtime::{DirectionalLight, PointLight, RenderSettings, SpotLight};
+        use goat_runtime::RenderSettings;
         let v = |c: goat_core::Color, k: f32| Vec3::new(c.r, c.g, c.b) * k;
         let s = ctx.world.query::<&RenderSettings>().iter().next().map(|(_, s)| *s).unwrap_or_default();
-        let fwd = |g: &GlobalTransform| g.0.transform_vector3(Vec3::NEG_Z).normalize_or(Vec3::NEG_Z);
-        let mut lights = Vec::new();
-        let col = |c: goat_core::Color, i: f32| goat_core::Color::rgba(c.r * i, c.g * i, c.b * i, 1.0);
-        for (_, (l, g)) in ctx.world.query::<(&DirectionalLight, &GlobalTransform)>().iter() {
-            lights.push(goat_gfx::Light { kind: goat_gfx::LightKind::Directional, position: g.0.w_axis.truncate(), direction: fwd(g), color: col(l.color, l.intensity), range: 0.0 });
-        }
-        for (_, (l, g)) in ctx.world.query::<(&PointLight, &GlobalTransform)>().iter() {
-            lights.push(goat_gfx::Light { kind: goat_gfx::LightKind::Point, position: g.0.w_axis.truncate(), direction: fwd(g), color: col(l.color, l.intensity), range: l.range.max(0.01) });
-        }
-        for (_, (l, g)) in ctx.world.query::<(&SpotLight, &GlobalTransform)>().iter() {
-            let half = |deg: f32| (deg.clamp(0.1, 179.0) * 0.5).to_radians().cos();
-            let cos_outer = half(l.spot_angle);
-            let cos_inner = half(l.inner_spot_angle.min(l.spot_angle)).max(cos_outer + 1e-3);
-            lights.push(goat_gfx::Light { kind: goat_gfx::LightKind::Spot { cos_inner, cos_outer }, position: g.0.w_axis.truncate(), direction: fwd(g), color: col(l.color, l.intensity), range: l.range.max(0.01) });
-        }
+        // Mixed and Baked lights (Realtime ones aren't baked, like Unity's)
+        let lights = goat_runtime::world_lights(ctx.world).into_iter().filter(|(_, mode, _)| mode.baked_into_statics()).map(|(l, _, _)| l).collect();
         SceneLights { ambient: v(s.ambient, 1.0), ground: s.ambient_ground.map(|g| v(g, 1.0)), lights }
     }
 
@@ -229,7 +216,7 @@ mod bake_tests {
             let mat = crate::material(ctx, "builtin:default").unwrap();
             ctx.world.spawn((RenderSettings { ambient: goat_core::Color::rgb(0.2, 0.2, 0.2), ambient_ground: None, fog: None, post: None },));
             // sun straight down
-            ctx.world.spawn((Transform::default().with_rotation(goat_core::math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)), DirectionalLight { color: goat_core::Color::WHITE, intensity: 0.5, shadows: false }));
+            ctx.world.spawn((Transform::default().with_rotation(goat_core::math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)), DirectionalLight { color: goat_core::Color::WHITE, intensity: 0.5, shadows: false, ..Default::default() }));
             let root = ctx.world.spawn((Transform::default(), StaticBatching { bake_lighting: true }));
             ctx.world.spawn((Transform::default(), Parent(root), MeshRenderer::new(mesh, mat)));
         }

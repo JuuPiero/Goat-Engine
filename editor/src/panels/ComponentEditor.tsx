@@ -139,12 +139,14 @@ const ASSET_EXT: Record<string, RegExp> = {
   scene: /\.scene\.json$/i,
   scriptableObject: /\.asset\.json$/i,
   shader: /\.shader$/i,
+  cubemap: /\.cubemap\.json$/i,
 };
-const KIND_LABEL: Record<string, string> = { scriptableObject: 'ScriptableObject', script: 'Script', controller: 'Animator Controller' };
+const KIND_LABEL: Record<string, string> = { scriptableObject: 'ScriptableObject', script: 'Script', controller: 'Animator Controller', cubemap: 'Cubemap' };
 const BUILTINS: Record<string, string[]> = {
   mesh: ['builtin:cube', 'builtin:sphere', 'builtin:capsule', 'builtin:cylinder', 'builtin:plane', 'builtin:quad'],
   material: ['builtin:default'],
   texture: ['builtin:white'],
+  cubemap: ['builtin:sky'],
 };
 
 /// An asset reference: drop an asset from the Project panel, or pick one (⊙).

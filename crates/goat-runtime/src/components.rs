@@ -173,6 +173,44 @@ pub fn layer_mask(layers: &[u8]) -> u32 {
     layers.iter().fold(0, |m, &l| m | (1u32 << l.min(31)))
 }
 
+/// How a light is used (Unity's Light ▸ Mode).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LightMode {
+    /// Lights everything at run time; not baked into static batches.
+    Realtime,
+    /// Baked into static batches (`StaticBatching::bake_lighting`) and real time for moving
+    /// objects (the engine's behaviour before light modes existed).
+    #[default]
+    Mixed,
+    /// Only baked: into static batches and into light probes ([`LightProbeGroup`]) for moving
+    /// objects. Costs no hardware light at run time.
+    Baked,
+}
+
+impl LightMode {
+    pub fn realtime(self) -> bool {
+        self != LightMode::Baked
+    }
+    /// Baked into static batches.
+    pub fn baked_into_statics(self) -> bool {
+        self != LightMode::Realtime
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            LightMode::Realtime => "realtime",
+            LightMode::Mixed => "mixed",
+            LightMode::Baked => "baked",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        match s {
+            "realtime" => LightMode::Realtime,
+            "baked" => LightMode::Baked,
+            _ => LightMode::Mixed,
+        }
+    }
+}
+
 /// Parallel light along the entity's forward (-Z), like the sun.
 #[derive(Clone, Copy, Debug)]
 pub struct DirectionalLight {
@@ -180,11 +218,12 @@ pub struct DirectionalLight {
     pub intensity: f32,
     /// Casts shadow maps (the first such light; desktop — the 3DS uses blob shadows).
     pub shadows: bool,
+    pub mode: LightMode,
 }
 
 impl Default for DirectionalLight {
     fn default() -> Self {
-        DirectionalLight { color: Color::rgb(1.0, 0.97, 0.9), intensity: 1.0, shadows: true }
+        DirectionalLight { color: Color::rgb(1.0, 0.97, 0.9), intensity: 1.0, shadows: true, mode: LightMode::Mixed }
     }
 }
 
@@ -194,11 +233,12 @@ pub struct PointLight {
     pub color: Color,
     pub intensity: f32,
     pub range: f32,
+    pub mode: LightMode,
 }
 
 impl Default for PointLight {
     fn default() -> Self {
-        PointLight { color: Color::WHITE, intensity: 1.0, range: 10.0 }
+        PointLight { color: Color::WHITE, intensity: 1.0, range: 10.0, mode: LightMode::Mixed }
     }
 }
 
@@ -211,11 +251,49 @@ pub struct SpotLight {
     pub range: f32,
     pub spot_angle: f32,
     pub inner_spot_angle: f32,
+    pub mode: LightMode,
 }
 
 impl Default for SpotLight {
     fn default() -> Self {
-        SpotLight { color: Color::WHITE, intensity: 1.0, range: 10.0, spot_angle: 30.0, inner_spot_angle: 20.0 }
+        SpotLight { color: Color::WHITE, intensity: 1.0, range: 10.0, spot_angle: 30.0, inner_spot_angle: 20.0, mode: LightMode::Mixed }
+    }
+}
+
+/// Light probes (Unity's Light Probe Group): points (in the entity's space) where the
+/// [`LightMode::Baked`] lights and the ambient light are captured. Moving objects get the light of
+/// the nearest probes (blended by distance) as an ambient color plus one directional light.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LightProbeGroup {
+    pub positions: Vec<Vec3>,
+}
+
+impl Default for LightProbeGroup {
+    fn default() -> Self {
+        // Unity's default: the 8 corners of a 1 m cube
+        let mut positions = Vec::new();
+        for i in 0..8 {
+            positions.push(Vec3::new(if i & 1 == 0 { -0.5 } else { 0.5 }, if i & 2 == 0 { -0.5 } else { 0.5 }, if i & 4 == 0 { -0.5 } else { 0.5 }));
+        }
+        LightProbeGroup { positions }
+    }
+}
+
+/// A reflection probe (Unity's Reflection Probe): objects whose center is inside the box
+/// (`center` ± `size` / 2 from the entity, world axes) reflect `cubemap` instead of their
+/// material's env map (materials with reflectivity > 0). Overlapping probes: higher
+/// `importance` wins, then the smaller box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReflectionProbe {
+    pub size: Vec3,
+    pub center: Vec3,
+    pub cubemap: Option<goat_gfx::TextureId>,
+    pub importance: i32,
+}
+
+impl Default for ReflectionProbe {
+    fn default() -> Self {
+        ReflectionProbe { size: Vec3::splat(10.0), center: Vec3::ZERO, cubemap: None, importance: 1 }
     }
 }
 

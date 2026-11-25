@@ -310,12 +310,12 @@ impl Game for HelloGame {
         world.spawn((
             Name("Lamp".into()),
             Transform::from_position(Vec3::new(-3.2, 1.0, -2.6)),
-            PointLight { color: if LIGHT_TEST { Color::rgb(1.0, 0.0, 0.0) } else { Color::hex(0xff8a2a) }, intensity: 1.4, range: 4.5 },
+            PointLight { color: if LIGHT_TEST { Color::rgb(1.0, 0.0, 0.0) } else { Color::hex(0xff8a2a) }, intensity: 1.4, range: 4.5, ..Default::default() },
             Scripts::new().with(Bob { base: 0.0, phase: 0.7 }),
         ));
         let mut spot = Transform::from_position(Vec3::new(2.2, 4.5, -0.8));
         spot.look_at(Vec3::new(2.2, 0.0, -0.8), Vec3::Z);
-        world.spawn((Name("Spot".into()), spot, SpotLight { color: if LIGHT_TEST { Color::rgb(0.0, 1.0, 0.0) } else { Color::hex(0x6ff0ff) }, intensity: 2.0, range: 8.0, spot_angle: 50.0, inner_spot_angle: 30.0 }));
+        world.spawn((Name("Spot".into()), spot, SpotLight { color: if LIGHT_TEST { Color::rgb(0.0, 1.0, 0.0) } else { Color::hex(0x6ff0ff) }, intensity: 2.0, range: 8.0, spot_angle: 50.0, inner_spot_angle: 30.0, ..Default::default() }));
         world.spawn((
             Name("Marker".into()),
             Transform::from_position(Vec3::new(0.0, 0.5, -3.0)).with_scale(Vec3::new(1.6, 1.0, 0.1)),

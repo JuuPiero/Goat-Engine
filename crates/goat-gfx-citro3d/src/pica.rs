@@ -157,6 +157,8 @@ pub struct Citro3dBackend {
     view_time: f32,
     /// Color grading of the view (exposure × tint, texenv stage 4).
     view_grade: Option<Color>,
+    /// The light probe light currently set over the view's lights (None = the view's ambient).
+    probe_light: Option<LightProbeSample>,
     stereo: bool,
 }
 
@@ -363,6 +365,7 @@ impl Citro3dBackend {
                 view_fog: false,
                 view_time: 0.0,
                 view_grade: None,
+                probe_light: None,
                 stereo: false,
             })
         }
@@ -589,6 +592,48 @@ impl Citro3dBackend {
                 } else {
                     c3d::C3D_LightSpotEnable(light, false);
                 }
+            }
+        }
+    }
+
+    /// An object's light probe light: its ambient replaces the view's (hemisphere included) and its
+    /// directional light takes the first slot after the view's lights (folded into the ambient
+    /// when all 8 are used). `None` puts the view's lighting back.
+    fn set_probe_light(&mut self, v: &RenderView, probe: Option<LightProbeSample>) {
+        if self.probe_light == probe {
+            return;
+        }
+        self.probe_light = probe;
+        let Some(p) = probe else {
+            self.set_lights(v);
+            return;
+        };
+        let used = v.lighting.lights.len().min(MAX_LIGHTS);
+        let fixed = &mut *self.fixed;
+        let cap = |c: Color| {
+            let peak = c.r.max(c.g).max(c.b).max(1.0);
+            Color::rgb(c.r / peak, c.g / peak, c.b / peak)
+        };
+        let amb = if used < MAX_LIGHTS { p.ambient } else { Color::rgb(p.ambient.r + p.color.r * 0.5, p.ambient.g + p.color.g * 0.5, p.ambient.b + p.color.b * 0.5) };
+        let amb = cap(amb);
+        // SAFETY: lights live in `fixed` (boxed).
+        unsafe {
+            c3d::C3D_LightEnvAmbient(&mut fixed.light_env, amb.r, amb.g, amb.b);
+            if used < MAX_LIGHTS {
+                let light: *mut c3d::C3D_Light = &mut fixed.lights[used];
+                let d = v.view.transform_vector3(-p.direction).normalize_or(Vec3::Y);
+                let c = cap(p.color);
+                c3d::C3D_LightEnable(light, true);
+                let mut pos: c3d::C3D_FVec = std::mem::zeroed();
+                pos.c = [0.0, d.z, d.y, d.x];
+                c3d::C3D_LightPosition(light, &mut pos);
+                c3d::C3D_LightDiffuse(light, c.r, c.g, c.b);
+                c3d::C3D_LightSpecular0(light, 0.0, 0.0, 0.0);
+                let s1 = if used == 0 { 1.0 } else { 0.0 };
+                c3d::C3D_LightSpecular1(light, s1, s1, s1);
+                c3d::C3D_LightAmbient(light, 0.0, 0.0, 0.0);
+                c3d::C3D_LightDistAttnEnable(light, false);
+                c3d::C3D_LightSpotEnable(light, false);
             }
         }
     }
@@ -981,6 +1026,7 @@ impl Citro3dBackend {
         self.bound_program = usize::MAX;
         self.use_program(k);
         self.set_lights(v);
+        self.probe_light = None;
         self.set_fog(v);
         self.view_time = v.time;
         self.view_grade = v.post.map(|p| Color::rgba((p.tint.r * p.exposure).min(1.0), (p.tint.g * p.exposure).min(1.0), (p.tint.b * p.exposure).min(1.0), 1.0));
@@ -994,12 +1040,18 @@ impl Citro3dBackend {
             if count == 0 {
                 continue;
             }
-            if last_material != Some(it.material) {
-                let Some(m) = self.materials.get(it.material).cloned() else { continue };
+            // a reflection probe's cube map replaces the env map of reflective materials
+            let env = it.reflection.filter(|r| self.cubes.contains(&r.index()) && self.materials.get(it.material).is_some_and(|m| m.reflectivity > 0.0 && m.tev.is_none()));
+            if last_material != Some((it.material, env)) {
+                let Some(mut m) = self.materials.get(it.material).cloned() else { continue };
+                if env.is_some() {
+                    m.env_map = env;
+                }
                 let tex = m.texture.and_then(|t| self.gpu_textures.get_mut(&t.index())).map(|t| &mut *t.tex as *mut c3d::C3D_Tex);
                 self.set_material(&m, tex);
-                last_material = Some(it.material);
+                last_material = Some((it.material, env));
             }
+            self.set_probe_light(v, it.light_probe);
             let mv = to_c3d(v.view * it.model);
             // SAFETY: buffers live in linear memory owned by `gpu_meshes`.
             unsafe {

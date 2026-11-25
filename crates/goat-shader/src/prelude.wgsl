@@ -38,6 +38,9 @@ struct Object {
     procedural: vec4<f32>,  // x = kind + 1 (1 water, 2 fire, 3 noise; 0 none), y = scale, z = speed, w = time
     proc_a: vec4<f32>,
     proc_b: vec4<f32>,
+    probe_ambient: vec4<f32>,  // light probes: ambient, w = 1 when the object has probe light
+    probe_dir: vec4<f32>,      // xyz the direction the probe light travels
+    probe_color: vec4<f32>,
 };
 
 /// A compiled shader's material properties (colors, vectors, floats, texture tiling / offset).
@@ -133,6 +136,10 @@ fn goat_light(world_pos: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>, specul
     if (frame.ambient_ground.w > 0.5) {
         // hemisphere: ground color from below to sky (ambient) from above
         diffuse = mix(frame.ambient_ground.rgb, frame.ambient.rgb, 0.5 + 0.5 * n.y);
+    }
+    if (object.probe_ambient.w > 0.5) {
+        // light probes: their ambient + one directional light replace the view's ambient
+        diffuse = object.probe_ambient.rgb + object.probe_color.rgb * max(dot(n, -object.probe_dir.xyz), 0.0);
     }
     var specular = vec3<f32>(0.0);
     let count = u32(frame.camera_pos.w);

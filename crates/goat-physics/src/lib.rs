@@ -25,7 +25,7 @@ mod joint;
 pub mod script;
 
 pub use character::{CharacterController, CollisionFlags};
-pub use joint::{Joint, JointKind};
+pub use joint::{ConfigurableJoint, Joint, JointKind, Motion};
 #[cfg(feature = "render")]
 pub use blob::{BlobShadow, BlobShadowPlugin};
 
@@ -884,6 +884,50 @@ mod tests {
         w.remove_one::<Joint>(bob).unwrap();
         p.step(&mut w, 1.0 / 60.0);
         assert_eq!(p.joint_count(), 1);
+    }
+
+    #[test]
+    fn character_and_configurable_joints() {
+        let mut w = World::new();
+        let mut p = Physics::default();
+        // an arm sticking out along +X from a socket at the origin: twist around the arm, swing
+        // around Z limited to 30°, so gravity can't let it hang straight down
+        let arm = w.spawn((
+            Transform::from_position(Vec3::new(1.0, 0.0, 0.0)),
+            GlobalTransform::default(),
+            RigidBody::dynamic(),
+            Collider::new(Shape::Sphere(0.2)),
+            Joint::new(JointKind::Character { axis: Vec3::X, swing_axis: Vec3::Z, low_twist: -20.0, high_twist: 20.0, swing1: 30.0, swing2: 30.0 }).at(Vec3::new(-1.0, 0.0, 0.0), Vec3::ZERO),
+        ));
+        // a box on a rail: only x is free, a spring drive pulls it to 1 unit from the anchor
+        let rail = w.spawn((
+            Transform::from_position(Vec3::new(10.0, 0.0, 0.0)),
+            GlobalTransform::default(),
+            RigidBody::dynamic(),
+            Collider::new(Shape::Sphere(0.2)),
+            Joint::new(JointKind::Configurable(ConfigurableJoint {
+                y_motion: Motion::Locked,
+                z_motion: Motion::Locked,
+                angular_x_motion: Motion::Locked,
+                angular_y_motion: Motion::Locked,
+                angular_z_motion: Motion::Locked,
+                target_position: Vec3::new(1.0, 0.0, 0.0),
+                position_spring: 200.0,
+                position_damper: 30.0,
+                ..Default::default()
+            }))
+            .at(Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)),
+        ));
+        for _ in 0..240 {
+            p.step(&mut w, 1.0 / 60.0);
+        }
+        assert_eq!(p.joint_count(), 2);
+        let a = w.get::<&Transform>(arm).unwrap().position;
+        let below = (-a.y).atan2(a.x).to_degrees();
+        assert!((a.length() - 1.0).abs() < 0.05, "the arm stays in its socket: {a}");
+        assert!(below > 20.0 && below < 36.0, "swings down to the 30° limit, not further: {below}° {a}");
+        let r = w.get::<&Transform>(rail).unwrap().position;
+        assert!(((r.x - 10.0).abs() - 1.0).abs() < 0.05 && r.y.abs() < 0.02 && r.z.abs() < 0.02, "driven along the rail only: {r}");
     }
 
     #[test]

@@ -16,6 +16,8 @@ const LIGHT: [f32; 4] = [1.0, 0.878, 0.4, 0.9];
 const CAMERA: [f32; 4] = [0.867, 0.867, 0.867, 0.9];
 const AUDIO: [f32; 4] = [0.45, 0.7, 1.0, 0.8];
 const NAV: [f32; 4] = [0.4, 0.95, 0.85, 0.9];
+const PROBE: [f32; 4] = [1.0, 0.75, 0.3, 0.9];
+const PROBE_LINK: [f32; 4] = [1.0, 0.75, 0.3, 0.35];
 
 #[derive(Default)]
 pub struct Gizmos {
@@ -211,6 +213,27 @@ impl EditorCore {
                 l.circle(feet + Vec3::Y * a.height, Vec3::X, Vec3::Z, a.radius, NAV);
                 for d in [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z] {
                     l.line(feet + d * a.radius, feet + d * a.radius + Vec3::Y * a.height, NAV);
+                }
+            }
+            // probes: the reflection box (world axes), light probe spheres + the links between them
+            if let Ok(r) = w.get::<&ReflectionProbe>(e) {
+                l.wire_box(&Mat4::IDENTITY, m.transform_point3(r.center), r.size.abs() * 0.5, PROBE);
+                l.wire_sphere(pos, Quat::IDENTITY, 0.25, PROBE);
+            }
+            if let Ok(g) = w.get::<&LightProbeGroup>(e) {
+                let pts: Vec<Vec3> = g.positions.iter().map(|p| m.transform_point3(*p)).collect();
+                for p in &pts {
+                    l.wire_sphere(*p, Quat::IDENTITY, 0.08, PROBE);
+                }
+                // each probe to its 3 nearest (Unity draws the tetrahedra)
+                for (i, a) in pts.iter().enumerate() {
+                    let mut near: Vec<(f32, usize)> = pts.iter().enumerate().filter(|(j, _)| *j != i).map(|(j, b)| (a.distance_squared(*b), j)).collect();
+                    near.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+                    for &(_, j) in near.iter().take(3) {
+                        if j > i || near.len() < 3 {
+                            l.line(*a, pts[j], PROBE_LINK);
+                        }
+                    }
                 }
             }
             if let Ok(o) = w.get::<&goat_navigation::NavMeshObstacle>(e) {

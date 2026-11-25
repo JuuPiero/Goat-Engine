@@ -243,33 +243,44 @@ struct LightJson {
     /// Directional lights: casts shadow maps (default true).
     #[serde(skip_serializing_if = "Option::is_none")]
     shadows: Option<bool>,
+    /// "realtime" | "mixed" (default) | "baked" (Unity's Light Mode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<String>,
 }
 
 impl Default for LightJson {
     fn default() -> Self {
-        LightJson { color: FileColor(Color::WHITE), intensity: 1.0, range: None, spot_angle: None, inner_spot_angle: None, shadows: None }
+        LightJson { color: FileColor(Color::WHITE), intensity: 1.0, range: None, spot_angle: None, inner_spot_angle: None, shadows: None, mode: None }
     }
+}
+
+fn mode_json(m: LightMode) -> Option<String> {
+    // always written: the Inspector edits the fields a component's JSON has
+    Some(m.name().to_string())
+}
+fn mode_of(j: &LightJson) -> LightMode {
+    j.mode.as_deref().map(LightMode::from_name).unwrap_or_default()
 }
 
 fn save_directional(ctx: &SaveContext, e: Entity) -> Option<Value> {
     let l = *ctx.world.get::<&DirectionalLight>(e).ok()?;
-    to_value(LightJson { color: FileColor(l.color), intensity: l.intensity, shadows: (!l.shadows).then_some(false), ..Default::default() })
+    to_value(LightJson { color: FileColor(l.color), intensity: l.intensity, shadows: (!l.shadows).then_some(false), mode: mode_json(l.mode), ..Default::default() })
 }
 fn load_directional(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
     let j: LightJson = from_value(v)?;
-    insert(ctx, e, DirectionalLight { color: j.color.0, intensity: j.intensity, shadows: j.shadows.unwrap_or(true) })
+    insert(ctx, e, DirectionalLight { color: j.color.0, intensity: j.intensity, shadows: j.shadows.unwrap_or(true), mode: mode_of(&j) })
 }
 fn save_point(ctx: &SaveContext, e: Entity) -> Option<Value> {
     let l = *ctx.world.get::<&PointLight>(e).ok()?;
-    to_value(LightJson { color: FileColor(l.color), intensity: l.intensity, range: Some(l.range), ..Default::default() })
+    to_value(LightJson { color: FileColor(l.color), intensity: l.intensity, range: Some(l.range), mode: mode_json(l.mode), ..Default::default() })
 }
 fn load_point(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
     let j: LightJson = from_value(v)?;
-    insert(ctx, e, PointLight { color: j.color.0, intensity: j.intensity, range: j.range.unwrap_or(10.0) })
+    insert(ctx, e, PointLight { color: j.color.0, intensity: j.intensity, range: j.range.unwrap_or(10.0), mode: mode_of(&j) })
 }
 fn save_spot(ctx: &SaveContext, e: Entity) -> Option<Value> {
     let l = *ctx.world.get::<&SpotLight>(e).ok()?;
-    to_value(LightJson { color: FileColor(l.color), intensity: l.intensity, range: Some(l.range), spot_angle: Some(l.spot_angle), inner_spot_angle: Some(l.inner_spot_angle), shadows: None })
+    to_value(LightJson { color: FileColor(l.color), intensity: l.intensity, range: Some(l.range), spot_angle: Some(l.spot_angle), inner_spot_angle: Some(l.inner_spot_angle), shadows: None, mode: mode_json(l.mode) })
 }
 fn load_spot(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
     let j: LightJson = from_value(v)?;
@@ -277,7 +288,7 @@ fn load_spot(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> 
     insert(
         ctx,
         e,
-        SpotLight { color: j.color.0, intensity: j.intensity, range: j.range.unwrap_or(d.range), spot_angle: j.spot_angle.unwrap_or(d.spot_angle), inner_spot_angle: j.inner_spot_angle.unwrap_or(d.inner_spot_angle) },
+        SpotLight { color: j.color.0, intensity: j.intensity, range: j.range.unwrap_or(d.range), spot_angle: j.spot_angle.unwrap_or(d.spot_angle), inner_spot_angle: j.inner_spot_angle.unwrap_or(d.inner_spot_angle), mode: mode_of(&j) },
     )
 }
 
@@ -316,6 +327,52 @@ fn load_settings(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), Stri
     insert(ctx, e, RenderSettings { ambient: j.ambient.0, ambient_ground: j.ambient_ground.map(|c| c.0), post: j.post, fog: j.fog.map(|f| Fog { color: f.color.0, start: f.start, end: f.end }) })
 }
 
+/// `"LightProbeGroup": { "positions": [[x, y, z], ...] }`
+fn save_probe_group(ctx: &SaveContext, e: Entity) -> Option<Value> {
+    let g = ctx.world.get::<&LightProbeGroup>(e).ok()?;
+    Some(serde_json::json!({ "positions": g.positions.iter().map(|p| [p.x, p.y, p.z]).collect::<Vec<_>>() }))
+}
+fn load_probe_group(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
+    let positions = match v.get("positions").and_then(|p| p.as_array()) {
+        Some(list) => list
+            .iter()
+            .filter_map(|p| {
+                let a = p.as_array()?;
+                let f = |i: usize| a.get(i).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+                Some(Vec3::new(f(0), f(1), f(2)))
+            })
+            .collect(),
+        None => LightProbeGroup::default().positions,
+    };
+    insert(ctx, e, LightProbeGroup { positions })
+}
+
+/// `"ReflectionProbe": { "size": [10, 10, 10], "center": [0, 0, 0], "cubemap": "sky.cubemap.json", "importance": 1 }`
+#[derive(Serialize, Deserialize)]
+#[serde(default)]
+struct ReflectionProbeJson {
+    size: [f32; 3],
+    center: [f32; 3],
+    /// A `.cubemap.json` or `builtin:sky`.
+    cubemap: String,
+    importance: i32,
+}
+impl Default for ReflectionProbeJson {
+    fn default() -> Self {
+        ReflectionProbeJson { size: [10.0; 3], center: [0.0; 3], cubemap: "builtin:sky".into(), importance: 1 }
+    }
+}
+fn save_reflection_probe(ctx: &SaveContext, e: Entity) -> Option<Value> {
+    let r = *ctx.world.get::<&ReflectionProbe>(e).ok()?;
+    let cubemap = r.cubemap.and_then(|c| ctx.assets.key_of_texture(c)).unwrap_or("").to_string();
+    to_value(ReflectionProbeJson { size: r.size.into(), center: r.center.into(), cubemap, importance: r.importance })
+}
+fn load_reflection_probe(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
+    let j: ReflectionProbeJson = from_value(v)?;
+    let cubemap = if j.cubemap.is_empty() { None } else { Some(ctx.assets.cubemap(ctx.gfx, &j.cubemap).map_err(|e| e.to_string())?) };
+    insert(ctx, e, ReflectionProbe { size: j.size.into(), center: j.center.into(), cubemap, importance: j.importance })
+}
+
 pub(crate) fn register(r: &mut SceneRegistry) {
     r.component(ComponentCodec { name: "Transform", save: save_transform, load: load_transform, remove: remove_typed::<Transform> })
         .component(ComponentCodec { name: "Camera", save: save_camera, load: load_camera, remove: remove_typed::<Camera> })
@@ -325,5 +382,7 @@ pub(crate) fn register(r: &mut SceneRegistry) {
         .component(ComponentCodec { name: "SpotLight", save: save_spot, load: load_spot, remove: remove_typed::<SpotLight> })
         .component(ComponentCodec { name: "RenderSettings", save: save_settings, load: load_settings, remove: remove_typed::<RenderSettings> })
         .component(ComponentCodec { name: "LodGroup", save: save_lod, load: load_lod, remove: remove_typed::<goat_runtime::LodGroup> })
-        .component(ComponentCodec { name: "StaticBatching", save: save_static, load: load_static, remove: remove_typed::<goat_runtime::StaticBatching> });
+        .component(ComponentCodec { name: "StaticBatching", save: save_static, load: load_static, remove: remove_typed::<goat_runtime::StaticBatching> })
+        .component(ComponentCodec { name: "LightProbeGroup", save: save_probe_group, load: load_probe_group, remove: remove_typed::<LightProbeGroup> })
+        .component(ComponentCodec { name: "ReflectionProbe", save: save_reflection_probe, load: load_reflection_probe, remove: remove_typed::<ReflectionProbe> });
 }

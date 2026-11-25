@@ -552,6 +552,28 @@ pub struct DrawItem {
     pub model: Mat4,
     /// Blended items draw in increasing order first, then back to front (sprites, UI).
     pub sorting_order: i32,
+    /// Light from light probes: replaces the view's ambient light for this object and adds one
+    /// directional light (lit materials).
+    pub light_probe: Option<LightProbeSample>,
+    /// A reflection probe's cube map: replaces the material's env map (materials with
+    /// reflectivity > 0).
+    pub reflection: Option<TextureId>,
+}
+
+impl DrawItem {
+    pub fn new(mesh: MeshId, material: MaterialId, model: Mat4) -> Self {
+        DrawItem { mesh, material, model, sorting_order: 0, light_probe: None, reflection: None }
+    }
+}
+
+/// The light probes' light at an object: ambient (from every direction) + one directional light.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LightProbeSample {
+    pub ambient: Color,
+    /// Where the light goes (like [`Light::direction`]).
+    pub direction: Vec3,
+    /// Black = no directional part.
+    pub color: Color,
 }
 
 /// Everything one camera draws this frame.
@@ -715,7 +737,7 @@ mod tests {
         let opaque = materials.insert(MaterialDesc::default());
         let alpha = materials.insert(MaterialDesc { blend: BlendMode::Alpha, ..Default::default() });
         let at = |z: f32| Mat4::from_translation(Vec3::new(0.0, 0.0, z));
-        let item = |material, z| DrawItem { mesh, material, model: at(z), sorting_order: 0 };
+        let item = |material, z| DrawItem::new(mesh, material, at(z));
         let view = RenderView {
             display: Display::Main,
             viewport: Viewport::FULL,

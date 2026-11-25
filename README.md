@@ -287,6 +287,9 @@ Thêm vào đó:
 - `BlobShadow`: bóng tròn mềm dưới vật.
 - `StaticBatching { bake_lighting }`: gộp vật tĩnh và nướng ánh sáng vào vertex.
 - `LodGroup`: tự chọn mesh theo kích thước vật trên màn hình.
+- **Light Mode** của đèn (`"mode"` như Unity): `realtime` (chỉ chiếu lúc chạy, không nướng), `mixed` (mặc định: nướng vào static batch và chiếu lúc chạy cho vật di chuyển), `baked` (chỉ nướng: static batch + light probe, không tốn đèn phần cứng — 3DS chỉ có 8).
+- **Light Probe Group** (`"LightProbeGroup": { "positions": [[x, y, z], ...] }`): các điểm thu ánh sáng của đèn `baked` + ambient (SH bậc 1). Vật di chuyển lấy ánh sáng của 4 probe gần nhất (trộn theo khoảng cách) thành ambient riêng + một đèn hướng. Không tính che khuất.
+- **Reflection Probe** (`"ReflectionProbe": { "size", "center", "cubemap", "importance" }`): vật có tâm nằm trong hộp (trục thế giới) phản chiếu cubemap của probe thay cho `env_map` của vật liệu (vật liệu có `reflectivity` > 0). Nhiều hộp chồng nhau: `importance` cao hơn thắng, rồi tới hộp nhỏ hơn. Scene mẫu: `scenes/probes.scene.json`.
 
 ### Shader (Goat Shader: ShaderLab + HLSL)
 
@@ -435,6 +438,8 @@ Trong scene: `"Animator": { "controller": "animators/tentacle.controller.json", 
   - Mesh lõm chỉ dùng cho vật tĩnh / kinematic; `convex: true` dùng bao lồi, vật dynamic cũng được.
 - **Joint:** đặt trên vật thứ nhất, `connected` là tên vật kia (để trống = gắn vào thế giới).
   - 3D: `Joint::hinge(Vec3::Z).to("Door Frame")` (có giới hạn góc, motor), ngoài ra có fixed / ball / slider / spring / rope.
+  - **Character Joint** (`character`: ragdoll): xoay quanh `axis` trong khoảng `low_twist`..`high_twist`, lắc ±`swing1` quanh `swing_axis` và ±`swing2` quanh trục thứ ba (độ).
+  - **Configurable Joint** (`configurable`): khung khớp là `axis` (x) + `secondary_axis` (y); từng trục x / y / z và góc x / y / z được đặt `locked` / `limited` / `free`, giới hạn (`linear_limit`, `low/high_angular_x_limit`, `angular_y/z_limit`), drive lò xo về `target_position` / `target_rotation` (`position_spring` / `damper`, `rotation_spring` / `damper`; như Unity, vật bị kéo về −target).
   - 2D: `Joint2D` với fixed / hinge / slider / spring / distance.
 - **CharacterController** (như Unity): `physics.move_character(world, e, velocity * dt, dt)` trượt theo tường, leo bậc (`step_offset`), đi dốc đến `slope_limit`, rồi cập nhật `is_grounded` / `collision_flags`.
 - **Trong script:**

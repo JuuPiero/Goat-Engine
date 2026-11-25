@@ -387,33 +387,49 @@ fn forward_of(m: &Mat4) -> Vec3 {
     m.transform_vector3(Vec3::NEG_Z).normalize_or(Vec3::NEG_Z)
 }
 
-/// Every light of the world (world space).
-fn collect_lights(world: &World) -> (Vec<Light>, Vec<Light>, Option<usize>) {
-    let mut directional = Vec::new();
-    let mut shadow = None;
+/// The lights of the world (world space) with their modes.
+pub fn world_lights(world: &World) -> Vec<(Light, LightMode, bool)> {
+    let mut out = Vec::new();
     for (_, (l, g)) in world.query::<(&DirectionalLight, &GlobalTransform)>().without::<&InactiveInHierarchy>().iter() {
-        if l.shadows && shadow.is_none() && directional.len() < MAX_LIGHTS {
-            shadow = Some(directional.len());
-        }
-        directional.push(Light { kind: LightKind::Directional, position: g.0.w_axis.truncate(), direction: forward_of(&g.0), color: scaled(l.color, l.intensity), range: 0.0 });
+        out.push((Light { kind: LightKind::Directional, position: g.0.w_axis.truncate(), direction: forward_of(&g.0), color: scaled(l.color, l.intensity), range: 0.0 }, l.mode, l.shadows));
     }
-    let mut local = Vec::new();
     for (_, (l, g)) in world.query::<(&PointLight, &GlobalTransform)>().without::<&InactiveInHierarchy>().iter() {
-        local.push(Light { kind: LightKind::Point, position: g.0.w_axis.truncate(), direction: forward_of(&g.0), color: scaled(l.color, l.intensity), range: l.range.max(0.01) });
+        out.push((Light { kind: LightKind::Point, position: g.0.w_axis.truncate(), direction: forward_of(&g.0), color: scaled(l.color, l.intensity), range: l.range.max(0.01) }, l.mode, false));
     }
     for (_, (l, g)) in world.query::<(&SpotLight, &GlobalTransform)>().without::<&InactiveInHierarchy>().iter() {
         let half = |deg: f32| (deg.clamp(0.1, 179.0) * 0.5).to_radians().cos();
         let cos_outer = half(l.spot_angle);
         let cos_inner = half(l.inner_spot_angle.min(l.spot_angle)).max(cos_outer + 1e-3);
-        local.push(Light {
-            kind: LightKind::Spot { cos_inner, cos_outer },
-            position: g.0.w_axis.truncate(),
-            direction: forward_of(&g.0),
-            color: scaled(l.color, l.intensity),
-            range: l.range.max(0.01),
-        });
+        out.push((
+            Light { kind: LightKind::Spot { cos_inner, cos_outer }, position: g.0.w_axis.truncate(), direction: forward_of(&g.0), color: scaled(l.color, l.intensity), range: l.range.max(0.01) },
+            l.mode,
+            false,
+        ));
     }
-    (directional, local, shadow)
+    out
+}
+
+/// Real-time lights (directional, local, the shadow caster) and the baked ones (light probes).
+fn collect_lights(world: &World) -> (Vec<Light>, Vec<Light>, Option<usize>, Vec<Light>) {
+    let mut directional = Vec::new();
+    let mut local = Vec::new();
+    let mut baked = Vec::new();
+    let mut shadow = None;
+    for (l, mode, shadows) in world_lights(world) {
+        if !mode.realtime() {
+            baked.push(l);
+            continue;
+        }
+        if l.kind == LightKind::Directional {
+            if shadows && shadow.is_none() && directional.len() < MAX_LIGHTS {
+                shadow = Some(directional.len());
+            }
+            directional.push(l);
+        } else {
+            local.push(l);
+        }
+    }
+    (directional, local, shadow, baked)
 }
 
 /// The [`MAX_LIGHTS`] lights that matter for a view: directional lights first, then point / spot
@@ -434,7 +450,9 @@ fn pick_lights(directional: &[Light], local: &[Light], camera: Vec3, frustum: &F
 /// renderers inside its frustum.
 pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn GraphicsBackend, only: Option<Entity>) -> Vec<RenderView> {
     let settings = world.query::<&RenderSettings>().iter().next().map(|(_, s)| *s).unwrap_or_default();
-    let (directional, local, shadow) = collect_lights(world);
+    let (directional, local, shadow, baked) = collect_lights(world);
+    let probes = crate::probes::ProbeField::capture(world, &baked);
+    let reflections = crate::probes::reflection_boxes(world);
     // world-space bounding spheres (None = always drawn), layer bit, LOD levels
     let renderers: Vec<(DrawItem, Option<(Vec3, f32)>, u32, Option<LodGroup>)> = world
         .query::<(&MeshRenderer, &GlobalTransform, Option<&LodGroup>)>().without::<&InactiveInHierarchy>()
@@ -446,7 +464,14 @@ pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn Graphics
                 let scale = g.0.x_axis.truncate().length().max(g.0.y_axis.truncate().length()).max(g.0.z_axis.truncate().length());
                 (g.0.transform_point3(b.center), b.radius * scale)
             });
-            (DrawItem { mesh, material: r.material, model: g.0, sorting_order: r.sorting_order }, sphere, 1u32 << r.layer.min(31), lod.cloned())
+            let at = sphere.map(|(c, _)| c).unwrap_or(g.0.w_axis.truncate());
+            let item = DrawItem {
+                sorting_order: r.sorting_order,
+                light_probe: probes.as_ref().map(|p| p.sample(at)),
+                reflection: crate::probes::reflection_at(&reflections, at),
+                ..DrawItem::new(mesh, r.material, g.0)
+            };
+            (item, sphere, 1u32 << r.layer.min(31), lod.cloned())
         })
         .collect();
     let mut views: Vec<RenderView> = world
