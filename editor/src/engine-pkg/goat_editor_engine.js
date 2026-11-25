@@ -510,6 +510,22 @@ export class EditorEngine {
         wasm.editorengine_play(this.__wbg_ptr, dual_3ds);
     }
     /**
+     * Play mode: `[{ handle, name, key, active }]` of the loaded scenes (Hierarchy headers).
+     * @returns {string}
+     */
+    play_scenes() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.editorengine_play_scenes(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * `{ root, key, overrides: [...] }` of the prefab instance an entity belongs to, or "null".
      * @param {string} id
      * @returns {string}

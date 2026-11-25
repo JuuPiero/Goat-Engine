@@ -344,6 +344,16 @@ API như Unity / PiaEngine, chạy trên desktop, editor (WebGPU) và 3DS. Ví d
 - **MaterialPropertyBlock** trên renderer (`renderer.setPropertyBlock(block)` / component **Material Property Block**): đổi màu từng object mà vẫn dùng chung material (không tạo bản sao như `renderer.material`).
 - **GL**: `GL.begin(GL.LINES | LINE_STRIP | TRIANGLES | TRIANGLE_STRIP | QUADS)`, `GL.color`, `GL.vertex3`, `GL.end`; toạ độ thế giới, hoặc màn hình sau `GL.loadOrtho()` (0..1) / `GL.loadPixelMatrix()` (pixel), gốc dưới trái; `pushMatrix / popMatrix / multMatrix`. Phần trên màn hình chỉ hiện ở Game view.
 - **Debug.drawLine / drawRay** (`color`, `duration` giây, `depthTest`): hiện ở cả Scene view và Game view.
+### Nhiều scene cùng lúc (Additive, DontDestroyOnLoad)
+
+Như Unity / PiaEngine. Ví dụ: `scenes/multiscene.scene.json` + `scripts/SceneLoader.ts` (nạp `probes` kiểu Additive, phím A bật / tắt).
+
+- `SceneManager.loadScene(nameOrIndex, LoadSceneMode.Additive)` thêm scene vào cạnh scene đang có; `Single` (mặc định) thay tất cả, trừ object **DontDestroyOnLoad**. Tên scene theo Build Settings, hoặc `scenes/<tên>.scene.json` nếu không có trong Build Settings.
+- `await SceneManager.loadSceneAsync(...)` / `unloadSceneAsync(sceneHoặcTên)` trả `AsyncOperation` (`isDone`, `progress`, `completed`, dùng được với `await`); việc nạp / gỡ diễn ra cuối frame.
+- `this.dontDestroyOnLoad(go?)` (hoặc hàm `dontDestroyOnLoad(go)`): gốc của object và mọi con của nó sống qua các lần nạp scene Single.
+- `SceneManager.sceneCount`, `getSceneAt(i)`, `getSceneByName / ByPath / ByBuildIndex`, `getActiveScene()`, `setActiveScene(scene)`; `Scene` có `name`, `path`, `buildIndex`, `isLoaded`, `getRootGameObjects()`; `gameObject.scene`. Object tạo lúc chạy thuộc scene active.
+- Sự kiện `SceneManager.sceneLoaded`, `sceneUnloaded`, `activeSceneChanged` (`addListener`).
+- Khi Play, Hierarchy hiện từng scene đã nạp (scene active có nhãn **Active**) và **DontDestroyOnLoad**.
 ## Text, physics, audio
 
 Chữ có thể có viền (`.with_outline(màu, 0.06)`), bóng (`.with_shadow(màu, [0.05, 0.05])`) và rich text (`.rich()`: `<color=#ff8800>`, `<size=1.5>`, `<b>`, `<i>`). Trong scene, các key tương ứng là `rich` / `outline` / `shadow` của `Text` và `UiText`.

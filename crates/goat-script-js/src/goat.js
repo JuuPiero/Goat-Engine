@@ -359,6 +359,8 @@ export class GameObject {
   static findGameObjectsWithTag(tag) { return call('GameObject.findGameObjectsWithTag', null, [tag]) ?? []; }
   /** Plays the object's TweenAnimation(s) (DOTweenAnimation.DOPlay); with an id, only those. */
   doPlay(id) { N.call('Tween.playAnimation', this._h, id == null ? [] : [id]); }
+  /** The scene the object belongs to (objects made while playing: the active scene). */
+  get scene() { return Scene._of(N.call('SceneManager.sceneOf', this._h, [])); }
 }
 
 /** Base class of script components (Unity's MonoBehaviour). */
@@ -382,7 +384,12 @@ export class Behaviour {
   isInvoking(name) { return !!this._invokes && (name == null ? this._invokes.size > 0 : this._invokes.has(name)); }
   /** Unity's GetComponent<Renderer>() for meshes: material access. */
   get renderer() { return new Renderer(this._h); }
+  /** Unity's DontDestroyOnLoad: the object's root (and children) survive Single scene loads. */
+  dontDestroyOnLoad(go = this.gameObject) { N.call('SceneManager.dontDestroyOnLoad', handle(go), []); }
 }
+
+/** Unity's Object.DontDestroyOnLoad as a function. */
+export function dontDestroyOnLoad(go) { N.call('SceneManager.dontDestroyOnLoad', handle(go), []); }
 export { Behaviour as MonoBehaviour };
 
 export const Time = {
@@ -400,15 +407,68 @@ export const Time = {
 
 // ------------------------------------------------------------------ coroutines
 
-// Unity's SceneManager: scenes by Build Settings index or name (assets/project.json); the load
-// happens at the end of the frame.
+// Unity's SceneManager: scenes by Build Settings index or name (assets/project.json), several
+// loaded at once (Additive), loads / unloads at the end of the frame (AsyncOperation to wait).
 export const LoadSceneMode = { Single: 'single', Additive: 'additive' };
-export const SceneManager = {
-  loadScene(nameOrIndex, mode = 'single') { return call('SceneManager.loadScene', null, [nameOrIndex, mode]); },
-  getActiveScene() { const s = call('SceneManager.activeScene', null, []) ?? { key: '', buildIndex: -1 }; return { name: s.key.split('/').pop().replace(/\.scene\.json$/, ''), path: s.key, buildIndex: s.buildIndex }; },
-  get sceneCountInBuildSettings() { return call('SceneManager.sceneCountInBuildSettings', null, []) ?? 0; },
-};
 
+/** A loaded scene (Unity's Scene struct). */
+export class Scene {
+  constructor(handle, key, buildIndex) { this.handle = handle; this.path = key; this.buildIndex = buildIndex; }
+  static _of(s) { return s ? new Scene(s.handle, s.key, s.buildIndex) : new Scene(0, '', -1); }
+  get name() { return this.path.split('/').pop().replace(/\.scene\.json$/, '').replace(/\.json$/, ''); }
+  get isValid() { return this.handle !== 0; }
+  get isLoaded() { return this.handle === 0xffffffff || SceneManager._list().scenes.some((s) => s.handle === this.handle); }
+  getRootGameObjects() { return call('SceneManager.roots', null, [this.handle]) ?? []; }
+  get rootCount() { return this.getRootGameObjects().length; }
+  equals(o) { return o != null && o.handle === this.handle; }
+  toString() { return `Scene(${this.name})`; }
+}
+
+/** A scene load / unload in progress (await it, or poll isDone). */
+export class AsyncOperation {
+  constructor(op) { this._op = op; this.allowSceneActivation = true; this.completed = new GoatEvent(); this._fired = false; if (op != null) pendingOps.push(this); }
+  get isDone() { return this._op == null || !!N.call('SceneManager.isDone', -1, [this._op]); }
+  get progress() { return this.isDone ? 1 : 0.9; }
+  then(resolve, reject) { return new Promise((res) => { if (this.isDone) res(); else this.completed.addListener(() => res()); }).then(resolve, reject); }
+}
+const pendingOps = [];
+
+export const SceneManager = {
+  /** Loads at the end of the frame (Single: replaces everything but DontDestroyOnLoad objects). */
+  loadScene(nameOrIndex, mode = LoadSceneMode.Single) { call('SceneManager.loadScene', null, [nameOrIndex, mode]); },
+  loadSceneAsync(nameOrIndex, mode = LoadSceneMode.Single) { const r = call('SceneManager.loadScene', null, [nameOrIndex, mode]); return new AsyncOperation(r?.op ?? null); },
+  /** A loaded scene (Scene, name or path) away at the end of the frame; null when not loaded. */
+  unloadSceneAsync(scene) { const op = N.call('SceneManager.unloadScene', -1, [scene instanceof Scene ? scene.handle : String(scene)]); return op == null ? null : new AsyncOperation(op); },
+  _list() { return N.call('SceneManager.scenes', -1, []); },
+  getActiveScene() { const l = this._list(); const s = l.scenes.find((x) => x.handle === l.active); if (s) return Scene._of(s); const a = call('SceneManager.activeScene', null, []) ?? { key: '', buildIndex: -1 }; return new Scene(0, a.key, a.buildIndex); },
+  setActiveScene(scene) { return !!N.call('SceneManager.setActiveScene', -1, [scene.handle]); },
+  get sceneCount() { return this._list().scenes.length; },
+  /** Loaded scenes, in load order. */
+  getSceneAt(i) { return Scene._of(this._list().scenes[i]); },
+  getSceneByName(name) { return Scene._of(this._list().scenes.find((s) => new Scene(0, s.key, -1).name === name)); },
+  getSceneByPath(path) { return Scene._of(this._list().scenes.find((s) => s.key === path)); },
+  getSceneByBuildIndex(i) { return Scene._of(this._list().scenes.find((s) => s.buildIndex === i)); },
+  get sceneCountInBuildSettings() { return call('SceneManager.sceneCountInBuildSettings', null, []) ?? 0; },
+  /** (scene, mode) after a load; (scene) after an unload; (previous, next) when the active one changes. */
+  // events from before anyone listened are dropped (Unity only reports later ones)
+  _fresh() { if (!this._sl && !this._su && !this._sa) { N.call('SceneManager.events', -1, []); lastActive = this.getActiveScene(); } },
+  get sceneLoaded() { this._fresh(); return (this._sl ??= new GoatEvent()); },
+  get sceneUnloaded() { this._fresh(); return (this._su ??= new GoatEvent()); },
+  get activeSceneChanged() { this._fresh(); return (this._sa ??= new GoatEvent()); },
+};
+let lastActive = null;
+function tickScenes() {
+  for (let i = pendingOps.length - 1; i >= 0; i--) {
+    const op = pendingOps[i];
+    if (op.isDone) { pendingOps.splice(i, 1); op.completed.invoke(op); }
+  }
+  const m = SceneManager;
+  if (!m._sl?.listenerCount && !m._su?.listenerCount && !m._sa?.listenerCount) return;
+  const ev = N.call('SceneManager.events', -1, []);
+  for (const s of ev.unloaded) m.sceneUnloaded.invoke(Scene._of(s));
+  for (const s of ev.loaded) m.sceneLoaded.invoke(Scene._of(s), LoadSceneMode.Additive);
+  if (ev.activeChanged) { const now = m.getActiveScene(); m.activeSceneChanged.invoke(lastActive ?? new Scene(0, '', -1), now); lastActive = now; }
+}
 export class WaitForSeconds { constructor(seconds) { this.seconds = seconds; } }
 export class WaitForSecondsRealtime { constructor(seconds) { this.seconds = seconds; } }
 export class WaitUntil { constructor(predicate) { this.predicate = predicate; } }
@@ -839,6 +899,7 @@ export function __message(obj, name, arg) {
 }
 
 export function __tick() {
+  tickScenes();
   if (uiListeners.length) tickUi();
   if (animListeners.length) tickAnimation();
   if (coroutines.length) tickCoroutines();

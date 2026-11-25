@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "entities": [
+    { "id": 1, "name": "Game Manager", "components": { "Transform": {}, "Script": { "src": "scripts/SceneLoader.ts", "props": { "additive": "probes" } } } },
+    { "id": 2, "name": "Floor", "components": {
+        "Transform": { "position": [0, -0.05, 6], "scale": [1, 1, 0.6] },
+        "MeshRenderer": { "mesh": "builtin:plane", "material": "materials/toon.mat.json" } } }
+  ]
+}

@@ -1,7 +1,7 @@
 // The open scene's Hierarchy, like Unity's: click / Ctrl+click / Shift+click selection,
 // arrow keys, F2 to rename, drag to re-parent (several at once),
 // right-click menu (Copy / Paste / Rename / Duplicate / Delete / Create…), search filter.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { getEngine } from '../engine';
 import { frameSelected, selectEntities } from '../selection';
 import { copy, cut, deleteSelection, duplicate, gameObjectMenu, hasClipboard, mutate, paste, rename } from '../commands';
@@ -19,6 +19,15 @@ interface Row {
   active: boolean;
   /** camera / light / mesh / particles / audio / empty (the engine picks the main component) */
   icon?: string;
+  /** Play mode: the loaded scene it belongs to. */
+  scene?: number;
+}
+
+interface PlayScene {
+  handle: number;
+  name: string;
+  key: string;
+  active: boolean;
 }
 
 export function SceneHierarchy() {
@@ -30,6 +39,7 @@ export function SceneHierarchy() {
   const renaming = useStore((s) => s.renaming);
   const dirty = useStore((s) => s.sceneDirty);
   const [rows, setRows] = useState<Row[]>([]);
+  const [scenes, setScenes] = useState<PlayScene[]>([]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState('');
   const [dragging, setDragging] = useState<{ ids: string[]; over: string | null } | null>(null);
@@ -40,6 +50,7 @@ export function SceneHierarchy() {
     const e = getEngine();
     if (!e) return;
     setRows(JSON.parse(e.hierarchy()));
+    setScenes(playing ? JSON.parse(e.play_scenes()) : []);
   }, [rev, scene, playing]);
   // the running game changes by itself: re-read it while playing
   useEffect(() => {
@@ -68,8 +79,27 @@ export function SceneHierarchy() {
     for (let p: string | null = of; p; p = rows.find((r) => r.id === p)?.parent ?? null) if (p === a) return true;
     return false;
   };
-  // rows as shown (expanded), for Shift+click ranges and arrow keys
-  const visible: { row: Row; depth: number }[] = useMemo(() => {
+  // rows as shown (expanded), grouped by loaded scene while playing (Unity: one header per
+  // scene + DontDestroyOnLoad); `visible` = all of them in order (Shift+click ranges, arrows)
+  const groups: { scene: PlayScene | null; items: { row: Row; depth: number }[] }[] = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (q || !scenes.length) return [{ scene: null, items: flatRows() }];
+    return scenes.map((s) => {
+      const items: { row: Row; depth: number }[] = [];
+      const walk = (parent: string | null, depth: number) => {
+        for (const r of byParent.get(parent) ?? []) {
+          if (depth === 0 && r.scene !== s.handle) continue;
+          items.push({ row: r, depth });
+          if (!collapsed.has(r.id)) walk(r.id, depth + 1);
+        }
+      };
+      walk(null, 0);
+      return { scene: s, items };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, byParent, collapsed, filter, scenes]);
+  const visible = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+  function flatRows(): { row: Row; depth: number }[] {
     const out: { row: Row; depth: number }[] = [];
     const q = filter.trim().toLowerCase();
     if (q) {
@@ -86,7 +116,7 @@ export function SceneHierarchy() {
     };
     walk(null, 0);
     return out;
-  }, [rows, byParent, collapsed, filter]);
+  }
 
   const clickRow = (ev: React.MouseEvent, id: string) => {
     if (ev.shiftKey && anchor.current) {
@@ -216,15 +246,25 @@ export function SceneHierarchy() {
           if (ev.button === 0 && !(ev.target as HTMLElement).closest('[data-entity]')) selectEntities([]);
         }}
       >
-        <div className={`g-hscene${playing ? ' playing active' : ''}${scene?.endsWith('.prefab.json') ? ' prefab' : ''}`} title={scene ?? ''}>
-          <Diamond size={12} className="g-hscene-icon" />
-          <span className="g-flex g-ellipsis">
-            {scene ? scene.split('/').pop()?.replace(/\.(scene|prefab)\.json$/, '') : 'Game'}
-            {dirty && !playing ? '*' : ''}
-          </span>
-          <span className="g-hscene-tag">{playing ? 'Active' : '3D'}</span>
-        </div>
-        {visible.map(({ row: r, depth }) => {
+        {groups.map((g) => (
+          <Fragment key={g.scene?.handle ?? 'edit'}>
+            {g.scene ? (
+              <div className={`g-hscene playing${g.scene.active ? ' active' : ''}`} data-scene={g.scene.name} title={g.scene.key || g.scene.name}>
+                <Diamond size={12} className="g-hscene-icon" />
+                <span className="g-flex g-ellipsis">{g.scene.name}</span>
+                {g.scene.active && <span className="g-hscene-tag">Active</span>}
+              </div>
+            ) : (
+              <div className={`g-hscene${playing ? ' playing active' : ''}${scene?.endsWith('.prefab.json') ? ' prefab' : ''}`} title={scene ?? ''}>
+                <Diamond size={12} className="g-hscene-icon" />
+                <span className="g-flex g-ellipsis">
+                  {scene ? scene.split('/').pop()?.replace(/\.(scene|prefab)\.json$/, '') : 'Game'}
+                  {dirty && !playing ? '*' : ''}
+                </span>
+                <span className="g-hscene-tag">{playing ? 'Active' : '3D'}</span>
+              </div>
+            )}
+            {g.items.map(({ row: r, depth }) => {
           const has = byParent.has(r.id);
           const open = !collapsed.has(r.id);
           const selected = entities.includes(r.id);
@@ -277,7 +317,9 @@ export function SceneHierarchy() {
               )}
             </div>
           );
-        })}
+            })}
+          </Fragment>
+        ))}
         <div className={`g-hlist-spacer${dragging?.over === '__root' ? ' drop-inside' : ''}`} />
       </div>
     </div>

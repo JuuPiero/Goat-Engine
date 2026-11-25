@@ -157,6 +157,17 @@ pub struct HierarchyRow {
     pub tag: String,
     /// Hierarchy icon: camera / light / mesh / particles / audio / empty
     pub icon: &'static str,
+    /// Play mode: the handle of the loaded scene the object belongs to (0 in Edit mode).
+    pub scene: u32,
+}
+
+/// A scene loaded in the running game (the Hierarchy's scene headers while playing).
+#[derive(Serialize)]
+pub struct PlayScene {
+    pub handle: u32,
+    pub name: String,
+    pub key: String,
+    pub active: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -334,9 +345,22 @@ impl EditorCore {
         out.ok_or_else(|| "no asset server".into())
     }
 
+    /// The running game's loaded scenes (+ DontDestroyOnLoad when it holds objects); empty in
+    /// Edit mode.
+    pub fn play_scenes(&self) -> Vec<PlayScene> {
+        let Some(play) = self.play.as_ref() else { return Vec::new() };
+        let Some(s) = play.resources.get::<goat_scene::LoadedScenes>() else { return Vec::new() };
+        let mut out: Vec<PlayScene> = s.list.iter().map(|x| PlayScene { handle: x.handle, name: x.name(), key: x.key.clone(), active: x.handle == s.active }).collect();
+        if play.world.query::<&goat_scene::SceneMember>().iter().any(|(_, m)| m.0 == goat_scene::DONT_DESTROY_ON_LOAD) {
+            out.push(PlayScene { handle: goat_scene::DONT_DESTROY_ON_LOAD, name: "DontDestroyOnLoad".into(), key: String::new(), active: false });
+        }
+        out
+    }
+
     pub fn hierarchy(&self) -> Vec<HierarchyRow> {
         let eng = self.play.as_ref().unwrap_or(&self.edit);
         let w = &eng.world;
+        let loaded = self.play.as_ref().and_then(|p| p.resources.get::<goat_scene::LoadedScenes>());
         let mut rows: Vec<(Entity, HierarchyRow)> = w
             .query::<(Option<&Name>, Option<&Parent>)>()
             .without::<&DontSave>()
@@ -351,7 +375,7 @@ impl EditorCore {
                 } else {
                     "entity"
                 };
-                (e, HierarchyRow { id: id_of(e), name: n.map(|n| n.0.clone()).unwrap_or_else(|| "Entity".into()), parent: p.map(|p| id_of(p.0)), kind: kind.into(), active: w.get::<&InactiveInHierarchy>(e).is_err(), active_self: w.get::<&Inactive>(e).is_err(), tag: w.get::<&Tag>(e).map(|t| t.0.clone()).unwrap_or_else(|_| "Untagged".into()), icon: icon_of(w, e) })
+                (e, HierarchyRow { id: id_of(e), name: n.map(|n| n.0.clone()).unwrap_or_else(|| "Entity".into()), parent: p.map(|p| id_of(p.0)), kind: kind.into(), active: w.get::<&InactiveInHierarchy>(e).is_err(), active_self: w.get::<&Inactive>(e).is_err(), tag: w.get::<&Tag>(e).map(|t| t.0.clone()).unwrap_or_else(|_| "Untagged".into()), icon: icon_of(w, e), scene: loaded.map(|s| goat_scene::scenes::scene_of(w, s, e)).unwrap_or(0) })
             })
             .collect();
         rows.sort_by_key(|(e, _)| e.id());

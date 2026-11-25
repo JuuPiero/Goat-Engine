@@ -933,3 +933,66 @@ export default class Gfx extends Behaviour {
     assert!(screen.items.len() >= 4, "cube + 2 spheres + the line mesh: {}", screen.items.len());
     assert!(views.iter().any(|v| v.depth == i32::MAX), "GL in screen space: an overlay view");
 }
+
+/// Several scenes: Additive loads, loadSceneAsync (await), DontDestroyOnLoad surviving a Single
+/// load, unloadSceneAsync, gameObject.scene, sceneLoaded events, the active scene.
+#[test]
+fn additive_scenes_and_dont_destroy_on_load() {
+    struct S;
+    fn sio() -> AssetIo {
+        let io = AssetIo::new("/nonexistent-goat-test-root");
+        io.put("scenes/boot.scene.json", br#"{ "version": 1, "entities": [ {"id":1,"name":"Boot","components":{"Script":{"src":"scripts/Boot.ts"}}}, {"id":2,"name":"Music","components":{}} ] }"#.to_vec());
+        io.put("scenes/hud.scene.json", br#"{ "version": 1, "entities": [ {"id":1,"name":"HUD","components":{}} ] }"#.to_vec());
+        io.put("scenes/level.scene.json", br#"{ "version": 1, "entities": [ {"id":1,"name":"Level","components":{}} ] }"#.to_vec());
+        io.put(
+            "scripts/Boot.ts",
+            br#"
+import { Behaviour, SceneManager, LoadSceneMode, GameObject } from 'goat';
+export default class Boot extends Behaviour {
+  log: string[] = [];
+  async start() {
+    this.dontDestroyOnLoad();
+    this.dontDestroyOnLoad(GameObject.find('Music'));
+    SceneManager.sceneLoaded.addListener((s: any) => this.log.push('loaded:' + s.name));
+    await SceneManager.loadSceneAsync('hud', LoadSceneMode.Additive);
+    this.log.push('count:' + SceneManager.sceneCount);
+    this.log.push('hudScene:' + GameObject.find('HUD').scene.name);
+    this.log.push('active:' + SceneManager.getActiveScene().name);
+    SceneManager.loadScene('level');
+    await SceneManager.loadSceneAsync('hud', LoadSceneMode.Additive);
+    this.log.push('after:' + SceneManager.sceneCount + ':' + SceneManager.getActiveScene().name);
+    this.log.push('musicScene:' + GameObject.find('Music').scene.name);
+    SceneManager.setActiveScene(SceneManager.getSceneByName('hud'));
+    this.log.push('active2:' + SceneManager.getActiveScene().name);
+    await SceneManager.unloadSceneAsync('hud');
+    this.log.push('final:' + SceneManager.sceneCount + ':' + SceneManager.getActiveScene().name + ':' + (GameObject.find('HUD') ? 'hud' : 'nohud'));
+    this.gameObject.name = this.log.join(',');
+  }
+}
+"#
+            .to_vec(),
+        );
+        io
+    }
+    impl Game for S {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(sio()));
+            goat_scene::load_scene(ctx, "scenes/boot.scene.json", goat_scene::LoadMode::Single).unwrap();
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(sio())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(S);
+    for _ in 0..12 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    let names: Vec<String> = e.world.query::<&Name>().iter().map(|(_, n)| n.0.clone()).collect();
+    let boot = names.iter().find(|n| n.contains("final:")).unwrap_or_else(|| panic!("the script finished: {names:?}"));
+    assert_eq!(
+        boot,
+        "loaded:hud,count:2,hudScene:hud,active:boot,loaded:level,loaded:hud,after:2:level,musicScene:DontDestroyOnLoad,active2:hud,final:1:level:nohud"
+    );
+    assert!(names.iter().any(|n| n == "Music") && names.iter().any(|n| n == "Level"), "{names:?}");
+}

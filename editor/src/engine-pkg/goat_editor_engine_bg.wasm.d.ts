@@ -36,6 +36,7 @@ export const editorengine_pan: (a: number, b: number, c: number) => void;
 export const editorengine_paste: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const editorengine_pick: (a: number, b: number, c: number) => [number, number];
 export const editorengine_play: (a: number, b: number) => void;
+export const editorengine_play_scenes: (a: number) => [number, number];
 export const editorengine_prefab_info: (a: number, b: number, c: number) => [number, number];
 export const editorengine_profiler: (a: number) => [number, number];
 export const editorengine_put_file: (a: number, b: number, c: number, d: number, e: number) => void;

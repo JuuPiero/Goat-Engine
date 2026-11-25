@@ -24,6 +24,8 @@ pub mod builtins;
 mod component_info;
 pub mod prefab;
 pub mod registry;
+pub mod scenes;
+pub use scenes::{dont_destroy_on_load, LoadedScene, LoadedScenes, SceneMember, DONT_DESTROY_ON_LOAD};
 
 pub use prefab::{apply_overrides, find_in_instance, merge_overrides, resolve_file, set_track_overrides, PrefabBaseline, PrefabOverride, PrefabSource};
 
@@ -481,23 +483,19 @@ fn with_parts<R>(ctx: &mut Context, f: impl FnOnce(&mut World, &mut dyn Graphics
     result
 }
 
-/// Loads `key` (a `.scene.json` under the asset root). Returns its root entities.
+/// Loads `key` (a `.scene.json` under the asset root) now. Single: everything else goes (but
+/// `DontSave` helpers and DontDestroyOnLoad objects); Additive: added as one more loaded scene
+/// (see [`scenes`]). Returns its root entities.
 pub fn load_scene(ctx: &mut Context, key: &str, mode: LoadMode) -> Result<Vec<Entity>, SceneError> {
-    if mode == LoadMode::Single {
-        let doomed: Vec<Entity> = ctx.world.query::<()>().without::<&DontSave>().iter().map(|(e, _)| e).collect();
-        for e in doomed {
-            let _ = ctx.world.despawn(e);
-        }
-    }
-    let roots = with_parts(ctx, |world, gfx, assets, registry| {
+    scenes::load(ctx, key, mode).map(|(_, roots)| roots)
+}
+
+/// The spawning part of a load (no scene bookkeeping).
+pub(crate) fn load_scene_impl(ctx: &mut Context, key: &str) -> Result<Vec<Entity>, SceneError> {
+    with_parts(ctx, |world, gfx, assets, registry| {
         let file = resolve_file(assets, key)?;
         spawn_file_depth(world, gfx, assets, registry, &file, key, None, 0, false)
-    })??;
-    let active = ctx.resources.get_or_default::<ActiveScene>();
-    if mode == LoadMode::Single || active.0.is_empty() {
-        active.0 = key.to_string();
-    }
-    Ok(roots)
+    })?
 }
 
 /// Instantiates a prefab file: a new entity named after it (with [`PrefabInstance`]) whose
@@ -540,6 +538,7 @@ impl Plugin for ScenePlugin {
         ctx.resources.get_or_default::<SceneRegistry>();
     }
     fn late_update(&mut self, ctx: &mut Context) {
+        Self::run_queued(ctx);
         let pending = match ctx.resources.get_mut::<SceneRequests>() {
             Some(r) if !r.0.is_empty() => std::mem::take(&mut r.0),
             _ => return,
@@ -549,6 +548,12 @@ impl Plugin for ScenePlugin {
                 goat_core::error!("loadScene {key}: {e}");
             }
         }
+    }
+}
+
+impl ScenePlugin {
+    fn run_queued(ctx: &mut Context) {
+        scenes::run_ops(ctx);
     }
 }
 
@@ -573,11 +578,19 @@ pub fn resolve_scene(settings: Option<&goat_runtime::ProjectSettings>, name_or_i
     scenes.iter().find(|s| stem(s) == name_or_index || **s == name_or_index).map(|s| s.to_string()).or_else(|| Some(name_or_index.to_string()))
 }
 
-/// Queues a scene load for the end of the frame (see [`SceneRequests`]).
-pub fn request_scene(ctx: &mut Context, name_or_index: &str, mode: LoadMode) -> Result<String, SceneError> {
-    let key = resolve_scene(ctx.resources.get::<goat_runtime::ProjectSettings>(), name_or_index).ok_or_else(|| SceneError::Format(name_or_index.into(), "no such scene in Build Settings".into()))?;
-    ctx.resources.get_or_default::<SceneRequests>().0.push((key.clone(), mode));
-    Ok(key)
+/// Queues a scene load for the end of the frame; returns its key and the operation id
+/// ([`scenes::SceneOps`]: `done` once loaded).
+pub fn request_scene(ctx: &mut Context, name_or_index: &str, mode: LoadMode) -> Result<(String, u64), SceneError> {
+    let mut key = resolve_scene(ctx.resources.get::<goat_runtime::ProjectSettings>(), name_or_index).ok_or_else(|| SceneError::Format(name_or_index.into(), "no such scene in Build Settings".into()))?;
+    // a bare name outside Build Settings: scenes/<name>.scene.json when it exists
+    if !key.contains('/') && !key.ends_with(".json") {
+        let guess = format!("scenes/{key}.scene.json");
+        if ctx.resources.get::<AssetServer>().is_some_and(|a| a.io.exists(&guess)) {
+            key = guess;
+        }
+    }
+    let id = ctx.resources.get_or_default::<scenes::SceneOps>().push(scenes::SceneOp::Load(key.clone(), mode));
+    Ok((key, id))
 }
 
 #[cfg(test)]

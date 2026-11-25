@@ -34,7 +34,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ Goat Shader: file `.shader` (ShaderLab + HLSL như Unity) dịch sang WGSL cho desktop / web, Fallback cho 3DS; Inspector material / shader, Create ▸ Shader, nạp lại khi sửa
 - ✅ Goat Shader trên 3DS: hàm fragment → texture combiner (TEV) của PICA (kiểm bằng bộ mô phỏng TEV + Citra)
 - ✅ Goat Shader: keyword, nhiều Pass, alpha test (`clip`) và uv transform trên 3DS
-- ⬜ Fog gas cho khói
+- ⏸ Fog gas cho khói — tạm hoãn: Citra / Azahar không giả lập chế độ gas của PICA nên không kiểm chứng được; làm khi có máy 3DS thật để thử (khói hiện dùng particles)
 - ✅ Shadow map trên desktop (đèn directional `shadows`, 2048², PCF 3×3, đi theo camera); 3DS dùng shadow map phần cứng PICA (xem trên) hoặc blob shadow
 - ✅ Post-process (`RenderSettings.post`): desktop có exposure / contrast / saturation / tint / vignette / bloom; 3DS pha màu exposure × tint trong texenv stage 4
 - ✅ Sprite / 2D (crate `goat-sprites`): Sprite + sprite sheet, SpriteRenderer (tint, flip, layer, sorting order), gom lô theo texture → 1 draw call mỗi lô
@@ -138,7 +138,7 @@ Duyệt bảng "Đối chiếu với Unity" và từng phần README / API của
 - ✅ Đồ hoạ cấp thấp (desktop, editor, 3DS): `RenderTexture` (asset + `new`) + `Camera.targetTexture`, `Texture2D` (setPixel / getPixel / apply / loadImage / encodeToPNG / readPixels), `Graphics.drawMesh` / `drawMeshInstanced` + `MaterialPropertyBlock` (màu), `Graphics.blit` + component Post Effect, `GL`, `Debug.drawLine` / `drawRay`
 - ⬜ Còn lại của đồ hoạ cấp thấp: RawImage hiện render texture, `Sprite.create`, `Graphics.drawTexture`, `onRenderImage` trong script, `readPixels` trên web / 3DS, GPU instancing thật (desktop), Inspector của asset Render Texture
 - ⬜ `Gizmos.*` / `Handles.*` + `onDrawGizmos` / `onDrawGizmosSelected` của script
-- ⬜ Nhiều scene: `LoadSceneMode.Additive`, `loadSceneAsync` → AsyncOperation, `unloadSceneAsync`, `dontDestroyOnLoad`, Hierarchy nhiều scene
+- ✅ Nhiều scene: `LoadSceneMode.Additive`, `loadSceneAsync` → AsyncOperation, `unloadSceneAsync`, `dontDestroyOnLoad`, `setActiveScene`, `gameObject.scene`, sự kiện sceneLoaded / sceneUnloaded, Hierarchy nhiều scene khi Play
 - ⬜ `TextAsset` / `JsonAsset` / `BufferAsset`, `Resources.loadPrefab` / `loadAll` / `find`
 - ⬜ Attribute field: `@hideInInspector`, `@nonSerialized`, mảng + struct `@serializable`, `@createAssetMenu`, `@contextMenu`, decorator kiểu Odin (`@button`, `@showIf`, `@boxGroup`...)
 - ⬜ API script cho LineRenderer / TrailRenderer / ParticleSystem / Light / Camera (field + hàm), EventSystem kéo thả (`onBeginDrag` / `onDrag` / `onDrop` / `onScroll`)

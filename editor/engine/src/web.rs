@@ -123,6 +123,11 @@ impl EditorEngine {
         serde_json::to_string(&self.core.hierarchy()).unwrap_or_default()
     }
 
+    /// Play mode: `[{ handle, name, key, active }]` of the loaded scenes (Hierarchy headers).
+    pub fn play_scenes(&self) -> String {
+        serde_json::to_string(&self.core.play_scenes()).unwrap_or_default()
+    }
+
     pub fn select(&mut self, id: Option<String>) {
         self.core.select(id.as_deref().and_then(entity_of));
     }

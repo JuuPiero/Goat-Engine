@@ -108,6 +108,10 @@ export class EditorEngine {
      */
     play(dual_3ds: boolean): void;
     /**
+     * Play mode: `[{ handle, name, key, active }]` of the loaded scenes (Hierarchy headers).
+     */
+    play_scenes(): string;
+    /**
      * `{ root, key, overrides: [...] }` of the prefab instance an entity belongs to, or "null".
      */
     prefab_info(id: string): string;
@@ -286,6 +290,7 @@ export interface InitOutput {
     readonly editorengine_paste: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly editorengine_pick: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_play: (a: number, b: number) => void;
+    readonly editorengine_play_scenes: (a: number) => [number, number];
     readonly editorengine_prefab_info: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_profiler: (a: number) => [number, number];
     readonly editorengine_put_file: (a: number, b: number, c: number, d: number, e: number) => void;
