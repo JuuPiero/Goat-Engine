@@ -1,7 +1,8 @@
 //! The ShaderLab part of a `.shader` file (Unity's syntax): name, Properties, Tags, render state
 //! (Blend / Cull / ZWrite / ZTest / Fog), the program (`HLSLPROGRAM … ENDHLSL` or
 //! `CGPROGRAM … ENDCG`, plus `HLSLINCLUDE` / `CGINCLUDE` shared code) and Fallback. The first
-//! SubShader and its first Pass (or the SubShader's own program, surface shaders) are used.
+//! SubShader is used: each of its Passes (drawn in order; SubShader-level state is every pass's
+//! default, like Unity), or the SubShader's own program (surface shaders).
 
 use serde::{Deserialize, Serialize};
 
@@ -48,6 +49,33 @@ pub struct Property {
     /// [Enum(Name, value, …)] / [KeywordEnum(A, B)]: a dropdown.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<(String, f32)>,
+    /// [Toggle(KEYWORD)]: the keyword on while the value isn't 0 ([Toggle] alone: `_NAME_ON`);
+    /// [KeywordEnum(A, B)]: `_NAME_A`, `_NAME_B` — one per option.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyword: Option<String>,
+}
+
+impl Property {
+    /// The keyword this property turns on for a value (Toggle / KeywordEnum).
+    pub fn keyword_for(&self, value: f32) -> Option<String> {
+        if !self.options.is_empty() && self.keyword.as_deref() == Some("") {
+            // KeywordEnum: _NAME_OPTION
+            let i = value.round().max(0.0) as usize;
+            return self.options.get(i).map(|(o, _)| format!("{}_{}", self.name, o).to_ascii_uppercase());
+        }
+        match &self.keyword {
+            Some(k) if !k.is_empty() && value != 0.0 => Some(k.clone()),
+            _ => None,
+        }
+    }
+}
+
+/// One Pass: its render state and program.
+#[derive(Clone, Debug)]
+pub struct LabPass {
+    pub state: RenderState,
+    pub program: String,
+    pub program_line: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,11 +107,14 @@ pub struct RenderState {
     /// Tags { "Queue" = "Transparent" } etc. (Background 1000 … Overlay 4000).
     pub queue: i32,
     pub render_type: Option<String>,
+    /// Tags { "LightMode" = "…" } of a pass (ShadowCaster / Meta / DepthOnly passes aren't drawn).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light_mode: Option<String>,
 }
 
 impl Default for RenderState {
     fn default() -> Self {
-        RenderState { blend: Blend::Opaque, cull: Cull::Back, zwrite: None, ztest_always: false, fog: true, queue: 2000, render_type: None }
+        RenderState { blend: Blend::Opaque, cull: Cull::Back, zwrite: None, ztest_always: false, fog: true, queue: 2000, render_type: None, light_mode: None }
     }
 }
 
@@ -98,6 +129,8 @@ pub struct ShaderLab {
     pub program_line: u32,
     pub fallback: Option<String>,
     pub warnings: Vec<Diagnostic>,
+    /// Every pass (the first one is also `state` / `program`).
+    pub passes: Vec<LabPass>,
 }
 
 struct Program {
@@ -241,6 +274,9 @@ pub fn parse(src: &str) -> Result<ShaderLab, Diagnostic> {
     let mut properties = Vec::new();
     let mut state = RenderState::default();
     let mut program: Option<usize> = None;
+    // passes: program index + the token range of the Pass body (its commands are replayed over
+    // the SubShader's state once the SubShader is read)
+    let mut pass_list: Vec<(usize, usize, usize)> = Vec::new();
     let mut fallback = None;
     let mut subshaders = 0;
     // a small state machine over the nested blocks
@@ -266,6 +302,7 @@ pub fn parse(src: &str) -> Result<ShaderLab, Diagnostic> {
                             } + off;
                         }
                         "RenderType" => state.render_type = Some(v),
+                        "LightMode" => state.light_mode = Some(v),
                         _ => {}
                     }
                 }
@@ -330,7 +367,6 @@ pub fn parse(src: &str) -> Result<ShaderLab, Diagnostic> {
             "SubShader" => {
                 subshaders += 1;
                 p.expect("{")?;
-                let mut passes = 0;
                 while !p.eat("}") {
                     let line = p.line();
                     let Some(Tok::Ident(w)) = p.next() else { return Err(diag(line, "unexpected token in SubShader")) };
@@ -346,27 +382,24 @@ pub fn parse(src: &str) -> Result<ShaderLab, Diagnostic> {
                         continue;
                     }
                     if w == "Pass" {
-                        passes += 1;
                         p.expect("{")?;
+                        let body = p.pos;
+                        let mut pass_program = None;
+                        let mut scratch = RenderState::default();
                         while !p.eat("}") {
                             let line = p.line();
                             let Some(Tok::Ident(w)) = p.next() else { return Err(diag(line, "unexpected token in Pass")) };
-                            if passes > 1 {
-                                if p.is("{") {
-                                    p.skip_group();
-                                }
-                                continue;
-                            }
                             if let Some(n) = w.strip_prefix("__GOAT_PROGRAM_") {
-                                program.get_or_insert(n.parse().unwrap_or(0));
+                                pass_program.get_or_insert(n.parse().unwrap_or(0));
                                 continue;
                             }
-                            if !state_command(&mut p, &w, &mut state, &mut warnings)? {
+                            if !state_command(&mut p, &w, &mut scratch, &mut warnings)? {
                                 warnings.push(diag(line, format!("'{w}' ignored")));
                             }
                         }
-                        if passes == 2 {
-                            warnings.push(diag(line, "only the first Pass is drawn"));
+                        match pass_program {
+                            Some(n) => pass_list.push((n, body, p.pos - 1)),
+                            None => warnings.push(diag(line, "a Pass without a program (fixed-function passes aren't supported) is skipped")),
                         }
                         continue;
                     }
@@ -385,18 +418,52 @@ pub fn parse(src: &str) -> Result<ShaderLab, Diagnostic> {
             other => return Err(diag(line, format!("'{other}' isn't a shader block (Properties, SubShader, Fallback)"))),
         }
     }
-    let prog = program.and_then(|i| programs.into_iter().nth(i)).ok_or_else(|| diag(0, "the shader has no HLSLPROGRAM … ENDHLSL block"))?;
     // the include code goes first (its own line numbers are lost: errors there point at the program)
-    let text = if include.is_empty() { prog.text } else { format!("{include}\n{}", prog.text) };
-    let program_line = if include.is_empty() { prog.line } else { prog.line.saturating_sub(include.matches('\n').count() as u32 + 1) };
-    if state.zwrite.is_none() && state.blend != Blend::Opaque && state.queue < 2500 {
-        state.queue = 3000;
+    let with_include = |prog: &Program| -> (String, u32) {
+        let text = if include.is_empty() { prog.text.clone() } else { format!("{include}\n{}", prog.text) };
+        let line = if include.is_empty() { prog.line } else { prog.line.saturating_sub(include.matches('\n').count() as u32 + 1) };
+        (text, line)
+    };
+    let finish = |mut s: RenderState| {
+        if s.zwrite.is_none() && s.blend != Blend::Opaque && s.queue < 2500 {
+            s.queue = 3000;
+        }
+        s
+    };
+    let mut passes = Vec::new();
+    // the SubShader's own program (surface shaders) comes first
+    if let Some(prog) = program.and_then(|i| programs.get(i)) {
+        let (program, program_line) = with_include(prog);
+        passes.push(LabPass { state: finish(state.clone()), program, program_line });
     }
-    Ok(ShaderLab { name, properties, state, program: text, program_line, fallback, warnings })
+    for (n, start, end) in pass_list {
+        let Some(prog) = programs.get(n) else { continue };
+        // the pass's commands over the SubShader's state
+        let mut s = state.clone();
+        let mut q = P { toks: p.toks[start..end].to_vec(), pos: 0 };
+        let mut ignored = Vec::new();
+        while q.pos < q.toks.len() {
+            let Some(Tok::Ident(w)) = q.next() else { continue };
+            if w.starts_with("__GOAT_PROGRAM_") {
+                continue;
+            }
+            let _ = state_command(&mut q, &w, &mut s, &mut ignored);
+        }
+        // passes the engine has no use for: shadow casting (it renders its own), lightmap baking,
+        // depth / motion prepasses
+        if matches!(s.light_mode.as_deref(), Some("ShadowCaster" | "Meta" | "DepthOnly" | "DepthNormals" | "MotionVectors" | "ShadowCollector")) {
+            warnings.push(diag(0, format!("Pass with LightMode {} skipped", s.light_mode.as_deref().unwrap_or(""))));
+            continue;
+        }
+        let (program, program_line) = with_include(prog);
+        passes.push(LabPass { state: finish(s), program, program_line });
+    }
+    let first = passes.first().cloned().ok_or_else(|| diag(0, "the shader has no HLSLPROGRAM … ENDHLSL block"))?;
+    Ok(ShaderLab { name, properties, state: first.state, program: first.program, program_line: first.program_line, fallback, warnings, passes })
 }
 
 fn property(p: &mut P) -> Result<Property, Diagnostic> {
-    let mut prop = Property { name: String::new(), display: String::new(), kind: PropertyKind::Float, default: vec![0.0], default_texture: None, hdr: false, toggle: false, no_scale_offset: false, hidden: false, int_range: false, normal: false, header: None, space: false, options: Vec::new() };
+    let mut prop = Property { name: String::new(), display: String::new(), kind: PropertyKind::Float, default: vec![0.0], default_texture: None, hdr: false, toggle: false, no_scale_offset: false, hidden: false, int_range: false, normal: false, header: None, space: false, options: Vec::new(), keyword: None };
     // attributes
     while p.eat("[") {
         let attr = p.word()?;
@@ -423,7 +490,12 @@ fn property(p: &mut P) -> Result<Property, Diagnostic> {
         p.expect("]")?;
         match attr.as_str() {
             "HDR" => prop.hdr = true,
-            "Toggle" | "ToggleOff" | "MaterialToggle" => prop.toggle = true,
+            "Toggle" | "MaterialToggle" => {
+                prop.toggle = true;
+                // the name is known later: "" = _NAME_ON
+                prop.keyword = Some(args.first().cloned().unwrap_or_default());
+            }
+            "ToggleOff" => prop.toggle = true,
             "NoScaleOffset" => prop.no_scale_offset = true,
             "HideInInspector" | "PerRendererData" => prop.hidden = true,
             "IntRange" => prop.int_range = true,
@@ -433,11 +505,18 @@ fn property(p: &mut P) -> Result<Property, Diagnostic> {
             "Enum" => {
                 prop.options = args.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0].clone(), c[1].parse().unwrap_or(0.0))).collect();
             }
-            "KeywordEnum" => prop.options = args.iter().enumerate().map(|(i, a)| (a.clone(), i as f32)).collect(),
+            "KeywordEnum" => {
+                prop.options = args.iter().enumerate().map(|(i, a)| (a.clone(), i as f32)).collect();
+                prop.keyword = Some(String::new());
+            }
             _ => {}
         }
     }
     prop.name = p.word()?;
+    // [Toggle] without a keyword: _NAME_ON
+    if prop.toggle && prop.options.is_empty() && prop.keyword.as_deref() == Some("") {
+        prop.keyword = Some(format!("{}_ON", prop.name).to_ascii_uppercase());
+    }
     p.expect("(")?;
     prop.display = p.word()?;
     p.expect(",")?;

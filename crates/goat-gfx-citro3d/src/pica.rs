@@ -126,7 +126,7 @@ pub struct Citro3dBackend {
     dvlbs: [*mut ctru::DVLB_s; PROGRAMS],
     fixed: Box<Fixed>,
     /// Uniform locations per program: projection, modelView, viewInv, outline (-1 = none).
-    locs: [[i32; 4]; PROGRAMS],
+    locs: [[i32; 5]; PROGRAMS],
     loc_projection: i32,
     loc_model_view: i32,
     /// The program bound now and the view's matrices (re-uploaded when switching program).
@@ -159,8 +159,12 @@ pub struct Citro3dBackend {
     view_grade: Option<Color>,
     /// The light probe light currently set over the view's lights (None = the view's ambient).
     probe_light: Option<LightProbeSample>,
+    /// uv tiling / offset of texture units 0 / 1 (the standard vertex shader's `uvST`).
+    uv_st: [[f32; 4]; 2],
     stereo: bool,
 }
+
+const UV_IDENTITY: [[f32; 4]; 2] = [[1.0, 1.0, 0.0, 0.0]; 2];
 
 fn depth24() -> c3d::C3D_DEPTHTYPE {
     c3d::C3D_DEPTHTYPE { __e: ctru::GPU_RB_DEPTH24_STENCIL8 }
@@ -297,13 +301,13 @@ impl Citro3dBackend {
                 pt_color: std::mem::zeroed(),
             });
             // ctru-sys and citro3d-sys generate the same struct twice: same layout, cast.
-            let mut locs = [[-1i32; 4]; PROGRAMS];
+            let mut locs = [[-1i32; 5]; PROGRAMS];
             for k in 0..PROGRAMS {
                 let prog = &mut fixed.programs[k] as *mut c3d::shaderProgram_s as *mut ctru::shaderProgram_s;
                 let _ = ctru::shaderProgramInit(prog);
                 let _ = ctru::shaderProgramSetVsh(prog, (*dvlbs[k]).DVLE);
                 let vsh = fixed.programs[k].vertexShader as *mut ctru::shaderInstance_s;
-                for (j, name) in [c"projection", c"modelView", c"viewInv", c"outline"].iter().enumerate() {
+                for (j, name) in [c"projection", c"modelView", c"viewInv", c"outline", c"uvST"].iter().enumerate() {
                     locs[k][j] = ctru::shaderInstanceGetUniformLocation(vsh, name.as_ptr()) as i32;
                 }
                 if locs[k][0] < 0 || locs[k][1] < 0 {
@@ -366,6 +370,7 @@ impl Citro3dBackend {
                 view_time: 0.0,
                 view_grade: None,
                 probe_light: None,
+                uv_st: UV_IDENTITY,
                 stereo: false,
             })
         }
@@ -437,6 +442,29 @@ impl Citro3dBackend {
             if inv >= 0 {
                 for (i, r) in self.view_inv.iter().enumerate() {
                     c3d::C3D_FVUnifSet(ctru::GPU_VERTEX_SHADER, inv + i as i32, r[0], r[1], r[2], r[3]);
+                }
+            }
+        }
+        // uniform registers are shared by the programs: put this one's uv transform back
+        let st = self.uv_st;
+        self.upload_uv_st(st);
+    }
+
+    /// uv tiling / offset of texture units 0 / 1 (programs with `uvST`: the standard one).
+    fn set_uv_st(&mut self, st: [[f32; 4]; 2]) {
+        if self.uv_st != st {
+            self.upload_uv_st(st);
+        }
+    }
+
+    fn upload_uv_st(&mut self, st: [[f32; 4]; 2]) {
+        self.uv_st = st;
+        let loc = self.locs.get(self.bound_program).map(|l| l[4]).unwrap_or(-1);
+        if loc >= 0 {
+            // SAFETY: uniform upload to the bound program's registers.
+            unsafe {
+                for (i, v) in st.iter().enumerate() {
+                    c3d::C3D_FVUnifSet(ctru::GPU_VERTEX_SHADER, loc + i as i32, v[0], v[1], v[2], v[3]);
                 }
             }
         }
@@ -702,12 +730,25 @@ impl Citro3dBackend {
         if let Some(p) = &m.tev {
             self.set_tev_material(m, p);
             self.set_render_state(m);
+            // clip / discard: the program's alpha test
+            if let Some(a) = p.alpha_test {
+                // SAFETY: fixed-function state.
+                unsafe {
+                    if a.reference > 1.0 {
+                        c3d::C3D_AlphaTest(true, ctru::GPU_NEVER, 0);
+                    } else {
+                        let r = (a.reference.clamp(0.0, 1.0) * 255.0).round() as i32;
+                        c3d::C3D_AlphaTest(true, if a.greater_equal { ctru::GPU_GEQUAL } else { ctru::GPU_LEQUAL }, r);
+                    }
+                }
+            }
             return;
         }
         let gpu = |id: Option<TextureId>, cube: bool, s: &mut Self| id.filter(|t| s.cubes.contains(&t.index()) == cube).and_then(|t| s.gpu_textures.get_mut(&t.index())).map(|t| &mut *t.tex as *mut c3d::C3D_Tex);
         let env_map = if m.reflectivity > 0.0 { gpu(m.env_map, true, self) } else { None };
         let emissive_map = if env_map.is_none() { gpu(m.emissive_texture, false, self) } else { None };
         self.use_program(if env_map.is_some() { 1 } else { 0 });
+        self.set_uv_st(UV_IDENTITY);
         self.set_procedural(m.procedural.as_ref());
         // SAFETY: texenv / light env / blend calls with valid pointers owned by the backend.
         unsafe {
@@ -819,6 +860,7 @@ impl Citro3dBackend {
     fn set_tev_material(&mut self, m: &MaterialDesc, p: &goat_gfx::TevProgram) {
         use goat_gfx::{TevFunc, TevOperand, TevSource};
         self.use_program(0);
+        self.set_uv_st(p.uv);
         self.set_procedural(None);
         let tex = |i: usize, s: &mut Self| p.textures[i].and_then(|u| m.shader_textures.get(u).copied().flatten()).and_then(|t| s.gpu_textures.get_mut(&t.index())).map(|t| &mut *t.tex as *mut c3d::C3D_Tex);
         let (t0, t1) = (tex(0, self), tex(1, self));
@@ -1095,6 +1137,27 @@ impl Citro3dBackend {
                 stats.draw_calls += 1;
                 // the next item sets its material again
                 last_material = None;
+            }
+            // the material's other passes (multi-pass shaders): the same buffers again
+            let mut next = self.materials.get(it.material).and_then(|m| m.next_pass);
+            let mut passes = 1;
+            while let Some(pm) = next.filter(|n| passes < 4 && *n != it.material) {
+                passes += 1;
+                let Some(m) = self.materials.get(pm).cloned() else { break };
+                let tex = m.texture.and_then(|t| self.gpu_textures.get_mut(&t.index())).map(|t| &mut *t.tex as *mut c3d::C3D_Tex);
+                self.set_material(&m, tex);
+                last_material = None;
+                // SAFETY: one more draw of the same buffers (the program may have changed).
+                unsafe {
+                    c3d::C3D_FVUnifMtx4x4(ctru::GPU_VERTEX_SHADER, self.loc_model_view, &mv);
+                    let buf = c3d::C3D_GetBufInfo();
+                    c3d::BufInfo_Init(buf);
+                    c3d::BufInfo_Add(buf, vbo, Vertex::SIZE as isize, 4, 0x3210);
+                    c3d::C3D_DrawElements(ctru::GPU_TRIANGLES, count, c3d::C3D_UNSIGNED_SHORT as i32, ibo);
+                }
+                stats.draw_calls += 1;
+                stats.triangles += count as u32 / 3;
+                next = m.next_pass;
             }
         }
         if !full {

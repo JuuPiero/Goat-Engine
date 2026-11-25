@@ -214,6 +214,9 @@ pub struct MaterialDesc {
     pub shader_textures: [Option<TextureId>; SHADER_TEXTURES],
     /// The shader compiled for texture combiners (3DS), when it fits.
     pub tev: Option<TevProgram>,
+    /// The next pass of a multi-pass shader: the object is drawn again with that material right
+    /// after this one (up to 4 passes).
+    pub next_pass: Option<MaterialId>,
 }
 
 impl Default for MaterialDesc {
@@ -246,6 +249,7 @@ impl Default for MaterialDesc {
             shader_color_slots: 0,
             shader_textures: [None; SHADER_TEXTURES],
             tev: None,
+            next_pass: None,
         }
     }
 }
@@ -307,6 +311,17 @@ pub struct TevProgram {
     pub lit: bool,
     /// Texture of PICA unit 0 / 1: an index into `MaterialDesc::shader_textures`.
     pub textures: [Option<usize>; 2],
+    /// uv tiling / offset of unit 0 / 1: (scale x, scale y, offset x, offset y).
+    pub uv: [[f32; 4]; 2],
+    /// The alpha test standing for `clip` / `discard` (pixels failing it are dropped).
+    pub alpha_test: Option<TevAlphaTest>,
+}
+
+/// Keep a pixel when its final alpha compares so with `reference` (0..1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TevAlphaTest {
+    pub greater_equal: bool,
+    pub reference: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

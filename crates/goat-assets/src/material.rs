@@ -105,6 +105,10 @@ pub struct MaterialFile {
     pub shader: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Shader keywords turned on (Unity's Material.shaderKeywords; [Toggle(KW)] / [KeywordEnum]
+    /// properties add theirs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
 }
 
 impl MaterialFile {

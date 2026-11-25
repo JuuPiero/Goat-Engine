@@ -25,15 +25,20 @@
 //! fixed4 frag(v2f i) : SV_Target { return tex2D(_MainTex, i.uv); }
 //! ```
 //!
+//! Keywords like Unity's: `#pragma multi_compile _ A B` / `shader_feature A` groups, `#if` /
+//! `#ifdef` / `#elif` / `#else` / `#endif` in the program; a material turns keywords on
+//! (`"keywords"`, [Toggle(KW)] / [KeywordEnum] properties) and each combination is compiled as a
+//! variant ([`compile_variant`]). Several Passes are drawn in order, each with its render state
+//! ([`Shader::passes`]).
+//!
 //! Limits: 16 parameter slots (one per Color / Vector / Float / Range / Int property and per
-//! texture's `_ST`), 4 textures, no `#if` / keywords / multiple passes yet.
+//! texture's `_ST`), 4 textures.
 
 pub mod hlsl;
 pub mod pica;
 pub mod shaderlab;
 pub mod wgsl;
 
-use std::collections::HashMap;
 
 use serde::Serialize;
 
@@ -110,6 +115,12 @@ pub struct Shader {
     pub pica_notes: Vec<String>,
     #[serde(skip_serializing)]
     pub pica: Option<pica::PicaIr>,
+    /// `multi_compile` / `shader_feature` groups: each group's keywords ("_" = none of them).
+    pub keyword_groups: Vec<Vec<String>>,
+    /// The keywords this variant was compiled with.
+    pub keywords: Vec<String>,
+    /// The passes after this one (same properties and parameter block), drawn in order.
+    pub passes: Vec<Shader>,
 }
 
 impl Shader {
@@ -188,11 +199,7 @@ fn parse_pragmas(pragmas: &[(u32, Vec<String>)], state: &mut RenderState, warnin
             }
             "vertex" => vertex = words.get(1).cloned(),
             "fragment" => fragment = words.get(1).cloned(),
-            "multi_compile" | "multi_compile_local" | "shader_feature" | "shader_feature_local" | "multi_compile_fog" | "multi_compile_instancing" => {
-                if !first.ends_with("_fog") && !first.ends_with("_instancing") {
-                    warnings.push(diag(*line, format!("#pragma {first}: keywords aren't supported yet (ignored)")));
-                }
-            }
+            // keywords are read by compile_variant
             _ => {}
         }
     }
@@ -205,23 +212,71 @@ fn parse_pragmas(pragmas: &[(u32, Vec<String>)], state: &mut RenderState, warnin
     }
 }
 
-/// Compiles a `.shader` file.
+/// Compiles a `.shader` file (its default variant: the first keyword of each group).
 pub fn compile(src: &str) -> Result<Shader, Vec<Diagnostic>> {
-    compile_inner(src.trim_start_matches('\u{feff}')).map_err(|e| vec![e])
+    compile_variant(src, &[])
 }
 
-fn compile_inner(src: &str) -> Result<Shader, Diagnostic> {
-    let lab = shaderlab::parse(src)?;
-    let mut state = lab.state.clone();
-    let mut warnings = lab.warnings.clone();
-    let pp = hlsl::preprocess(&lab.program, lab.program_line)?;
-    let entry = parse_pragmas(&pp.pragmas, &mut state, &mut warnings)?;
-    let mut parser = hlsl::Parser::new(pp.tokens);
-    // the surface output structs are known types
-    parser.structs.extend(["SurfaceOutput".to_string(), "SurfaceOutputStandard".to_string()]);
-    let items = parser.items()?;
+/// Compiles the variant of a `.shader` file for a material's keywords: in each keyword group the
+/// first keyword the material has, else the group's first (like Unity).
+pub fn compile_variant(src: &str, keywords: &[String]) -> Result<Shader, Vec<Diagnostic>> {
+    compile_inner(src.trim_start_matches('\u{feff}'), keywords).map_err(|e| vec![e])
+}
 
-    // ---- layout: properties first (in order), then other uniforms of the program
+/// The `multi_compile` / `shader_feature` groups of pragmas.
+fn keyword_groups(pragmas: &[(u32, Vec<String>)], groups: &mut Vec<Vec<String>>) {
+    for (_, words) in pragmas {
+        let Some(first) = words.first() else { continue };
+        let options: Vec<String> = words[1..].to_vec();
+        let group = match first.as_str() {
+            "multi_compile" | "multi_compile_local" | "multi_compile_vertex" | "multi_compile_fragment" => options,
+            // shader_feature A = (none, A)
+            "shader_feature" | "shader_feature_local" | "shader_feature_vertex" | "shader_feature_fragment" => {
+                if options.len() == 1 {
+                    vec!["_".into(), options[0].clone()]
+                } else {
+                    options
+                }
+            }
+            _ => continue,
+        };
+        if !group.is_empty() && !groups.contains(&group) {
+            groups.push(group);
+        }
+    }
+}
+
+fn compile_inner(src: &str, wanted: &[String]) -> Result<Shader, Diagnostic> {
+    let lab = shaderlab::parse(src)?;
+    // keyword groups of every pass (read without keywords), then the variant's keywords
+    let mut groups = Vec::new();
+    for pass in &lab.passes {
+        let pp = hlsl::preprocess(&pass.program, pass.program_line)?;
+        keyword_groups(&pp.pragmas, &mut groups);
+    }
+    let keywords: Vec<String> = groups.iter().filter_map(|g| g.iter().find(|o| wanted.contains(o)).or(g.first()).filter(|o| !o.chars().all(|c| c == '_')).cloned()).collect();
+
+    // every pass: preprocessed with the keywords, entry point, items
+    struct Parsed {
+        state: RenderState,
+        warnings: Vec<Diagnostic>,
+        entry: Entry,
+        items: Vec<Item>,
+    }
+    let mut parsed = Vec::new();
+    for pass in &lab.passes {
+        let mut state = pass.state.clone();
+        let mut warnings = Vec::new();
+        let pp = hlsl::preprocess_with(&pass.program, pass.program_line, &keywords)?;
+        let entry = parse_pragmas(&pp.pragmas, &mut state, &mut warnings)?;
+        let mut parser = hlsl::Parser::new(pp.tokens);
+        // the surface output structs are known types
+        parser.structs.extend(["SurfaceOutput".to_string(), "SurfaceOutputStandard".to_string()]);
+        let items = parser.items()?;
+        parsed.push(Parsed { state, warnings, entry, items });
+    }
+
+    // ---- layout (shared by the passes): properties first (in order), then other uniforms
     let mut layout = Layout::default();
     let mut params = Vec::new();
     let mut textures = Vec::new();
@@ -236,11 +291,18 @@ fn compile_inner(src: &str) -> Result<Shader, Diagnostic> {
         params.push(ParamSlot { name: name.to_string(), slot: s, default });
         Ok(s)
     };
-    // the HLSL declaration of a uniform decides how its slot is read
-    let declared: HashMap<String, Ty> = items.iter().filter_map(|i| match i {
-        Item::Global { ty, name, is_static: false, constant: false, .. } => Some((name.clone(), ty.clone())),
-        _ => None,
-    }).collect();
+    // the HLSL declaration of a uniform decides how its slot is read (first pass declaring it)
+    let mut declared: Vec<(String, Ty)> = Vec::new();
+    for p in &parsed {
+        for i in &p.items {
+            if let Item::Global { ty, name, is_static: false, constant: false, .. } = i {
+                if !declared.iter().any(|(n, _)| n == name) {
+                    declared.push((name.clone(), ty.clone()));
+                }
+            }
+        }
+    }
+    let declared_ty = |n: &str| declared.iter().find(|(k, _)| k == n).map(|(_, t)| t.clone());
     for p in &lab.properties {
         let d = |n: usize| -> [f32; 4] {
             let mut a = [0.0; 4];
@@ -260,11 +322,11 @@ fn compile_inner(src: &str) -> Result<Shader, Diagnostic> {
                 textures.push(TextureSlot { name: p.name.clone(), unit, default: p.default_texture.clone().unwrap_or_else(|| "white".into()) });
             }
             PropertyKind::Color | PropertyKind::Vector => {
-                let ty = declared.get(&p.name).cloned().unwrap_or(Ty::vec(4));
+                let ty = declared_ty(&p.name).unwrap_or(Ty::vec(4));
                 slot(&p.name, d(4), ty, &mut layout, &mut params)?;
             }
             _ => {
-                let ty = declared.get(&p.name).cloned().unwrap_or(Ty::F);
+                let ty = declared_ty(&p.name).unwrap_or(Ty::F);
                 slot(&p.name, d(1), ty, &mut layout, &mut params)?;
             }
         }
@@ -288,37 +350,70 @@ fn compile_inner(src: &str) -> Result<Shader, Diagnostic> {
         }
     }
 
-    let custom_vertex = matches!(&entry, Entry::Fragment { vert: Some(_), .. });
-    let kind = if matches!(entry, Entry::Surface { lighting, .. } if lighting != SurfaceLighting::Unlit) { ShaderKind::Surface } else { ShaderKind::Unlit };
-    let mut emitter = wgsl::Emitter::new(&layout);
-    emitter.fog = state.fog;
-    let wgsl = emitter.module(&items, &entry)?;
-    let (pica, pica_error) = match pica::lower(&items, &layout, &entry) {
-        Ok(ir) => (Some(ir), None),
-        Err(e) => (None, Some(e)),
-    };
-    let pica_notes = pica.as_ref().map(|p| p.notes.clone()).unwrap_or_default();
-
     let has = |n: &str| lab.properties.iter().any(|p| p.name == n);
     let first = |names: &[&str], kind: fn(&PropertyKind) -> bool| names.iter().find(|n| lab.properties.iter().any(|p| p.name == **n && kind(&p.kind))).map(|s| s.to_string());
     let is_tex = |k: &PropertyKind| *k == PropertyKind::Texture;
     let is_color = |k: &PropertyKind| matches!(k, PropertyKind::Color | PropertyKind::Vector);
-    let fallback_lighting = match lab.fallback.as_deref().unwrap_or("") {
-        f if f.contains("Unlit") => "unlit",
-        f if f.contains("Toon") => "toon",
-        _ if kind == ShaderKind::Unlit => "unlit",
-        _ if matches!(entry, Entry::Surface { lighting: SurfaceLighting::Toon, .. }) => "toon",
-        _ => "lit",
-    };
-    let standard = StandardMapping {
-        lighting: fallback_lighting.into(),
-        color: first(&["_Color", "_BaseColor", "_TintColor", "_MainColor", "_Tint"], is_color),
-        texture: first(&["_MainTex", "_BaseMap", "_Albedo", "_BaseTex"], is_tex).or_else(|| lab.properties.iter().find(|p| p.kind == PropertyKind::Texture).map(|p| p.name.clone())),
-        emission: first(&["_EmissionColor", "_Emission", "_EmissiveColor"], is_color),
-        cutoff: has("_Cutoff").then(|| "_Cutoff".to_string()),
-    };
-    Ok(Shader { name: lab.name, properties: lab.properties, state, fallback: lab.fallback, kind, custom_vertex, wgsl, params, textures, standard, warnings, pica_error, pica_notes, pica })
-}
 
+    let mut shaders = Vec::new();
+    for p in parsed {
+        let Parsed { state, warnings, entry, items } = p;
+        let custom_vertex = matches!(&entry, Entry::Fragment { vert: Some(_), .. });
+        let kind = if matches!(entry, Entry::Surface { lighting, .. } if lighting != SurfaceLighting::Unlit) { ShaderKind::Surface } else { ShaderKind::Unlit };
+        let mut emitter = wgsl::Emitter::new(&layout);
+        emitter.fog = state.fog;
+        let wgsl = emitter.module(&items, &entry)?;
+        let (pica, pica_error) = match pica::lower(&items, &layout, &entry) {
+            Ok(mut ir) => {
+                ir.opaque = state.blend == Blend::Opaque;
+                (Some(ir), None)
+            }
+            Err(e) => (None, Some(e)),
+        };
+        let pica_notes = pica.as_ref().map(|p| p.notes.clone()).unwrap_or_default();
+        let fallback_lighting = match lab.fallback.as_deref().unwrap_or("") {
+            f if f.contains("Unlit") => "unlit",
+            f if f.contains("Toon") => "toon",
+            _ if kind == ShaderKind::Unlit => "unlit",
+            _ if matches!(entry, Entry::Surface { lighting: SurfaceLighting::Toon, .. }) => "toon",
+            _ => "lit",
+        };
+        let standard = StandardMapping {
+            lighting: fallback_lighting.into(),
+            color: first(&["_Color", "_BaseColor", "_TintColor", "_MainColor", "_Tint"], is_color),
+            texture: first(&["_MainTex", "_BaseMap", "_Albedo", "_BaseTex"], is_tex).or_else(|| lab.properties.iter().find(|p| p.kind == PropertyKind::Texture).map(|p| p.name.clone())),
+            emission: first(&["_EmissionColor", "_Emission", "_EmissiveColor"], is_color),
+            cutoff: has("_Cutoff").then(|| "_Cutoff".to_string()),
+        };
+        shaders.push(Shader {
+            name: lab.name.clone(),
+            properties: lab.properties.clone(),
+            state,
+            fallback: lab.fallback.clone(),
+            kind,
+            custom_vertex,
+            wgsl,
+            params: params.clone(),
+            textures: textures.clone(),
+            standard,
+            warnings,
+            pica_error,
+            pica_notes,
+            pica,
+            keyword_groups: groups.clone(),
+            keywords: keywords.clone(),
+            passes: Vec::new(),
+        });
+    }
+    let mut main = shaders.remove(0);
+    let mut all_warnings = lab.warnings.clone();
+    all_warnings.append(&mut main.warnings);
+    for s in &mut shaders {
+        all_warnings.append(&mut s.warnings);
+    }
+    main.warnings = all_warnings;
+    main.passes = shaders;
+    Ok(main)
+}
 #[cfg(test)]
 mod tests;

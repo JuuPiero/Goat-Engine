@@ -65,6 +65,15 @@ impl EditorCore {
                 if let Some(o) = v.as_object_mut() {
                     o.remove("wgsl");
                     o.remove("params");
+                    // later passes: their state and 3DS status only
+                    if let Some(Value::Array(list)) = o.get_mut("passes") {
+                        for p in list.iter_mut() {
+                            let keep = ["state", "kind", "picaError", "picaNotes"];
+                            if let Some(po) = p.as_object_mut() {
+                                po.retain(|k, _| keep.contains(&k.as_str()));
+                            }
+                        }
+                    }
                 }
                 v
             }

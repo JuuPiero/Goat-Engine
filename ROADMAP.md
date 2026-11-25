@@ -33,7 +33,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 - ✅ Procedural texture (`procedural`: water / fire / noise; 3DS: đơn vị proctex của PICA, desktop: noise trong shader)
 - ✅ Goat Shader: file `.shader` (ShaderLab + HLSL như Unity) dịch sang WGSL cho desktop / web, Fallback cho 3DS; Inspector material / shader, Create ▸ Shader, nạp lại khi sửa
 - ✅ Goat Shader trên 3DS: hàm fragment → texture combiner (TEV) của PICA (kiểm bằng bộ mô phỏng TEV + Citra)
-- ⬜ Goat Shader: keyword, nhiều Pass, alpha test (`clip`) và uv transform trên 3DS
+- ✅ Goat Shader: keyword, nhiều Pass, alpha test (`clip`) và uv transform trên 3DS
 - ⬜ Fog gas cho khói
 - ✅ Shadow map trên desktop (đèn directional `shadows`, 2048², PCF 3×3, đi theo camera); 3DS dùng blob shadow
 - ✅ Post-process (`RenderSettings.post`): desktop có exposure / contrast / saturation / tint / vignette / bloom; 3DS pha màu exposure × tint trong texenv stage 4

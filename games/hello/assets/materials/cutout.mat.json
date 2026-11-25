@@ -1,0 +1,1 @@
+{ "shader": "../shaders/Cutout.shader", "properties": { "_MainTex": "../textures/circle.png", "_MainTex_ST": [3, 3, 0, 0], "_Cutoff": 0.5, "_Glow": 0 } }

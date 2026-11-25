@@ -168,17 +168,160 @@ pub struct Preprocessed {
     pub tokens: Vec<Token>,
 }
 
+/// One `#if` level: is this branch on, has a branch of the group been on, is the parent on.
+struct Cond {
+    on: bool,
+    taken: bool,
+    parent: bool,
+}
+
+/// `#if` expressions: `defined(X)` / `defined X`, `X` (defined and not 0), numbers, `!`, `&&`,
+/// `||`, parentheses.
+fn eval_condition(text: &str, line: u32, defines: &HashMap<String, Vec<Token>>) -> Result<bool, Diagnostic> {
+    let toks = lex(text, line)?;
+    struct E<'a> {
+        t: &'a [Token],
+        i: usize,
+        d: &'a HashMap<String, Vec<Token>>,
+        line: u32,
+    }
+    impl E<'_> {
+        fn peek(&self) -> Option<&Tok> {
+            self.t.get(self.i).map(|t| &t.tok)
+        }
+        fn or(&mut self) -> Result<bool, Diagnostic> {
+            let mut v = self.and()?;
+            while self.peek() == Some(&Tok::Punct("||")) {
+                self.i += 1;
+                let r = self.and()?;
+                v = v || r;
+            }
+            Ok(v)
+        }
+        fn and(&mut self) -> Result<bool, Diagnostic> {
+            let mut v = self.unary()?;
+            while self.peek() == Some(&Tok::Punct("&&")) {
+                self.i += 1;
+                let r = self.unary()?;
+                v = v && r;
+            }
+            Ok(v)
+        }
+        fn unary(&mut self) -> Result<bool, Diagnostic> {
+            match self.peek().cloned() {
+                Some(Tok::Punct("!")) => {
+                    self.i += 1;
+                    Ok(!self.unary()?)
+                }
+                Some(Tok::Punct("(")) => {
+                    self.i += 1;
+                    let v = self.or()?;
+                    if self.peek() == Some(&Tok::Punct(")")) {
+                        self.i += 1;
+                    }
+                    Ok(v)
+                }
+                Some(Tok::Ident(w)) if w == "defined" => {
+                    self.i += 1;
+                    let paren = self.peek() == Some(&Tok::Punct("("));
+                    if paren {
+                        self.i += 1;
+                    }
+                    let name = match self.peek().cloned() {
+                        Some(Tok::Ident(n)) => n,
+                        _ => return Err(diag(self.line, "defined(NAME)")),
+                    };
+                    self.i += 1;
+                    if paren && self.peek() == Some(&Tok::Punct(")")) {
+                        self.i += 1;
+                    }
+                    Ok(self.d.contains_key(&name))
+                }
+                Some(Tok::Ident(n)) => {
+                    self.i += 1;
+                    // a define with a value 0 is false; undefined names are 0 (like C)
+                    Ok(match self.d.get(&n) {
+                        Some(v) => !matches!(v.first().map(|t| &t.tok), Some(Tok::Num(x, _)) if x.parse::<f64>().ok() == Some(0.0)),
+                        None => false,
+                    })
+                }
+                Some(Tok::Num(x, _)) => {
+                    self.i += 1;
+                    Ok(x.parse::<f64>().map(|v| v != 0.0).unwrap_or(false))
+                }
+                _ => Err(diag(self.line, "unsupported #if expression (defined(X), !, &&, ||, numbers)")),
+            }
+        }
+    }
+    E { t: &toks, i: 0, d: defines, line }.or()
+}
+
+/// The program with keywords: `defines` are set (value 1) before the first line, `#if` /
+/// `#ifdef` / `#ifndef` / `#elif` / `#else` / `#endif` keep only the live branches.
 pub fn preprocess(src: &str, first_line: u32) -> Result<Preprocessed, Diagnostic> {
+    preprocess_with(src, first_line, &[])
+}
+
+pub fn preprocess_with(src: &str, first_line: u32, keywords: &[String]) -> Result<Preprocessed, Diagnostic> {
     let mut pragmas = Vec::new();
     let mut defines: HashMap<String, Vec<Token>> = HashMap::new();
+    for k in keywords {
+        defines.insert(k.clone(), vec![Token { tok: Tok::Num("1".into(), false), line: first_line }]);
+    }
+    let mut stack: Vec<Cond> = Vec::new();
+    let live = |stack: &Vec<Cond>| stack.last().map(|c| c.on).unwrap_or(true);
     let mut body = String::with_capacity(src.len());
     // directives are whole lines: blank them out of the body (line numbers stay right)
     for (n, l) in src.lines().enumerate() {
         let line = first_line + n as u32;
         let t = l.trim_start();
         if let Some(d) = t.strip_prefix('#') {
+            let d = d.trim_start();
             let mut words = d.split_whitespace();
-            match words.next() {
+            let first = words.next();
+            // conditionals run even in dead branches (to find their #endif)
+            match first {
+                Some("if") | Some("ifdef") | Some("ifndef") => {
+                    let parent = live(&stack);
+                    let rest = d[first.unwrap().len()..].trim();
+                    let on = parent
+                        && match first {
+                            Some("ifdef") => defines.contains_key(rest.split_whitespace().next().unwrap_or("")),
+                            Some("ifndef") => !defines.contains_key(rest.split_whitespace().next().unwrap_or("")),
+                            _ => eval_condition(rest, line, &defines)?,
+                        };
+                    stack.push(Cond { on, taken: on, parent });
+                    body.push('\n');
+                    continue;
+                }
+                Some("elif") => {
+                    let rest = d["elif".len()..].trim();
+                    let c = stack.last_mut().ok_or_else(|| diag(line, "#elif without #if"))?;
+                    let on = c.parent && !c.taken && eval_condition(rest, line, &defines)?;
+                    c.on = on;
+                    c.taken |= on;
+                    body.push('\n');
+                    continue;
+                }
+                Some("else") => {
+                    let c = stack.last_mut().ok_or_else(|| diag(line, "#else without #if"))?;
+                    c.on = c.parent && !c.taken;
+                    c.taken = true;
+                    body.push('\n');
+                    continue;
+                }
+                Some("endif") => {
+                    stack.pop().ok_or_else(|| diag(line, "#endif without #if"))?;
+                    body.push('\n');
+                    continue;
+                }
+                _ => {}
+            }
+            if !live(&stack) {
+                body.push('\n');
+                continue;
+            }
+            match first {
                 Some("pragma") => pragmas.push((line, words.map(str::to_string).collect())),
                 Some("define") => {
                     let name = words.next().ok_or_else(|| diag(line, "#define without a name"))?;
@@ -194,14 +337,21 @@ pub fn preprocess(src: &str, first_line: u32) -> Result<Preprocessed, Diagnostic
                         defines.remove(n);
                     }
                 }
-                Some(other) => return Err(diag(line, format!("#{other} isn't supported (only #pragma, #define, #include)"))),
+                Some("error") => return Err(diag(line, d.trim_start_matches("error").trim().to_string())),
+                Some("line") | Some("warning") => {}
+                Some(other) => return Err(diag(line, format!("#{other} isn't supported (#pragma, #define, #include, #if / #ifdef / #elif / #else / #endif)"))),
                 None => {}
             }
             body.push('\n');
             continue;
         }
-        body.push_str(l);
+        if live(&stack) {
+            body.push_str(l);
+        }
         body.push('\n');
+    }
+    if !stack.is_empty() {
+        return Err(diag(first_line + src.lines().count() as u32, "#if without #endif"));
     }
     let raw = lex(&body, first_line)?;
     let mut tokens = Vec::with_capacity(raw.len());

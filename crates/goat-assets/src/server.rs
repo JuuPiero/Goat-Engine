@@ -46,8 +46,14 @@ pub struct AssetServer {
     materials: HashMap<String, MaterialId>,
     /// Compiled `.shader` files (errors kept: reported once) and their GPU programs (None: the
     /// backend can't run custom shaders, or it rejected this one).
+    /// Compiled shaders by `path` (default variant) or `path|KW1 KW2` (a keyword variant).
     shaders: HashMap<String, Result<std::sync::Arc<goat_shader::Shader>, String>>,
+    /// GPU programs by `variant key#pass`.
     gpu_shaders: HashMap<String, Option<goat_gfx::ShaderId>>,
+    /// The materials of a multi-pass material's later passes (by material key).
+    pass_materials: HashMap<String, Vec<MaterialId>>,
+    /// The keywords a material's shader variant was made with (by material key).
+    material_keywords: HashMap<String, Vec<String>>,
     /// Material file → the shader it uses (reloading a shader updates its materials).
     material_shaders: HashMap<String, String>,
     meshes: HashMap<String, MeshId>,
@@ -66,6 +72,8 @@ impl AssetServer {
             materials: HashMap::new(),
             shaders: HashMap::new(),
             gpu_shaders: HashMap::new(),
+            pass_materials: HashMap::new(),
+            material_keywords: HashMap::new(),
             material_shaders: HashMap::new(),
             meshes: HashMap::new(),
             models: HashMap::new(),
@@ -228,15 +236,18 @@ impl AssetServer {
     /// A `.shader` file changed: compiled again, and every loaded material using it updated.
     pub fn reload_shader(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) {
         let key = self.io.canonical(key);
-        let old = self.gpu_shaders.remove(&key).flatten();
-        self.shaders.remove(&key);
+        // every variant and pass of the file
+        let of_file = |k: &str| k == key || k.starts_with(&format!("{key}|")) || k.starts_with(&format!("{key}#"));
+        let old: Vec<goat_gfx::ShaderId> = self.gpu_shaders.iter().filter(|(k, _)| of_file(k)).filter_map(|(_, v)| *v).collect();
+        self.gpu_shaders.retain(|k, _| !of_file(k));
+        self.shaders.retain(|k, _| !of_file(k));
         let users: Vec<String> = self.material_shaders.iter().filter(|(_, s)| **s == key).map(|(m, _)| m.clone()).collect();
         for m in users {
             if let Err(e) = self.reload_material(gfx, &m) {
                 goat_core::error!("{m}: {e}");
             }
         }
-        if let Some(id) = old {
+        for id in old {
             gfx.destroy_shader(id);
         }
     }
@@ -293,32 +304,40 @@ impl AssetServer {
 
     /// A compiled `.shader` file (cached; the error text lists the problems with their lines).
     pub fn shader(&mut self, key: &str) -> Result<std::sync::Arc<goat_shader::Shader>, AssetError> {
+        self.shader_variant(key, &[])
+    }
+
+    /// The variant of a `.shader` file for these keywords (cached).
+    pub fn shader_variant(&mut self, key: &str, keywords: &[String]) -> Result<std::sync::Arc<goat_shader::Shader>, AssetError> {
         let key: &str = &self.io.canonical(key);
-        if let Some(r) = self.shaders.get(key) {
+        let vkey = variant_key(key, keywords);
+        if let Some(r) = self.shaders.get(&vkey) {
             return r.clone().map_err(|e| AssetError::Format(key.into(), e));
         }
         let text = self.io.read_string(key)?;
-        let r = goat_shader::compile(&text).map(std::sync::Arc::new).map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "));
-        if let Ok(s) = &r {
+        let r = goat_shader::compile_variant(&text, keywords).map(std::sync::Arc::new).map_err(|errs| errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "));
+        if let (Ok(s), true) = (&r, keywords.is_empty()) {
             for w in &s.warnings {
                 goat_core::warn!("{key}: {w}");
             }
         }
-        self.shaders.insert(key.to_string(), r.clone());
+        self.shaders.insert(vkey, r.clone());
         r.map_err(|e| AssetError::Format(key.into(), e))
     }
 
-    /// The Goat shader a loaded material is drawn with (None: the standard material).
+    /// The Goat shader (variant) a loaded material is drawn with (None: the standard material).
     pub fn material_shader(&mut self, id: MaterialId) -> Option<std::sync::Arc<goat_shader::Shader>> {
         let key = self.material_keys.get(&id)?.clone();
         let sk = self.material_shaders.get(&key)?.clone();
-        self.shader(&sk).ok()
+        let kw = self.material_keywords.get(&key).cloned().unwrap_or_default();
+        self.shader_variant(&sk, &kw).ok()
     }
 
     /// Forgets compiled shaders and the materials using them (the editor: a `.shader` changed).
     pub fn forget_shader(&mut self, key: &str) {
-        self.shaders.remove(key);
-        self.gpu_shaders.remove(key);
+        let of_file = |k: &str| k == key || k.starts_with(&format!("{key}|")) || k.starts_with(&format!("{key}#"));
+        self.shaders.retain(|k, _| !of_file(k));
+        self.gpu_shaders.retain(|k, _| !of_file(k));
     }
 
     /// A material drawn with a Goat shader: its render state, parameters and textures; where the
@@ -328,10 +347,6 @@ impl AssetServer {
         let error = |e: &dyn std::fmt::Display| {
             goat_core::error!("{key}: {e}");
             MaterialDesc { base_color: goat_core::Color::rgba(1.0, 0.0, 1.0, 1.0), lighting: goat_gfx::LightingModel::Unlit, ..MaterialDesc::default() }
-        };
-        let sh = match self.shader(shader_key) {
-            Ok(s) => s,
-            Err(e) => return error(&e),
         };
         let props = file.properties.clone().unwrap_or_default();
         let value = |name: &str| -> Option<[f32; 4]> {
@@ -350,6 +365,25 @@ impl AssetServer {
             }
             Some(a)
         };
+        // keywords: the material's list + those of its Toggle / KeywordEnum properties
+        let base = match self.shader(shader_key) {
+            Ok(s) => s,
+            Err(e) => return error(&e),
+        };
+        let mut keywords: Vec<String> = file.keywords.clone().unwrap_or_default();
+        for p in &base.properties {
+            let v = value(&p.name).map(|v| v[0]).unwrap_or(p.default.first().copied().unwrap_or(0.0));
+            if let Some(k) = p.keyword_for(v) {
+                if !keywords.contains(&k) {
+                    keywords.push(k);
+                }
+            }
+        }
+        let sh = match self.shader_variant(shader_key, &keywords) {
+            Ok(s) => s,
+            Err(e) => return error(&e),
+        };
+        self.material_keywords.insert(key.to_string(), keywords.clone());
         let params = sh.pack_params(&value);
         let mut color_slots = 0u16;
         for p in &sh.params {
@@ -368,8 +402,62 @@ impl AssetServer {
                 }
             };
         }
-        // the GPU program (once per shader file)
-        let gpu = match self.gpu_shaders.get(shader_key) {
+        let vkey = variant_key(shader_key, &keywords);
+        // passes after the first: their own materials, chained (built last to first)
+        let mut descs = Vec::new();
+        let passes: Vec<&goat_shader::Shader> = std::iter::once(&*sh).chain(sh.passes.iter()).collect();
+        for (i, pass) in passes.iter().enumerate() {
+            match self.pass_desc(gfx, key, &format!("{vkey}#{i}"), pass, &value, params, color_slots, textures) {
+                Ok(d) => descs.push(d),
+                Err(e) => return error(&e),
+            }
+        }
+        let mut ids = self.pass_materials.remove(key).unwrap_or_default();
+        let mut next = None;
+        let mut chain = Vec::new();
+        for (i, mut d) in descs.into_iter().enumerate().rev() {
+            d.next_pass = next;
+            if i == 0 {
+                self.pass_materials.insert(key.to_string(), chain.into_iter().rev().collect());
+                // stale pass materials (fewer passes than before)
+                for id in ids {
+                    gfx.destroy_material(id);
+                }
+                return d;
+            }
+            // reuse the pass material of an earlier load (renderers don't hold these ids)
+            let id = match ids.pop() {
+                Some(id) => {
+                    gfx.update_material(id, &d);
+                    id
+                }
+                None => match gfx.create_material(&d) {
+                    Ok(id) => id,
+                    Err(e) => return error(&e),
+                },
+            };
+            chain.push(id);
+            next = Some(id);
+        }
+        error(&"no pass")
+    }
+
+    /// One pass of a shader material: its GPU program (or texture combiners / standard mapping)
+    /// and render state.
+    #[allow(clippy::too_many_arguments)]
+    fn pass_desc(
+        &mut self,
+        gfx: &mut dyn GraphicsBackend,
+        key: &str,
+        gpu_key: &str,
+        sh: &goat_shader::Shader,
+        value: &dyn Fn(&str) -> Option<[f32; 4]>,
+        params: [[f32; 4]; goat_gfx::SHADER_PARAMS],
+        color_slots: u16,
+        textures: [Option<goat_gfx::TextureId>; goat_gfx::SHADER_TEXTURES],
+    ) -> Result<MaterialDesc, String> {
+        // the GPU program (once per variant and pass)
+        let gpu = match self.gpu_shaders.get(gpu_key) {
             Some(g) => *g,
             None => {
                 let desc = goat_gfx::ShaderDesc { name: sh.name.clone(), wgsl: sh.wgsl_module(), custom_vertex: sh.custom_vertex };
@@ -377,11 +465,11 @@ impl AssetServer {
                     Ok(id) => Some(id),
                     Err(GfxError::Unsupported(_)) => None,
                     Err(e) => {
-                        self.gpu_shaders.insert(shader_key.to_string(), None);
-                        return error(&e);
+                        self.gpu_shaders.insert(gpu_key.to_string(), None);
+                        return Err(e.to_string());
                     }
                 };
-                self.gpu_shaders.insert(shader_key.to_string(), g);
+                self.gpu_shaders.insert(gpu_key.to_string(), g);
                 g
             }
         };
@@ -397,7 +485,7 @@ impl AssetServer {
         // no custom programs (3DS): the texture combiners when the fragment program fits them,
         // else the standard mapping (Fallback)
         let tev = if gpu.is_none() {
-            match sh.tev(&value) {
+            match sh.tev(value) {
                 Ok(p) => Some(p),
                 Err(why) => {
                     goat_core::warn!("{key}: {} draws its Fallback here ({why})", sh.name);
@@ -408,7 +496,7 @@ impl AssetServer {
             None
         };
         let d = MaterialDesc::default();
-        MaterialDesc {
+        Ok(MaterialDesc {
             tev,
             base_color: color_of(&m.color).unwrap_or(d.base_color),
             texture: tex_of(&m.texture),
@@ -430,9 +518,8 @@ impl AssetServer {
             shader_color_slots: color_slots,
             shader_textures: textures,
             ..d
-        }
+        })
     }
-
     /// `builtin:cube|sphere|plane`, or `<model>#mesh:<mesh>:<primitive>`.
     pub fn mesh(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<MeshId, AssetError> {
         let key: &str = &self.io.canonical(key);
@@ -714,4 +801,15 @@ fn sky_face(i: usize) -> TextureData {
         }
     }
     TextureData { width: n, height: n, rgba, filter: goat_gfx::Filter::Linear, wrap: goat_gfx::Wrap::Clamp, mipmaps: false, format: Default::default(), compressed: None }
+}
+
+/// The cache key of a shader variant: the path, then its keywords sorted.
+fn variant_key(key: &str, keywords: &[String]) -> String {
+    if keywords.is_empty() {
+        return key.to_string();
+    }
+    let mut k = keywords.to_vec();
+    k.sort();
+    k.dedup();
+    format!("{key}|{}", k.join(" "))
 }

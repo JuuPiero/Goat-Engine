@@ -1003,7 +1003,16 @@ impl GraphicsBackend for WgpuBackend {
         let target = frame.texture.create_view(&Default::default());
 
         // uniforms: [clear colors and frames per view][objects]
-        let draws: usize = views.iter().map(|v| v.items.len()).sum();
+        // one object slot per pass of each item (multi-pass materials draw several times)
+        let passes_of = |m: MaterialId| {
+            let (mut n, mut cur) = (1usize, m);
+            while let Some(next) = self.gpu_materials.get(&cur.index()).and_then(|g| g.desc.next_pass).filter(|x| *x != cur && n < 4) {
+                n += 1;
+                cur = next;
+            }
+            n
+        };
+        let draws: usize = views.iter().flat_map(|v| v.items.iter()).map(|it| passes_of(it.material)).sum();
         let frame_slots = (std::mem::size_of::<FrameUniform>() as u64).div_ceil(UNIFORM_ALIGN);
         let object_slots = (std::mem::size_of::<ObjectUniform>() as u64).div_ceil(UNIFORM_ALIGN);
         let needed = ((views.len() as u64) * (1 + frame_slots) + draws as u64 * object_slots + 1) * UNIFORM_ALIGN;
@@ -1083,7 +1092,10 @@ impl GraphicsBackend for WgpuBackend {
             let order = v.draw_order(|m| self.gpu_materials.get(&m.index()).map(|m| m.desc.blend));
             let mut objects = Vec::with_capacity(v.items.len());
             for it in order.iter().map(|&i| &v.items[i]) {
-                let Some(m) = self.gpu_materials.get(&it.material.index()) else { continue };
+              // every pass of the material (multi-pass shaders: a chain of materials)
+              let mut material = it.material;
+              for _pass in 0..4 {
+                let Some(m) = self.gpu_materials.get(&material.index()) else { break };
                 let d = &m.desc;
                 let ou = ObjectUniform {
                     model: it.model.to_cols_array_2d(),
@@ -1104,7 +1116,12 @@ impl GraphicsBackend for WgpuBackend {
                 };
                 // a reflection probe's cube map (only reflective materials care)
                 let env = it.reflection.filter(|r| d.reflectivity > 0.0 && Some(*r) != d.env_map && self.cubes.contains(&r.index()));
-                objects.push((it.mesh, it.material, put(bytemuck::bytes_of(&ou)), env));
+                objects.push((it.mesh, material, put(bytemuck::bytes_of(&ou)), env));
+                match d.next_pass {
+                    Some(n) if n != material => material = n,
+                    _ => break,
+                }
+              }
             }
             planned.push(Planned { rect, clear_off, clear_depth: v.clear_depth, frame_off, objects });
         }

@@ -6,14 +6,17 @@
 //! 1. [`lower`] runs the fragment function symbolically (helper functions inlined, locals,
 //!    swizzles, struct fields, out / inout parameters) into an expression over those sources and
 //!    the material's parameters ([`Ir`]). Anything per-pixel the combiners can't do (branches,
-//!    loops, `clip`, positions / normals, uv math, `_Time`) gives the reason the shader falls back.
+//!    loops, positions / normals, per-pixel uv math, `_Time`) gives the reason the shader falls
+//!    back. Two things are lowered to fixed-function hardware next to the combiners: uv tiling /
+//!    offset known per material (`TRANSFORM_TEX`, `uv * k + b`, `uv_<Tex>`: the vertex shader's
+//!    `uvST` per texture unit) and `clip` / `discard` / `alphatest` (the alpha test).
 //! 2. [`plan`] (when a material is made: its property values are known) folds constants and
 //!    allocates combiner stages, using the combiner buffer when both sides of an operation are
 //!    computed.
 
 use std::collections::HashMap;
 
-use goat_gfx::{TevCombine, TevFunc, TevOperand, TevProgram, TevSource, TevStage};
+use goat_gfx::{TevAlphaTest, TevCombine, TevFunc, TevOperand, TevProgram, TevSource, TevStage};
 
 use crate::hlsl::{Expr, Item, Param, ParamQual, Stmt, Ty};
 use crate::wgsl::{Entry, Layout, SurfaceLighting};
@@ -65,6 +68,23 @@ fn bx(i: Ir) -> Box<Ir> {
     Box::new(i)
 }
 
+/// Tiling / offset of a texture's uv: uv × scale + offset (two lanes used, known per material).
+#[derive(Clone, Debug, PartialEq)]
+pub struct UvTf {
+    pub scale: Ir,
+    pub offset: Ir,
+}
+
+impl UvTf {
+    fn identity() -> Self {
+        UvTf { scale: c(1.0), offset: c(0.0) }
+    }
+    /// This transform followed by uv × s + o.
+    fn then(&self, s: Ir, o: Ir) -> Self {
+        UvTf { scale: Ir::Mul(bx(self.scale.clone()), bx(s.clone())), offset: Ir::Add(bx(Ir::Mul(bx(self.offset.clone()), bx(s))), bx(o)) }
+    }
+}
+
 /// The fragment program as an expression (`lower`'s result).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PicaIr {
@@ -72,6 +92,12 @@ pub struct PicaIr {
     pub lit: bool,
     /// Notes for the Inspector (things the 3DS ignores).
     pub notes: Vec<String>,
+    /// uv tiling / offset per shader texture unit.
+    pub uv: HashMap<usize, UvTf>,
+    /// `clip(x)`: pixels with x < 0 are discarded.
+    pub clip: Option<Ir>,
+    /// The material doesn't blend: the alpha channel is free for an alpha test.
+    pub opaque: bool,
 }
 
 // ------------------------------------------------------------------ symbolic evaluation
@@ -79,8 +105,8 @@ pub struct PicaIr {
 #[derive(Clone, Debug)]
 enum Sv {
     V(Ir),
-    /// The mesh uv (any tiling / offset of it: the 3DS samples the plain uv).
-    Uv,
+    /// The mesh uv through a tiling / offset known per material.
+    Uv(UvTf),
     Tex(usize),
     Struct(HashMap<String, Sv>),
     /// A value the combiners can't use (position, normal…); an error when read.
@@ -94,6 +120,8 @@ struct Interp<'a> {
     ret: Option<Sv>,
     depth: usize,
     notes: Vec<String>,
+    uv: HashMap<usize, UvTf>,
+    clip: Option<Ir>,
 }
 
 const LANES: [(&str, Lane); 8] = [("r", Lane::R), ("x", Lane::R), ("g", Lane::G), ("y", Lane::G), ("b", Lane::B), ("z", Lane::B), ("a", Lane::A), ("w", Lane::A)];
@@ -124,7 +152,7 @@ impl<'a> Interp<'a> {
         match v {
             Sv::V(i) => Ok(i),
             Sv::Poison(why) => Err(why),
-            Sv::Uv => Err("uv math (other than tiling / offset) needs a programmable GPU".into()),
+            Sv::Uv(_) => Err("uv math (other than tiling / offset) needs a programmable GPU".into()),
             Sv::Tex(_) => Err("a texture used as a value".into()),
             Sv::Struct(_) => Err("a struct used as a value".into()),
         }
@@ -166,7 +194,7 @@ impl<'a> Interp<'a> {
                 match b {
                     Sv::Struct(f) => f.get(m).cloned().ok_or_else(|| format!("no field {m}")),
                     Sv::V(v) => swizzle(v, m),
-                    Sv::Uv => Err(format!("uv.{m}: uv math needs a programmable GPU")),
+                    Sv::Uv(_) => Err(format!("uv.{m}: uv math needs a programmable GPU")),
                     other => Err(format!(".{m} of {other:?}")),
                 }
             }
@@ -181,6 +209,13 @@ impl<'a> Interp<'a> {
             }
             Expr::Binary(op, a, b) => {
                 let (a, b) = (self.expr(a)?, self.expr(b)?);
+                // uv tiling / offset: uv × k, uv + k, uv − k (k known per material)
+                match (*op, &a, &b) {
+                    ("*", Sv::Uv(t), Sv::V(k)) | ("*", Sv::V(k), Sv::Uv(t)) => return Ok(Sv::Uv(t.then(k.clone(), c(0.0)))),
+                    ("+", Sv::Uv(t), Sv::V(k)) | ("+", Sv::V(k), Sv::Uv(t)) => return Ok(Sv::Uv(t.then(c(1.0), k.clone()))),
+                    ("-", Sv::Uv(t), Sv::V(k)) => return Ok(Sv::Uv(t.then(c(1.0), Ir::Fn("neg".into(), vec![k.clone()])))),
+                    _ => {}
+                }
                 let (a, b) = (self.value(a)?, self.value(b)?);
                 Ok(Sv::V(match *op {
                     "*" => Ir::Mul(bx(a), bx(b)),
@@ -214,18 +249,33 @@ impl<'a> Interp<'a> {
                 let t = self.expr(&args[0])?;
                 let uv = self.expr(&args[1])?;
                 match (t, uv) {
-                    (Sv::Tex(u), Sv::Uv) => Ok(Sv::V(Ir::Leaf(Leaf::Tex(u)))),
-                    (Sv::Tex(_), _) => Err("textures can only be sampled at the mesh uv on the 3DS".into()),
+                    (Sv::Tex(u), Sv::Uv(tf)) => {
+                        match self.uv.get(&u) {
+                            Some(old) if *old != tf => return Err("a texture sampled with two different uv transforms".into()),
+                            _ => {
+                                self.uv.insert(u, tf);
+                            }
+                        }
+                        Ok(Sv::V(Ir::Leaf(Leaf::Tex(u))))
+                    }
+                    (Sv::Tex(_), _) => Err("textures can only be sampled at the mesh uv (with tiling / offset) on the 3DS".into()),
                     _ => Err("tex2D(texture, uv)".into()),
                 }
             }
             "TRANSFORM_TEX" => {
                 let uv = self.expr(&args[0])?;
-                if !matches!(uv, Sv::Uv) {
-                    return Err("TRANSFORM_TEX of a computed uv".into());
-                }
-                self.note("Tiling / Offset of textures is ignored on the 3DS");
-                Ok(Sv::Uv)
+                let Sv::Uv(tf) = uv else { return Err("TRANSFORM_TEX of a computed uv".into()) };
+                let name = match args.get(1) {
+                    Some(Expr::Ident(n)) => n.clone(),
+                    _ => return Err("TRANSFORM_TEX(uv, texture)".into()),
+                };
+                Ok(Sv::Uv(match self.layout.textures.get(&name) {
+                    Some((_, Some(st))) => {
+                        let p = Ir::Leaf(Leaf::Param(*st));
+                        tf.then(Ir::Fn("xy".into(), vec![p.clone()]), Ir::Fn("zw".into(), vec![p]))
+                    }
+                    _ => tf,
+                }))
             }
             "saturate" => self.expr(&args[0]),
             "lerp" => {
@@ -236,7 +286,11 @@ impl<'a> Interp<'a> {
                 let v: Vec<Ir> = self.args(args)?;
                 Ok(Sv::V(Ir::Mul(bx(v[0].clone()), bx(v[1].clone()))))
             }
-            "clip" => Err("clip() (alpha test) isn't compiled for the 3DS yet".into()),
+            "clip" => {
+                let v = self.args(args)?;
+                self.add_clip(v.into_iter().next().ok_or("clip(x)")?)?;
+                Ok(Sv::Struct(HashMap::new()))
+            }
             "tex2Dlod" | "tex2Dbias" | "tex2Dgrad" | "tex2Dproj" => Err(format!("{f} isn't available on the 3DS")),
             "UnpackNormal" | "UnityObjectToWorldNormal" | "UnityObjectToClipPos" | "dot" | "cross" | "normalize" | "reflect" | "length" | "distance" | "ddx" | "ddy" => Err(format!("{f}() of per-pixel values needs a programmable GPU")),
             _ if self.func(f).is_some() => self.inline(f, args),
@@ -255,6 +309,17 @@ impl<'a> Interp<'a> {
             out.push(self.value(v)?);
         }
         Ok(out)
+    }
+
+    /// One alpha test: `clip(x)` keeps x ≥ 0.
+    fn add_clip(&mut self, x: Ir) -> R<()> {
+        match &self.clip {
+            Some(old) if *old != x => Err("two different clip() / discard tests (the 3DS has one alpha test)".into()),
+            _ => {
+                self.clip = Some(x);
+                Ok(())
+            }
+        }
     }
 
     fn note(&mut self, s: &str) {
@@ -380,17 +445,40 @@ impl<'a> Interp<'a> {
                 });
                 Ok(())
             }
+            // `if (a < b) discard;` is the alpha test clip(a − b)
+            Stmt::If { cond, then, otherwise: None } if is_discard(then) => {
+                let Expr::Binary(op, a, b) = &cond.expr else { return Err("if (…) discard: the condition must compare two values".into()) };
+                let (a, b) = (self.expr(a)?, self.expr(b)?);
+                let (a, b) = (self.value(a)?, self.value(b)?);
+                match *op {
+                    "<" | "<=" => self.add_clip(Ir::Sub(bx(a), bx(b))),
+                    ">" | ">=" => self.add_clip(Ir::Sub(bx(b), bx(a))),
+                    other => Err(format!("if (a {other} b) discard isn't an alpha test")),
+                }
+            }
             Stmt::If { .. } => Err("if (a per-pixel branch) isn't available on the 3DS".into()),
             Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. } => Err("loops aren't available on the 3DS".into()),
-            Stmt::Discard(_) => Err("discard (alpha test) isn't compiled for the 3DS yet".into()),
+            Stmt::Discard(_) => Err("discard outside `if (a < b) discard;` isn't available on the 3DS".into()),
             Stmt::Break(_) | Stmt::Continue(_) => Err("break / continue".into()),
         }
+    }
+}
+
+fn is_discard(s: &Stmt) -> bool {
+    match s {
+        Stmt::Discard(_) => true,
+        Stmt::Block(list) => list.len() == 1 && is_discard(&list[0]),
+        _ => false,
     }
 }
 
 fn swizzle(v: Ir, m: &str) -> R<Sv> {
     if matches!(m, "rgb" | "xyz" | "rgba" | "xyzw") {
         return Ok(Sv::V(v));
+    }
+    // two lanes (tiling / offset: _MainTex_ST.xy, .zw) — values known per material only
+    if matches!(m, "xy" | "rg" | "zw" | "ba") {
+        return Ok(Sv::V(Ir::Fn(if matches!(m, "xy" | "rg") { "xy" } else { "zw" }.into(), vec![v])));
     }
     match LANES.iter().find(|(n, _)| *n == m) {
         Some((_, lane)) => Ok(Sv::V(Ir::Sel(bx(v), *lane))),
@@ -417,7 +505,7 @@ fn zero_of(items: &[Item], ty: &Ty) -> Sv {
 
 /// The fragment function as an expression over the combiners' sources.
 pub fn lower(items: &[Item], layout: &Layout, entry: &Entry) -> R<PicaIr> {
-    let mut it = Interp { items, layout, vars: Vec::new(), ret: None, depth: 0, notes: Vec::new() };
+    let mut it = Interp { items, layout, vars: Vec::new(), ret: None, depth: 0, notes: Vec::new(), uv: HashMap::new(), clip: None };
     match entry {
         Entry::Fragment { vert: Some(_), .. } => Err("the vertex function runs on desktop / web only".into()),
         Entry::Fragment { frag, vert: None } => {
@@ -433,7 +521,7 @@ pub fn lower(items: &[Item], layout: &Layout, entry: &Entry) -> R<PicaIr> {
                 for f in fields.unwrap_or_default() {
                     let sem = f.semantic.as_deref().unwrap_or("").to_ascii_uppercase();
                     let v = if sem == "TEXCOORD0" || sem == "TEXCOORD" || f.name == "uv" || f.name == "texcoord" {
-                        Sv::Uv
+                        Sv::Uv(UvTf::identity())
                     } else if sem.starts_with("COLOR") || f.name == "color" {
                         Sv::V(Ir::Leaf(Leaf::Vertex))
                     } else {
@@ -449,12 +537,9 @@ pub fn lower(items: &[Item], layout: &Layout, entry: &Entry) -> R<PicaIr> {
             let r = it.ret.take().ok_or("frag doesn't return a color")?;
             let v = it.value(r)?;
             let color = if ret.width() == Some(3) { Ir::Pack(bx(v), bx(c(1.0))) } else { v };
-            Ok(PicaIr { color, lit: false, notes: it.notes })
+            Ok(PicaIr { color, lit: false, notes: it.notes, uv: it.uv, clip: it.clip, opaque: true })
         }
         Entry::Surface { func, lighting, alpha_test } => {
-            if alpha_test.is_some() {
-                return Err("alphatest isn't compiled for the 3DS yet".into());
-            }
             let (_, params, body) = it.func(func).ok_or_else(|| format!("no function {func}"))?;
             let (Some(pin), Some(pout)) = (params.first(), params.get(1)) else { return Err("surf(Input IN, inout SurfaceOutput o)".into()) };
             let Ty::Struct(input) = &pin.ty else { return Err("Input".into()) };
@@ -465,8 +550,17 @@ pub fn lower(items: &[Item], layout: &Layout, entry: &Entry) -> R<PicaIr> {
             });
             let mut inp = HashMap::new();
             for f in fields.unwrap_or_default() {
-                let v = if f.name.starts_with("uv") {
-                    Sv::Uv
+                let v = if let Some(tex) = f.name.strip_prefix("uv").filter(|t| t.starts_with('_')) {
+                    // uv_<Tex> carries the texture's tiling / offset (Unity's surface shaders)
+                    Sv::Uv(match layout.textures.get(tex) {
+                        Some((_, Some(st))) => {
+                            let p = Ir::Leaf(Leaf::Param(*st));
+                            UvTf::identity().then(Ir::Fn("xy".into(), vec![p.clone()]), Ir::Fn("zw".into(), vec![p]))
+                        }
+                        _ => UvTf::identity(),
+                    })
+                } else if f.name.starts_with("uv") {
+                    Sv::Uv(UvTf::identity())
                 } else if f.name == "color" || f.name == "vertColor" || f.name == "vertexColor" {
                     Sv::V(Ir::Leaf(Leaf::Vertex))
                 } else {
@@ -514,7 +608,15 @@ pub fn lower(items: &[Item], layout: &Layout, entry: &Entry) -> R<PicaIr> {
                 }
                 _ => (Ir::Add(bx(Ir::Mul(bx(albedo), bx(Ir::Leaf(Leaf::LightDiffuse)))), bx(emission)), true),
             };
-            Ok(PicaIr { color: Ir::Pack(bx(rgb), bx(alpha)), lit, notes: it.notes })
+            if let Some(cut) = alpha_test {
+                // alphatest:_Cutoff = clip(o.Alpha − _Cutoff)
+                let k = match layout.params.get(cut.as_str()) {
+                    Some((slot, _)) => Ir::Sel(bx(Ir::Leaf(Leaf::Param(*slot))), Lane::R),
+                    None => c(0.5),
+                };
+                it.add_clip(Ir::Sub(bx(alpha.clone()), bx(k)))?;
+            }
+            Ok(PicaIr { color: Ir::Pack(bx(rgb), bx(alpha)), lit, notes: it.notes, uv: it.uv, clip: it.clip, opaque: true })
         }
     }
 }
@@ -553,6 +655,8 @@ fn math(f: &str, a: &[[f32; 4]]) -> R<[f32; 4]> {
         // constructors from per-lane values
         "vec" => std::array::from_fn(|i| a.get(i).map(|v| v[0]).unwrap_or(if i == 3 { 1.0 } else { 0.0 })),
         "vec31" => [a[0][0], a[1][0], a[2][0], 1.0],
+        "xy" => [a[0][0], a[0][1], a[0][0], a[0][1]],
+        "zw" => [a[0][2], a[0][3], a[0][2], a[0][3]],
         other => return Err(format!("{other}() of per-pixel values needs a programmable GPU")),
     })
 }
@@ -771,13 +875,25 @@ impl Alloc {
             Ir::Add(a, b) => {
                 // a × b + c in one stage (not with factors above 1: constants are clamped)
                 let big = |i: &Ir| konst(i).is_some_and(|v| v.iter().any(|x| *x > 1.0));
+                // a stage has one constant color: two different ones can't share it
+                let lane = |v: [f32; 4]| if part == Part::Rgb { [v[0], v[1], v[2], 0.0] } else { [0.0, 0.0, 0.0, v[3]] };
+                let one_constant = |xs: [&Ir; 3]| {
+                    let mut seen: Option<[f32; 4]> = None;
+                    xs.iter().filter_map(|x| konst(x)).map(lane).all(|v| match seen {
+                        Some(s) => s == v,
+                        None => {
+                            seen = Some(v);
+                            true
+                        }
+                    })
+                };
                 if let Ir::Mul(x, y) = &**a {
-                    if !big(x) && !big(y) {
+                    if !big(x) && !big(y) && one_constant([x, y, b]) {
                         return self.op(TevFunc::MultiplyAdd, &[x, y, b], part, out);
                     }
                 }
                 if let Ir::Mul(x, y) = &**b {
-                    if !big(x) && !big(y) {
+                    if !big(x) && !big(y) && one_constant([x, y, a]) {
                         return self.op(TevFunc::MultiplyAdd, &[x, y, a], part, out);
                     }
                 }
@@ -868,7 +984,30 @@ fn part_stages(alloc: &mut Alloc, ir: &Ir, part: Part) -> R<Vec<PartStage>> {
 
 /// The combiner program of a lowered shader with the material's parameter values.
 pub fn plan(ir: &PicaIr, params: &dyn Fn(usize) -> [f32; 4]) -> R<TevProgram> {
-    let folded = fold(&ir.color, params)?;
+    let mut folded = fold(&ir.color, params)?;
+    // clip(a − k) → alpha test a ≥ k (a goes to the alpha channel when it isn't already there)
+    let mut alpha_test = None;
+    if let Some(clip) = &ir.clip {
+        let x = fold(clip, params)?;
+        let (value, greater_equal, k) = match (&x, konst(&x)) {
+            (_, Some(v)) => {
+                // constant: everything kept, or nothing
+                (c(1.0), true, if v[0] >= 0.0 { 0.0 } else { 2.0 })
+            }
+            (Ir::Sub(a, b), _) if konst(b).is_some() => (sel((**a).clone(), Lane::R), true, konst(b).unwrap()[0]),
+            (Ir::Sub(a, b), _) if konst(a).is_some() => (sel((**b).clone(), Lane::R), false, konst(a).unwrap()[0]),
+            (Ir::OneMinus(_), _) => (c(1.0), true, 0.0), // 1 − x ≥ 0 always (combiner values ≤ 1)
+            _ => return Err("clip(x): write the test as clip(value − threshold) for the 3DS alpha test".into()),
+        };
+        let out_alpha = sel(folded.clone(), Lane::A);
+        if sel(value.clone(), Lane::A) != out_alpha {
+            if !ir.opaque {
+                return Err("clip() of something other than the output alpha needs an opaque material on the 3DS".into());
+            }
+            folded = Ir::Pack(bx(folded), bx(value));
+        }
+        alpha_test = Some(TevAlphaTest { greater_equal, reference: k });
+    }
     let mut alloc = Alloc { units: [None; 2] };
     let rgb = part_stages(&mut alloc, &folded, Part::Rgb)?;
     let alpha = part_stages(&mut alloc, &folded, Part::Alpha)?;
@@ -928,7 +1067,36 @@ pub fn plan(ir: &PicaIr, params: &dyn Fn(usize) -> [f32; 4]) -> R<TevProgram> {
             buffer_alpha: alpha.get(k).is_some_and(|p| p.buffer),
         });
     }
-    Ok(TevProgram { stages, lit: ir.lit, textures: alloc.units })
+    // uv tiling / offset of the units' textures
+    let mut uv = [[1.0, 1.0, 0.0, 0.0]; 2];
+    for (k, unit) in alloc.units.iter().enumerate() {
+        if let Some(tf) = unit.and_then(|u| ir.uv.get(&u)) {
+            let (s, o) = (fold(&tf.scale, params)?, fold(&tf.offset, params)?);
+            match (konst(&s), konst(&o)) {
+                (Some(s), Some(o)) => uv[k] = [s[0], s[1], o[0], o[1]],
+                _ => return Err("uv tiling / offset must be known per material on the 3DS".into()),
+            }
+        }
+    }
+    Ok(TevProgram { stages, lit: ir.lit, textures: alloc.units, uv, alpha_test })
+}
+
+/// Whether a pixel of final color `out` survives the program's alpha test (8-bit like the GPU).
+pub fn passes_alpha_test(p: &TevProgram, out: [f32; 4]) -> bool {
+    match p.alpha_test {
+        None => true,
+        Some(t) => {
+            let a = (out[3].clamp(0.0, 1.0) * 255.0).round();
+            let r = (t.reference.clamp(0.0, 1.0) * 255.0).round();
+            if t.reference > 1.0 {
+                false
+            } else if t.greater_equal {
+                a >= r
+            } else {
+                a <= r
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------ reference evaluation (tests)

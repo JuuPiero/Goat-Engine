@@ -23,6 +23,13 @@ interface ShaderProperty {
   header?: string;
   space?: boolean;
   options?: [string, number][];
+  /** [Toggle(KW)] / [KeywordEnum]: the keyword it drives ("" = KeywordEnum). */
+  keyword?: string;
+}
+interface PassInfo {
+  state?: ShaderInfo['state'];
+  kind?: string;
+  picaError?: string | null;
 }
 interface ShaderInfo {
   name?: string;
@@ -37,6 +44,20 @@ interface ShaderInfo {
   /** 3DS: why the texture combiners can't run it (null = they can). */
   picaError?: string | null;
   picaNotes?: string[];
+  /** multi_compile / shader_feature groups ("_" = none). */
+  keywordGroups?: string[][];
+  /** The passes after the first. */
+  passes?: PassInfo[];
+}
+
+/// Keywords set by Toggle / KeywordEnum properties (not edited as keywords).
+function propertyKeywords(info: ShaderInfo): Set<string> {
+  const out = new Set<string>();
+  for (const p of info.properties ?? []) {
+    if (p.keyword) out.add(p.keyword);
+    else if (p.keyword === '' && p.options) for (const [o] of p.options) out.add(`${p.name}_${o}`.toUpperCase());
+  }
+  return out;
 }
 
 /// `materials/a.mat.json` + `../shaders/X.shader` → `shaders/X.shader` (and back).
@@ -123,6 +144,19 @@ export function ShaderInspector({ assetKey }: { assetKey: string }) {
               <span title="Compiled to the PICA200 texture combiners">texture combiners ✓{info.picaNotes?.length ? ` (${info.picaNotes.join('; ')})` : ''}</span>
             )}
           </Row>
+          {!!info.passes?.length && (
+            <Row name="Passes">
+              <span>
+                {1 + info.passes.length} — {[info.state, ...info.passes.map((p) => p.state)].map((s) => `${s?.blend} · cull ${s?.cull}`).join(' → ')}
+                {info.passes.some((p) => p.picaError) ? ' (3DS: some passes use the Fallback)' : ''}
+              </span>
+            </Row>
+          )}
+          {!!info.keywordGroups?.length && (
+            <Row name="Keywords">
+              <span className="dim">{info.keywordGroups.map((g) => g.join(' | ')).join(' · ')}</span>
+            </Row>
+          )}
           <div className="field-name shader-props-title">Properties</div>
           {(info.properties ?? []).map((p) => (
             <Row key={p.name} name={p.display}>
@@ -388,9 +422,48 @@ export function MaterialInspector({ assetKey }: { assetKey: string }) {
             </div>
           );
         })}
+      {(() => {
+        // keyword groups the properties don't drive: toggles (shader_feature) / menus (multi_compile)
+        const driven = propertyKeywords(info);
+        const groups = (info.keywordGroups ?? []).filter((g) => !g.some((k) => driven.has(k)));
+        if (!groups.length) return null;
+        const on = new Set(Array.isArray(doc.keywords) ? (doc.keywords as string[]) : []);
+        const pick = (g: string[], k: string | null) => {
+          const next = [...on].filter((x) => !g.includes(x));
+          if (k && !/^_+$/.test(k)) next.push(k);
+          save({ ...doc, keywords: next });
+        };
+        return (
+          <>
+            <div className="mat-header">Keywords</div>
+            {groups.map((g) => {
+              const real = g.filter((k) => !/^_+$/.test(k));
+              if (real.length === 1 && g.length === 2)
+                return (
+                  <Row key={g.join()} name={real[0]}>
+                    <input type="checkbox" checked={on.has(real[0])} onChange={(e) => pick(g, e.target.checked ? real[0] : null)} />
+                  </Row>
+                );
+              const cur = g.find((k) => on.has(k)) ?? g[0];
+              return (
+                <Row key={g.join()} name={real.join(' / ')}>
+                  <select value={cur} onChange={(e) => pick(g, e.target.value)}>
+                    {g.map((k) => (
+                      <option key={k} value={k}>
+                        {/^_+$/.test(k) ? '(none)' : k}
+                      </option>
+                    ))}
+                  </select>
+                </Row>
+              );
+            })}
+          </>
+        );
+      })()}
       <Row name="Render Queue">
         <span className="dim">
           {info.state?.queue} · {info.state?.blend}
+          {info.passes?.length ? ` · ${1 + info.passes.length} passes` : ''}
         </span>
       </Row>
     </div>
