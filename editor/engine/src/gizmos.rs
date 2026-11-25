@@ -243,6 +243,13 @@ impl EditorCore {
                 }
             }
         }
+        // scripts' onDrawGizmos (Gizmos.* / Handles.*: the engine the Scene view shows)
+        let eng = self.play.as_ref().unwrap_or(&self.edit);
+        if let Some(q) = eng.resources.get::<goat_runtime::GizmoQueue>() {
+            for (a, b, c) in &q.lines {
+                l.line(*a, *b, c.to_array());
+            }
+        }
         l
     }
 

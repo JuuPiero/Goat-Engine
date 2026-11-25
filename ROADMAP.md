@@ -137,7 +137,7 @@ Duyệt bảng "Đối chiếu với Unity" và từng phần README / API của
 - ✅ GameObject / Component / Transform, vòng đời MonoBehaviour, field tự hiện trong Inspector, ScriptableObject, Instantiate / Destroy, coroutine, Awaitable, Invoke / InvokeRepeating, PlayerPrefs, Time / Input / Debug / Mathf, SceneManager.loadScene, Camera.main / ScreenPointToRay / ScreenToWorldPoint, physics 3D / 2D + callback, OnMouse*, AudioSource, NavMesh, Animator, Tween, Resources.load
 - ✅ Đồ hoạ cấp thấp (desktop, editor, 3DS): `RenderTexture` (asset + `new`) + `Camera.targetTexture`, `Texture2D` (setPixel / getPixel / apply / loadImage / encodeToPNG / readPixels), `Graphics.drawMesh` / `drawMeshInstanced` + `MaterialPropertyBlock` (màu), `Graphics.blit` + component Post Effect, `GL`, `Debug.drawLine` / `drawRay`
 - ⬜ Còn lại của đồ hoạ cấp thấp: RawImage hiện render texture, `Sprite.create`, `Graphics.drawTexture`, `onRenderImage` trong script, `readPixels` trên web / 3DS, GPU instancing thật (desktop), Inspector của asset Render Texture
-- ⬜ `Gizmos.*` / `Handles.*` + `onDrawGizmos` / `onDrawGizmosSelected` của script
+- ✅ `Gizmos.*` / `Handles.*` + `onDrawGizmos` / `onDrawGizmosSelected` của script (Edit mode và Play)
 - ✅ Nhiều scene: `LoadSceneMode.Additive`, `loadSceneAsync` → AsyncOperation, `unloadSceneAsync`, `dontDestroyOnLoad`, `setActiveScene`, `gameObject.scene`, sự kiện sceneLoaded / sceneUnloaded, Hierarchy nhiều scene khi Play
 - ⬜ `TextAsset` / `JsonAsset` / `BufferAsset`, `Resources.loadPrefab` / `loadAll` / `find`
 - ⬜ Attribute field: `@hideInInspector`, `@nonSerialized`, mảng + struct `@serializable`, `@createAssetMenu`, `@contextMenu`, decorator kiểu Odin (`@button`, `@showIf`, `@boxGroup`...)

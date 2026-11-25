@@ -38,6 +38,29 @@ pub struct PostEffect {
     pub materials: Vec<MaterialId>,
 }
 
+/// Script gizmos (`OnDrawGizmos` with `Gizmos.DrawWireSphere`, `Handles.Label`...): world line
+/// segments and labels the editor's Scene view draws. Filled by whoever runs the scripts' gizmo
+/// methods (the ScriptPlugin while playing, the editor in Edit mode), read by the editor.
+#[derive(Default, Debug)]
+pub struct GizmoQueue {
+    pub lines: Vec<(Vec3, Vec3, Color)>,
+    pub labels: Vec<(Vec3, String, Color)>,
+}
+
+impl GizmoQueue {
+    pub fn clear(&mut self) {
+        self.lines.clear();
+        self.labels.clear();
+    }
+}
+
+/// Present while an editor shows gizmos: the ScriptPlugin calls `onDrawGizmos` (and
+/// `onDrawGizmosSelected` for `selected`) every frame into the [`GizmoQueue`].
+#[derive(Default, Debug, Clone)]
+pub struct DrawGizmos {
+    pub selected: Vec<Entity>,
+}
+
 /// A mesh drawn for one frame (`Graphics.DrawMesh`).
 #[derive(Clone, Copy, Debug)]
 pub struct QueuedDraw {

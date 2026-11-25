@@ -253,6 +253,9 @@ export class Transform {
   get localScale() { return v3(N.getScale(this._h)); }
   set localScale(v) { N.setScale(this._h, v.x, v.y, v.z); }
   get lossyScale() { return v3(this._world().lossyScale); }
+  /** World matrix (position, rotation, lossy scale): Gizmos.matrix = transform.localToWorldMatrix. */
+  get localToWorldMatrix() { const w = this._world(); const q = w.rotation; return Matrix4x4.TRS(v3(w.position), new Quaternion(q[0], q[1], q[2], q[3]), v3(w.lossyScale)); }
+  get worldToLocalMatrix() { return this.localToWorldMatrix.inverse; }
   /** The object's −Z in world space (where it looks). */
   get forward() { return this.rotation.mul(Vector3.forward); }
   set forward(v) { this.rotation = Quaternion.lookRotation(v, this.up); }
@@ -1543,6 +1546,90 @@ export const Graphics = {
   blit(source, dest = null, material = null) { N.call('Graphics.blit', -1, [textureKey(source), dest ? textureKey(dest) : null, materialKey(material)]); },
 };
 MaterialPropertyBlock.prototype.setVectorArray = function (name, values) { if (name === '_Color' || name === '_BaseColor') this._colors = values; };
+
+// ------------------------------------------------------------------ Gizmos / Handles
+
+// Scene view drawings of scripts (Unity's OnDrawGizmos / OnDrawGizmosSelected): the editor calls
+// them in Edit and Play mode; segments go to the engine as one call per shape.
+const gz = { color: [1, 1, 1, 1], m: null, hcolor: [1, 1, 1, 1] };
+function gzPoint(p, m) {
+  const x = p.x, y = p.y, z = p.z ?? 0;
+  return m ? [m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14]] : [x, y, z];
+}
+function gzSend(points, color, m) {
+  const flat = [];
+  for (const p of points) flat.push(...gzPoint(p, m));
+  if (flat.length >= 6) N.call('Gizmos.lines', -1, [flat, color]);
+}
+// a circle as segment pairs: center c, axes u / v (unit, perpendicular), radius r
+function gzCircle(c, u, v, r, from = 0, angle = Math.PI * 2, n = 32) {
+  const pts = [];
+  const steps = Math.max(4, Math.ceil((n * Math.abs(angle)) / (Math.PI * 2)));
+  let prev = null;
+  for (let i = 0; i <= steps; i++) {
+    const a = from + (angle * i) / steps, cs = Math.cos(a) * r, sn = Math.sin(a) * r;
+    const p = { x: c.x + u.x * cs + v.x * sn, y: c.y + u.y * cs + v.y * sn, z: c.z + u.z * cs + v.z * sn };
+    if (prev) pts.push(prev, p);
+    prev = p;
+  }
+  return pts;
+}
+function gzBasis(n) {
+  const len = Math.hypot(n.x, n.y, n.z) || 1, a = { x: n.x / len, y: n.y / len, z: n.z / len };
+  const t = Math.abs(a.y) < 0.99 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+  let u = { x: t.y * a.z - t.z * a.y, y: t.z * a.x - t.x * a.z, z: t.x * a.y - t.y * a.x };
+  const ul = Math.hypot(u.x, u.y, u.z) || 1;
+  u = { x: u.x / ul, y: u.y / ul, z: u.z / ul };
+  return [u, { x: a.y * u.z - a.z * u.y, y: a.z * u.x - a.x * u.z, z: a.x * u.y - a.y * u.x }];
+}
+function gzBox(c, s) {
+  const h = { x: s.x / 2, y: s.y / 2, z: s.z / 2 }, P = (i, j, k) => ({ x: c.x + i * h.x, y: c.y + j * h.y, z: c.z + k * h.z }), out = [];
+  for (const [a, b] of [[[-1, -1, -1], [1, -1, -1]], [[1, -1, -1], [1, -1, 1]], [[1, -1, 1], [-1, -1, 1]], [[-1, -1, 1], [-1, -1, -1]], [[-1, 1, -1], [1, 1, -1]], [[1, 1, -1], [1, 1, 1]], [[1, 1, 1], [-1, 1, 1]], [[-1, 1, 1], [-1, 1, -1]], [[-1, -1, -1], [-1, 1, -1]], [[1, -1, -1], [1, 1, -1]], [[1, -1, 1], [1, 1, 1]], [[-1, -1, 1], [-1, 1, 1]]]) out.push(P(...a), P(...b));
+  return out;
+}
+
+/** Unity's Gizmos (in `onDrawGizmos()` / `onDrawGizmosSelected()` of a script): drawn in the Scene view. */
+export const Gizmos = {
+  get color() { return new Color(gz.color[0], gz.color[1], gz.color[2], gz.color[3]); },
+  set color(c) { gz.color = colorArray(c); },
+  /** Local → world for what follows (e.g. `this.transform.localToWorldMatrix`); null = world. */
+  get matrix() { return new Matrix4x4(gz.m ?? undefined); },
+  set matrix(m) { gz.m = m ? [...(m.m ?? m)] : null; },
+  drawLine(a, b) { gzSend([a, b], gz.color, gz.m); },
+  drawRay(from, dir) { gzSend([from, { x: from.x + dir.x, y: from.y + dir.y, z: (from.z ?? 0) + (dir.z ?? 0) }], gz.color, gz.m); },
+  drawLineList(points) { gzSend(points.length % 2 ? points.slice(0, -1) : points, gz.color, gz.m); },
+  drawLineStrip(points, loop = false) { const out = []; for (let i = 1; i < points.length; i++) out.push(points[i - 1], points[i]); if (loop && points.length > 2) out.push(points[points.length - 1], points[0]); gzSend(out, gz.color, gz.m); },
+  drawWireSphere(c, r) { const X = { x: 1, y: 0, z: 0 }, Y = { x: 0, y: 1, z: 0 }, Z = { x: 0, y: 0, z: 1 }; gzSend([...gzCircle(c, X, Y, r), ...gzCircle(c, X, Z, r), ...gzCircle(c, Y, Z, r)], gz.color, gz.m); },
+  drawSphere(c, r) { this.drawWireSphere(c, r); },
+  drawWireCube(c, size) { gzSend(gzBox(c, size), gz.color, gz.m); },
+  drawCube(c, size) { this.drawWireCube(c, size); },
+  /** A camera frustum from `center` looking down -Z (Gizmos.matrix places it). fov in degrees. */
+  drawFrustum(center, fov, maxRange, minRange, aspect) {
+    const t = Math.tan((fov * Math.PI) / 360), q = (d) => { const h = t * d, w = h * aspect; return [[-w, -h], [w, -h], [w, h], [-w, h]].map(([x, y]) => ({ x: center.x + x, y: center.y + y, z: center.z - d })); };
+    const n = q(minRange), f = q(maxRange), out = [];
+    for (let i = 0; i < 4; i++) out.push(n[i], n[(i + 1) % 4], f[i], f[(i + 1) % 4], n[i], f[i]);
+    gzSend(out, gz.color, gz.m);
+  },
+  drawIcon() {},
+};
+
+/** Unity's Handles (editor drawing): labels, discs, arcs — in the Scene view. */
+export const Handles = {
+  get color() { return new Color(gz.hcolor[0], gz.hcolor[1], gz.hcolor[2], gz.hcolor[3]); },
+  set color(c) { gz.hcolor = colorArray(c); },
+  label(position, text) { N.call('Gizmos.label', -1, [gzPoint(position, null), String(text), gz.hcolor]); },
+  drawLine(a, b) { gzSend([a, b], gz.hcolor, null); },
+  drawDottedLine(a, b) { this.drawLine(a, b); },
+  drawPolyLine(...points) { Gizmos.drawLineStrip.call({}, points); },
+  drawWireDisc(center, normal, radius) { const [u, v] = gzBasis(normal); gzSend(gzCircle(center, u, v, radius), gz.hcolor, null); },
+  drawSolidDisc(center, normal, radius) { this.drawWireDisc(center, normal, radius); },
+  /** An arc from direction `from` turning `angle` degrees about `normal`. */
+  drawWireArc(center, normal, from, angle, radius) {
+    const [u, v] = gzBasis(normal), a0 = Math.atan2(from.x * v.x + from.y * v.y + from.z * v.z, from.x * u.x + from.y * u.y + from.z * u.z);
+    gzSend(gzCircle(center, u, v, radius, a0, (angle * Math.PI) / 180), gz.hcolor, null);
+  },
+  drawWireCube(c, size) { gzSend(gzBox(c, size), gz.hcolor, null); },
+};
 
 /** Unity's GL immediate mode: GL.begin(GL.LINES); GL.color(c); GL.vertex3(x, y, z); GL.end().
  *  World space, or the screen after GL.loadOrtho() (0..1) / GL.loadPixelMatrix() (pixels), from the bottom-left. */

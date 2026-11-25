@@ -89,6 +89,10 @@ pub struct Engine {
     pub editing: bool,
     /// Render only through this camera (the editor's scene camera) instead of every camera.
     pub view_camera: Option<Entity>,
+    /// `step`: run the frame without drawing it; `stepped`: the next render_only belongs to it
+    /// (its times go to the profiler).
+    no_render: bool,
+    stepped: bool,
 }
 
 impl Engine {
@@ -109,6 +113,8 @@ impl Engine {
             fixed_accumulator: 0.0,
             editing: false,
             view_camera: None,
+            no_render: false,
+            stepped: false,
         }
     }
 
@@ -218,10 +224,15 @@ impl Engine {
         let t1 = crate::profiler::now();
         self.each_plugin(gfx, |p, ctx| p.late_update(ctx));
         let t2 = crate::profiler::now();
-        let views = self.build_views(gfx, self.time.elapsed);
-        let t3 = crate::profiler::now();
-        self.last_stats = gfx.render(&views);
-        let t4 = crate::profiler::now();
+        let (t3, t4) = if self.no_render {
+            // `step`: the caller draws with render_only (its times count in the next frame)
+            (t2, t2)
+        } else {
+            let views = self.build_views(gfx, self.time.elapsed);
+            let t3 = crate::profiler::now();
+            self.last_stats = gfx.render(&views);
+            (t3, crate::profiler::now())
+        };
         let prof = self.resources.get_or_default::<crate::profiler::Profiler>();
         prof.add("Transforms", t1 - t0);
         prof.add("Culling", t3 - t2);
@@ -231,12 +242,32 @@ impl Engine {
         prof.end_frame();
     }
 
+    /// Runs one frame without drawing it (the editor updates its gizmos from the new state, then
+    /// draws with [`Engine::render_only`]).
+    pub fn step(&mut self, dt: f32, gfx: &mut dyn GraphicsBackend) {
+        self.no_render = true;
+        self.frame(dt, gfx);
+        self.no_render = false;
+        self.stepped = true;
+    }
+
     /// Draws the current state without running anything (a paused game in the editor).
     pub fn render_only(&mut self, gfx: &mut dyn GraphicsBackend) {
         self.displays = gfx.displays();
         propagate_transforms(&mut self.world);
+        let t0 = crate::profiler::now();
         let views = self.build_views(gfx, self.time.elapsed);
+        let t1 = crate::profiler::now();
         self.last_stats = gfx.render(&views);
+        let t2 = crate::profiler::now();
+        if !std::mem::take(&mut self.stepped) {
+            return;
+        }
+        let prof = self.resources.get_or_default::<crate::profiler::Profiler>();
+        prof.add("Culling", t1 - t0);
+        prof.add("Render", t2 - t1);
+        prof.draw_calls = self.last_stats.draw_calls;
+        prof.triangles = self.last_stats.triangles;
     }
 
     /// The cameras' views + this frame's low-level drawing (graphics.rs).

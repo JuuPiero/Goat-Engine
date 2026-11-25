@@ -219,10 +219,21 @@ impl EditorCore {
 
     /// Where the handles are: origin, axes (Global = world, Local = the active object's rotation;
     /// Scale is always local, like Unity) and world units per gizmo unit (3D) / pixel (2D).
-    /// Frozen while dragging.
+    /// While dragging, the axes and size stay as they were at the press (the drag's math works in
+    /// that frame) but the handles move WITH the objects: the origin follows the selection's
+    /// average displacement since the press (Unity / three.js TransformControls).
     pub(crate) fn gizmo_frame(&self) -> Option<(Vec3, Quat, f32)> {
         if let Some(d) = &self.tools.drag {
-            return Some((d.origin, d.basis, d.unit));
+            let world = crate::core::view_world!(self);
+            let (mut moved, mut n) = (Vec3::ZERO, 0.0f32);
+            for o in &d.objects {
+                if let Ok(g) = world.get::<&GlobalTransform>(o.entity) {
+                    moved += g.0.w_axis.truncate() - o.world.w_axis.truncate();
+                    n += 1.0;
+                }
+            }
+            let shift = if n > 0.0 { moved / n } else { Vec3::ZERO };
+            return Some((d.origin + shift, d.basis, d.unit));
         }
         let e = self.selected?;
         let world = crate::core::view_world!(self);
@@ -736,6 +747,14 @@ impl EditorCore {
                 if let Some(s) = self.to_px(pos) {
                     items.push(json!({ "k": "i", "n": "light", "p": [s.x, s.y] }));
                 }
+            }
+        }
+        // scripts' Handles.label texts
+        let labels: Vec<(Vec3, String, goat_core::Color)> = self.play.as_ref().unwrap_or(&self.edit).resources.get::<goat_runtime::GizmoQueue>().map(|q| q.labels.clone()).unwrap_or_default();
+        for (p, text, c) in labels {
+            if let Some(s) = self.to_px(p) {
+                let hex = format!("#{:02x}{:02x}{:02x}", (c.r.clamp(0.0, 1.0) * 255.0) as u8, (c.g.clamp(0.0, 1.0) * 255.0) as u8, (c.b.clamp(0.0, 1.0) * 255.0) as u8);
+                items.push(json!({ "k": "t", "p": [s.x, s.y], "t": text, "c": hex }));
             }
         }
         // selection outlines (orange): the world box in 3D, the turned rectangle in 2D

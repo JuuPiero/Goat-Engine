@@ -176,6 +176,26 @@ fn draw_line(api: &mut Api, _: Entity, a: &[Value]) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
+/// `Gizmos.lines`: `[[x0, y0, z0, x1, y1, z1, …], color]` world segments (pairs).
+fn gizmo_lines(api: &mut Api, _: Entity, a: &[Value]) -> Result<Value, String> {
+    let v: Vec<f32> = a.first().and_then(Value::as_array).map(|l| l.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect()).unwrap_or_default();
+    let c = color(a.get(1));
+    let q = api.ctx.resources.get_or_default::<goat_runtime::GizmoQueue>();
+    for s in v.chunks_exact(6) {
+        q.lines.push((Vec3::new(s[0], s[1], s[2]), Vec3::new(s[3], s[4], s[5]), c));
+    }
+    Ok(Value::Null)
+}
+
+/// `Handles.label`: `[[x, y, z], text, color]`.
+fn gizmo_label(api: &mut Api, _: Entity, a: &[Value]) -> Result<Value, String> {
+    let p = vec3(a.first()).unwrap_or(Vec3::ZERO);
+    let text = a.get(1).map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_default();
+    let c = color(a.get(2));
+    api.ctx.resources.get_or_default::<goat_runtime::GizmoQueue>().labels.push((p, text, c));
+    Ok(Value::Null)
+}
+
 // ------------------------------------------------------------------ RenderTexture / Texture2D
 
 /// `[width, height, depth]` → key
@@ -347,6 +367,8 @@ pub fn register(x: &mut Extensions) {
         .add("Graphics.blit", blit)
         .add("GL.draw", gl_draw)
         .add("Debug.drawLine", draw_line)
+        .add("Gizmos.lines", gizmo_lines)
+        .add("Gizmos.label", gizmo_label)
         .add("RenderTexture.create", rt_create)
         .add("Texture.release", tex_release)
         .add("Texture.size", tex_size)

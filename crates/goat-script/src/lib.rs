@@ -188,7 +188,9 @@ pub fn entity_arg(v: &Value) -> Option<Entity> {
 
 /// Core GameObject calls every host gets: active state and tags (Unity's SetActive,
 /// activeSelf, activeInHierarchy, tag, CompareTag, FindWithTag, FindGameObjectsWithTag).
-fn register_core(x: &mut Extensions) {
+/// The engine API every script gets (the ScriptPlugin registers it; tools running scripts
+/// without one — the editor's Edit-mode gizmos — call it themselves).
+pub fn register_core(x: &mut Extensions) {
     core_api::register(x);
     graphics_api::register(x);
     scene_api::register(x);
@@ -687,6 +689,28 @@ impl Plugin for ScriptPlugin {
             }
         }
         self.run(ctx, Method::LateUpdate);
+        self.draw_gizmos(ctx);
+    }
+}
+
+impl ScriptPlugin {
+    /// An editor shows gizmos ([`goat_runtime::DrawGizmos`]): `onDrawGizmos` on every running
+    /// script, `onDrawGizmosSelected` on the selected objects' ones, into a fresh GizmoQueue.
+    fn draw_gizmos(&mut self, ctx: &mut Context) {
+        let Some(selected) = ctx.resources.get::<goat_runtime::DrawGizmos>().map(|d| d.selected.clone()) else { return };
+        ctx.resources.get_or_default::<goat_runtime::GizmoQueue>().clear();
+        for i in 0..self.instances.len() {
+            let inst = &self.instances[i];
+            let (host, id, e) = (inst.host, inst.id, inst.entity);
+            if inst.failed || !inst.started || ctx.world.get::<&goat_runtime::InactiveInHierarchy>(e).is_ok() {
+                continue;
+            }
+            let mut api = Api::new(ctx);
+            let _ = self.hosts[host].message(&mut api, id, e, "onDrawGizmos", &Value::Null);
+            if selected.contains(&e) {
+                let _ = self.hosts[host].message(&mut api, id, e, "onDrawGizmosSelected", &Value::Null);
+            }
+        }
     }
 }
 

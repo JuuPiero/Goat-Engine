@@ -116,6 +116,11 @@ export function relayout(m: ViewMode = 'scene') {
 type LogLevel = 'info' | 'warn' | 'error';
 
 /// Starts the engine on the canvas and the frame loop (once).
+/// Drawings over the views (handles, outlines, the axis gizmo): run right after each engine
+/// frame, in the same animation frame — a separate requestAnimationFrame ran BEFORE the engine's
+/// and showed the previous frame's positions (gizmos trailing moving objects).
+export const afterFrame = new Set<() => void>();
+
 function ensureLoop() {
   if (loopStarted) return;
   loopStarted = true;
@@ -161,6 +166,13 @@ function ensureLoop() {
             }
           }
           if (!eng.is_playing() && getState().playing) setState({ playing: false, paused: false });
+        }
+        for (const f of afterFrame) {
+          try {
+            f();
+          } catch (err) {
+            console.error(err);
+          }
         }
         last = now;
         requestAnimationFrame(loop);

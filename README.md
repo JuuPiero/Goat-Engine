@@ -354,6 +354,13 @@ Như Unity / PiaEngine. Ví dụ: `scenes/multiscene.scene.json` + `scripts/Scen
 - `SceneManager.sceneCount`, `getSceneAt(i)`, `getSceneByName / ByPath / ByBuildIndex`, `getActiveScene()`, `setActiveScene(scene)`; `Scene` có `name`, `path`, `buildIndex`, `isLoaded`, `getRootGameObjects()`; `gameObject.scene`. Object tạo lúc chạy thuộc scene active.
 - Sự kiện `SceneManager.sceneLoaded`, `sceneUnloaded`, `activeSceneChanged` (`addListener`).
 - Khi Play, Hierarchy hiện từng scene đã nạp (scene active có nhãn **Active**) và **DontDestroyOnLoad**.
+### Gizmos cho script (`onDrawGizmos`)
+
+Như Unity: method `onDrawGizmos()` (luôn vẽ) và `onDrawGizmosSelected()` (khi object được chọn) của script vẽ vào Scene view, **cả lúc chưa Play** (editor tạo một instance tạm để gọi, script không chạy) lẫn khi Play. Ví dụ: `scripts/NavPatrol.ts` (vùng đi tuần, đích đang tới, nhãn).
+
+- `Gizmos.color`, `Gizmos.matrix` (ví dụ `this.transform.localToWorldMatrix`), `drawLine`, `drawRay`, `drawWireSphere`, `drawWireCube`, `drawLineList`, `drawLineStrip`, `drawFrustum` (`drawSphere` / `drawCube` vẽ dạng khung).
+- `Handles.color`, `Handles.label(pos, text)`, `drawLine`, `drawWireDisc(center, normal, r)`, `drawWireArc(center, normal, from, angle, r)`, `drawWireCube`.
+- Tắt bằng nút **Gizmos** của Scene view.
 ## Text, physics, audio
 
 Chữ có thể có viền (`.with_outline(màu, 0.06)`), bóng (`.with_shadow(màu, [0.05, 0.05])`) và rich text (`.rich()`: `<color=#ff8800>`, `<size=1.5>`, `<b>`, `<i>`). Trong scene, các key tương ứng là `rich` / `outline` / `shadow` của `Text` và `UiText`.

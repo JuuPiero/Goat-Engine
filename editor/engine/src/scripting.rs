@@ -15,6 +15,8 @@ use crate::core::EditorCore;
 pub struct ScriptInfo {
     host: Option<JsHost>,
     cache: HashMap<String, Value>,
+    /// Scripts whose source defines onDrawGizmos / onDrawGizmosSelected (checked once per file).
+    gizmo_sources: HashMap<String, bool>,
 }
 
 /// Sources the JavaScript host runs.
@@ -52,6 +54,53 @@ impl EditorCore {
         v
     }
 
+    /// Edit mode: `onDrawGizmos` (and `onDrawGizmosSelected` for the selection) of the edit
+    /// world's scripts, into its GizmoQueue — on fresh instances made for the call (Unity calls
+    /// them without running the scripts). Only scripts whose source defines one are made.
+    pub(crate) fn draw_edit_gizmos(&mut self, gfx: &mut dyn GraphicsBackend) {
+        self.edit.resources.get_or_default::<goat_runtime::GizmoQueue>().clear();
+        if !self.view.gizmos {
+            return;
+        }
+        let refs: Vec<(goat_runtime::Entity, String, Value)> = self
+            .edit
+            .world
+            .query::<&goat_script::Script>()
+            .without::<&goat_runtime::InactiveInHierarchy>()
+            .iter()
+            .flat_map(|(e, s)| s.0.iter().filter(|r| r.enabled).map(move |r| (e, r.src.clone(), r.props.clone())))
+            .collect();
+        let io = self.io.clone();
+        let wanted: Vec<_> = refs
+            .into_iter()
+            .filter(|(_, src, _)| *self.scripts.gizmo_sources.entry(src.clone()).or_insert_with(|| is_script(src) && io.read_string(src).is_ok_and(|t| t.contains("onDrawGizmos"))))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let selected = self.selection.clone();
+        let (scripts, edit) = (&mut self.scripts, &mut self.edit);
+        let host = scripts.host.get_or_insert_with(|| JsHost::with_io(io));
+        edit.with_context(gfx, |ctx| {
+            let x = ctx.resources.get_or_default::<goat_script::Extensions>();
+            if x.get("Gizmos.lines").is_none() {
+                goat_script::register_core(x);
+            }
+            for (e, src, props) in wanted {
+                let mut api = goat_script_js::api_of(ctx);
+                use goat_script::ScriptHost;
+                let Ok(id) = host.instantiate(&mut api, e, &src, &props) else { continue };
+                if let Err(err) = host.message(&mut api, id, e, "onDrawGizmos", &Value::Null) {
+                    goat_core::warn!("{src} onDrawGizmos: {err}");
+                }
+                if selected.contains(&e) {
+                    let _ = host.message(&mut api, id, e, "onDrawGizmosSelected", &Value::Null);
+                }
+                host.destroy(id);
+            }
+        });
+    }
+
     /// A `.shader` file as the Inspector shows it: `{ name, kind, properties, state, fallback,
     /// customVertex, warnings, standard }`, or `{ errors: [{ line, message }] }`.
     pub fn shader_info(&self, key: &str) -> Value {
@@ -86,6 +135,7 @@ impl EditorCore {
     pub fn file_changed(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) {
         if is_script(key) || key.ends_with(".asset.json") {
             self.scripts.cache.clear();
+            self.scripts.gizmo_sources.clear();
             self.scripts.host = None;
         }
         // playing: the running objects take the new code (hot reload)

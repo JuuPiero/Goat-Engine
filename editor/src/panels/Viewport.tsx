@@ -16,7 +16,7 @@ import { frameSelected, selectEntities } from '../selection';
 import { afterChange } from '../commands';
 import { exitPrefab, getEngine, saveScene, startPlay, stopPlay } from '../engine';
 import { getState, log, setState, useStore } from '../store';
-import { attach, GAME_SIZES, relayout, setVisible, viewMode, type ViewMode } from '../viewport';
+import { afterFrame, attach, GAME_SIZES, relayout, setVisible, viewMode, type ViewMode } from '../viewport';
 
 /// The view's own canvas in this panel; the engine draws it while the panel is on screen.
 function useCanvasHost(api: DockviewPanelApi, m: ViewMode) {
@@ -66,6 +66,7 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
   const [backend, setBackend] = useState('');
   const drag = useRef<{ x: number; y: number; mode: 'orbit' | 'pan' | 'click' | 'gizmo'; moved: boolean } | null>(null);
   const pointer = useRef<{ x: number; y: number } | null>(null);
+  const lastLive = useRef(0);
   useEffect(() => {
     if (ready) setBackend(getEngine()?.backend_name() ?? '');
   }, [ready]);
@@ -126,6 +127,12 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
     if (d.mode === 'gizmo') {
       const r = (ev.currentTarget as HTMLElement).querySelector('canvas')!.getBoundingClientRect();
       e.gizmo_drag(dx, dy, r.width, r.height, ev.ctrlKey || ev.metaKey);
+      // the Inspector (Transform numbers) follows the drag live, like Unity (~30 times a second)
+      const now = performance.now();
+      if (now - lastLive.current > 33) {
+        lastLive.current = now;
+        setState((s) => ({ hierarchyRev: s.hierarchyRev + 1 }));
+      }
     }
     d.x = ev.clientX;
     d.y = ev.clientY;
@@ -218,16 +225,14 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
   );
 }
 
-type OverlayItem = { k: 'l' | 's' | 'p' | 'c' | 't' | 'i'; p: number[]; s?: string | null; w?: number; a?: number; z?: boolean; f?: string; fa?: number; t?: string; n?: string };
+type OverlayItem = { k: 'l' | 's' | 'p' | 'c' | 't' | 'i'; p: number[]; s?: string | null; w?: number; a?: number; z?: boolean; f?: string; fa?: number; t?: string; n?: string; c?: string };
 
 /// The Scene view overlay (PiaEngine's handles, selection outlines, camera / light icons): shapes
 /// from the engine (`scene_overlay`, view pixels) drawn on a canvas over the engine's canvas.
 function SceneOverlay({ host, pointer }: { host: React.RefObject<HTMLDivElement | null>; pointer: React.RefObject<{ x: number; y: number } | null> }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    let raf = 0;
     const draw = () => {
-      raf = requestAnimationFrame(draw);
       const c = ref.current;
       const e = getEngine();
       const view = host.current?.querySelector('canvas:not(.g-overlay)') as HTMLCanvasElement | null;
@@ -303,7 +308,7 @@ function SceneOverlay({ host, pointer }: { host: React.RefObject<HTMLDivElement 
           g.lineWidth = 3;
           g.strokeStyle = '#000';
           g.strokeText(it.t ?? '', q[0], q[1]);
-          g.fillStyle = '#fff';
+          g.fillStyle = it.c ?? '#fff';
           g.fillText(it.t ?? '', q[0], q[1]);
         } else if (it.k === 'i') {
           const [x, y] = q;
@@ -331,8 +336,9 @@ function SceneOverlay({ host, pointer }: { host: React.RefObject<HTMLDivElement 
       }
       g.globalAlpha = 1;
     };
+    afterFrame.add(draw);
     draw();
-    return () => cancelAnimationFrame(raf);
+    return () => void afterFrame.delete(draw);
   }, [host, pointer]);
   return <canvas ref={ref} className="g-overlay" />;
 }
@@ -344,9 +350,7 @@ function ViewGizmo({ view2d }: { view2d: boolean }) {
   const [ortho, setOrtho] = useState(false);
   const axes = useRef<{ id: string; x: number; y: number }[]>([]);
   useEffect(() => {
-    let raf = 0;
     const draw = () => {
-      raf = requestAnimationFrame(draw);
       const c = ref.current;
       const e = getEngine();
       if (!c || !e) return;
@@ -410,8 +414,9 @@ function ViewGizmo({ view2d }: { view2d: boolean }) {
       }
       axes.current = list;
     };
+    afterFrame.add(draw);
     draw();
-    return () => cancelAnimationFrame(raf);
+    return () => void afterFrame.delete(draw);
   }, [ortho]);
   if (view2d) return null;
   return (

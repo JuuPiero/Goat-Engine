@@ -641,14 +641,31 @@ impl EditorCore {
             self.sync_play_camera();
         }
         if self.play.is_some() {
+            // the running scripts draw their onDrawGizmos while the Scene view shows gizmos
+            let (gizmos, selected) = (self.view.gizmos, self.selection.clone());
+            if let Some(play) = self.play.as_mut() {
+                if gizmos {
+                    play.resources.insert(goat_runtime::DrawGizmos { selected });
+                } else if play.resources.remove::<goat_runtime::DrawGizmos>().is_some() {
+                    play.resources.get_or_default::<goat_runtime::GizmoQueue>().clear();
+                }
+            }
             // the Scene view keeps its grid / gizmos / outlines on the running objects
-            let scene_pass = pass == ViewPass::Scene;
-            if scene_pass {
+            if pass == ViewPass::Scene {
+                // the game's frame first (no drawing), then the helpers from its new state, then
+                // the drawing: gizmos / outlines never trail the objects
+                if simulate {
+                    self.play_pass(gfx, dt, true, false);
+                }
                 self.update_scene_helpers(gfx);
+                if let Some(play) = self.play.as_mut() {
+                    play.render_only(gfx);
+                }
+                return;
             }
             let play = self.play.as_mut().unwrap();
-            let hidden = if scene_pass { Vec::new() } else { hide_editor_drawables(&mut play.world) };
-            self.play_pass(gfx, dt, simulate);
+            let hidden = hide_editor_drawables(&mut play.world);
+            self.play_pass(gfx, dt, simulate, true);
             if let Some(play) = self.play.as_mut() {
                 show_again(&mut play.world, hidden);
             }
@@ -664,6 +681,7 @@ impl EditorCore {
         }
         let game_view = !self.view.scene_view;
         if !game_view {
+            self.draw_edit_gizmos(gfx);
             self.update_scene_helpers(gfx);
             self.update_nav_preview(gfx);
         }
@@ -692,17 +710,15 @@ impl EditorCore {
         self.update_gizmos(gfx);
     }
 
-    /// The running game's frame (or only its drawing).
-    fn play_pass(&mut self, gfx: &mut dyn GraphicsBackend, dt: f32, simulate: bool) {
+    /// The running game's frame (or only its drawing); `draw` false = run without drawing.
+    fn play_pass(&mut self, gfx: &mut dyn GraphicsBackend, dt: f32, simulate: bool, draw: bool) {
         let Some(play) = self.play.as_mut() else { return };
         {
-            if !simulate {
-                play.render_only(gfx);
-                return;
-            }
             // Pause: draw only; Step: one 1/60 s frame
-            if self.paused && !self.step_once && !self.step_zero {
-                play.render_only(gfx);
+            if !simulate || (self.paused && !self.step_once && !self.step_zero) {
+                if draw {
+                    play.render_only(gfx);
+                }
                 return;
             }
             let dt = if self.step_once { 1.0 / 60.0 } else if self.step_zero && self.paused { 0.0 } else { dt };
@@ -714,7 +730,11 @@ impl EditorCore {
             }
             play.input.set_axis(Axis::LeftX, self.axes[0]);
             play.input.set_axis(Axis::LeftY, self.axes[1]);
-            play.frame(dt, gfx);
+            if draw {
+                play.frame(dt, gfx);
+            } else {
+                play.step(dt, gfx);
+            }
             if play.should_quit() {
                 self.stop();
                 return;
@@ -973,6 +993,10 @@ mod playground_tests {
         c.gizmo_start(crate::handles::AXIS, start);
         let d = c.project(o + Vec3::X * 0.6).unwrap() * Vec2::new(w, h) - start; // 0.6 units → snaps to 0.5
         c.gizmo_drag(d.x, d.y, w, h, true);
+        // mid-drag (next frame): the handles are where the objects are now, not at the press
+        c.frame(&mut gfx, 1.0 / 60.0);
+        let mid = c.gizmo_frame().unwrap().0;
+        assert!((mid - (o + Vec3::X * 0.5)).length() < 1e-4, "handles follow the drag: {mid} vs {o}");
         c.gizmo_stop();
         assert!((pos(&c, a).x + 0.5).abs() < 1e-4 && (pos(&c, b).x - 1.5).abs() < 1e-4, "{} {}", pos(&c, a), pos(&c, b));
 
