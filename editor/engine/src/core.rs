@@ -21,6 +21,45 @@ pub use hello_game as game;
 /// Layer of editor-only drawables (selection box); scene cameras don't draw it.
 pub const EDITOR_LAYER: u8 = 31;
 
+/// The world the Scene view shows and edits: the play world while playing (Unity's Play-mode
+/// Scene view: grid, gizmos, picking and handles on the running objects). A macro so the borrow
+/// covers `play` / `edit` only, not the whole core.
+macro_rules! view_world {
+    ($s:expr) => {
+        match $s.play.as_ref() {
+            Some(p) => &p.world,
+            None => &$s.edit.world,
+        }
+    };
+    (mut $s:expr) => {
+        match $s.play.as_mut() {
+            Some(p) => &mut p.world,
+            None => &mut $s.edit.world,
+        }
+    };
+}
+pub(crate) use view_world;
+
+/// The Game view draws without the editor's drawables (grid, gizmos): hidden for its pass.
+fn hide_editor_drawables(world: &mut hecs::World) -> Vec<Entity> {
+    let mut hidden = Vec::new();
+    for (e, r) in world.query_mut::<&mut MeshRenderer>() {
+        if r.layer == EDITOR_LAYER && r.visible {
+            r.visible = false;
+            hidden.push(e);
+        }
+    }
+    hidden
+}
+
+fn show_again(world: &mut hecs::World, hidden: Vec<Entity>) {
+    for e in hidden {
+        if let Ok(mut r) = world.get::<&mut MeshRenderer>(e) {
+            r.visible = true;
+        }
+    }
+}
+
 struct EditGame;
 impl Game for EditGame {
     fn start(&mut self, _ctx: &mut Context) {}
@@ -165,6 +204,8 @@ pub struct EditorCore {
     pub view: ViewOptions,
     /// the Scene view's camera inside the play world (Scene view shown while playing)
     play_camera: Option<Entity>,
+    /// the other world's grid / gizmo entities (play: the edit world's, swapped back on Stop)
+    stashed_helpers: (Option<Entity>, Option<Entity>),
     /// the 3D orbit kept while the view is in 2D mode
     orbit3d: Option<Orbit>,
     /// Buttons held (Play mode input), by Button index.
@@ -211,6 +252,7 @@ impl EditorCore {
             tools: Default::default(),
             view: ViewOptions::default(),
             play_camera: None,
+            stashed_helpers: (None, None),
             orbit3d: None,
             held: [false; 14],
             axes: [0.0; 4],
@@ -433,7 +475,7 @@ impl EditorCore {
 
     /// World bounding sphere of an entity and its renderer children.
     fn world_sphere(&self, gfx: &dyn GraphicsBackend, e: Entity) -> Option<(Vec3, f32)> {
-        let w = &self.edit.world;
+        let w = view_world!(self);
         let mut spheres = Vec::new();
         let mut stack = vec![e];
         let children: Vec<(Entity, Entity)> = w.query::<&Parent>().iter().map(|(c, p)| (p.0, c)).collect();
@@ -462,7 +504,7 @@ impl EditorCore {
         if let Some(e) = self.icon_hit(x, y) {
             return Some(e);
         }
-        let w = &self.edit.world;
+        let w = view_world!(self);
         let (origin, dir) = self.ray(x, y);
 
         let mut best: Option<(f32, Entity)> = None;
@@ -506,6 +548,7 @@ impl EditorCore {
         engine.resources.insert(goat_script::core_api::EditorMarker);
         engine.resources.get_or_default::<Profiler>().keep_history = 300;
         self.play = Some(engine);
+        self.swap_scene_helpers();
         // ids belong to one world: the Hierarchy now lists the play world
         self.selection.clear();
         self.selected = None;
@@ -514,7 +557,12 @@ impl EditorCore {
         self.axes = [0.0; 4];
     }
     pub fn stop(&mut self) {
-        self.play = None;
+        if self.play.take().is_some() {
+            self.swap_scene_helpers();
+            self.stashed_helpers = (None, None);
+        }
+        self.tools.drag = None;
+        self.tools.dragging = None;
         self.play_camera = None;
         self.selection.clear();
         self.selected = None;
@@ -568,7 +616,62 @@ impl EditorCore {
         if self.play.is_some() {
             self.sync_play_camera();
         }
-        if let Some(play) = self.play.as_mut() {
+        if self.play.is_some() {
+            // the Scene view keeps its grid / gizmos / outlines on the running objects
+            let scene_pass = pass == ViewPass::Scene;
+            if scene_pass {
+                self.update_scene_helpers(gfx);
+            }
+            let play = self.play.as_mut().unwrap();
+            let hidden = if scene_pass { Vec::new() } else { hide_editor_drawables(&mut play.world) };
+            self.play_pass(gfx, dt, simulate);
+            if let Some(play) = self.play.as_mut() {
+                show_again(&mut play.world, hidden);
+            }
+            return;
+        }
+        if let Ok(mut t) = self.edit.world.get::<&mut Transform>(self.camera) {
+            t.position = self.orbit.position();
+            t.rotation = self.orbit.rotation();
+        }
+        let projection = self.camera_projection();
+        if let Ok(mut c) = self.edit.world.get::<&mut Camera>(self.camera) {
+            c.projection = projection;
+        }
+        let game_view = !self.view.scene_view;
+        if !game_view {
+            self.update_scene_helpers(gfx);
+            self.update_nav_preview(gfx);
+        }
+        // Game view in edit mode: the scene's cameras draw (Unity), without the editor's drawables
+        goat_runtime::set_active(&mut self.edit.world, self.camera, !game_view);
+        self.edit.view_camera = if game_view { None } else { Some(self.camera) };
+        let hidden = if game_view { hide_editor_drawables(&mut self.edit.world) } else { Vec::new() };
+        if simulate {
+            self.edit.frame(dt, gfx);
+        } else {
+            self.edit.render_only(gfx);
+        }
+        // the Scene view draws them again (both views every frame)
+        show_again(&mut self.edit.world, hidden);
+        if game_view {
+            goat_runtime::set_active(&mut self.edit.world, self.camera, true);
+        }
+    }
+
+    /// Grid, selection, component gizmos of the world the Scene view shows, from this frame's
+    /// world matrices (else they trail moving objects).
+    fn update_scene_helpers(&mut self, gfx: &mut dyn GraphicsBackend) {
+        goat_runtime::engine::propagate_transforms(view_world!(mut self));
+        self.update_selection_box(gfx);
+        self.update_tools(gfx);
+        self.update_gizmos(gfx);
+    }
+
+    /// The running game's frame (or only its drawing).
+    fn play_pass(&mut self, gfx: &mut dyn GraphicsBackend, dt: f32, simulate: bool) {
+        let Some(play) = self.play.as_mut() else { return };
+        {
             if !simulate {
                 play.render_only(gfx);
                 return;
@@ -589,61 +692,19 @@ impl EditorCore {
             play.input.set_axis(Axis::LeftY, self.axes[1]);
             play.frame(dt, gfx);
             if play.should_quit() {
-                self.play = None;
+                self.stop();
                 return;
             }
             self.after_play_frame();
             return;
         }
-        if let Ok(mut t) = self.edit.world.get::<&mut Transform>(self.camera) {
-            t.position = self.orbit.position();
-            t.rotation = self.orbit.rotation();
-        }
-        let projection = self.camera_projection();
-        if let Ok(mut c) = self.edit.world.get::<&mut Camera>(self.camera) {
-            c.projection = projection;
-        }
-        let game_view = !self.view.scene_view;
-        if !game_view {
-            // gizmo meshes from this frame's world matrices (else they trail moving objects)
-            goat_runtime::engine::propagate_transforms(&mut self.edit.world);
-            self.update_selection_box(gfx);
-            self.update_tools(gfx);
-            self.update_nav_preview(gfx);
-            self.update_gizmos(gfx);
-        }
-        // Game view in edit mode: the scene's cameras draw (Unity), without the editor's drawables
-        goat_runtime::set_active(&mut self.edit.world, self.camera, !game_view);
-        self.edit.view_camera = if game_view { None } else { Some(self.camera) };
-        let mut hidden = Vec::new();
-        if game_view {
-            for (e, r) in self.edit.world.query_mut::<&mut MeshRenderer>() {
-                if r.layer == EDITOR_LAYER && r.visible {
-                    r.visible = false;
-                    hidden.push(e);
-                }
-            }
-        }
-        if simulate {
-            self.edit.frame(dt, gfx);
-        } else {
-            self.edit.render_only(gfx);
-        }
-        // the Scene view draws them again (both views every frame)
-        for e in hidden {
-            if let Ok(mut r) = self.edit.world.get::<&mut MeshRenderer>(e) {
-                r.visible = true;
-            }
-        }
-        if game_view {
-            goat_runtime::set_active(&mut self.edit.world, self.camera, true);
-        }
     }
 
     /// Drops deleted entities from the selection (outlines: handles.rs `scene_overlay`).
     fn update_selection_box(&mut self, _gfx: &mut dyn GraphicsBackend) {
-        self.selection.retain(|e| self.edit.world.contains(*e));
-        if self.selected.is_some_and(|e| !self.edit.world.contains(e)) {
+        let w = view_world!(self);
+        self.selection.retain(|e| w.contains(*e));
+        if self.selected.is_some_and(|e| !w.contains(e)) {
             self.selected = self.selection.last().copied();
         }
     }
@@ -702,6 +763,13 @@ impl EditorCore {
             }
             play.view_camera = None;
         }
+    }
+
+    /// Moves the Scene view's own drawables (grid, gizmo mesh) between the edit world and the
+    /// play world: each world gets its own entities, the edit world's come back on Stop.
+    fn swap_scene_helpers(&mut self) {
+        std::mem::swap(&mut self.tools.grid, &mut self.stashed_helpers.0);
+        std::mem::swap(&mut self.gizmos.entity, &mut self.stashed_helpers.1);
     }
 
     /// World matrix of the editor camera (gizmos in the UI).

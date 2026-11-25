@@ -32,7 +32,7 @@ impl EditorCore {
 
     /// The selection without entities whose ancestor is selected too (what moves / copies).
     pub fn selection_roots(&self) -> Vec<Entity> {
-        let w = &self.edit.world;
+        let w = crate::core::view_world!(self);
         self.selection
             .iter()
             .copied()

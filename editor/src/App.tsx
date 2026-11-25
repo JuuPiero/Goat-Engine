@@ -193,10 +193,12 @@ export function App() {
     e.set_gizmos(gizmos);
     e.set_dual_3ds(dual);
   }, [ready, tool, center, local, grid, gizmos, dual]);
-  // Play shows the Game view, Stop the Scene view (Unity); opening a scene shows the Scene view
+  // Play brings the Game view forward, Stop the Scene view (Unity) — only when it is hidden
+  // behind another tab: views already shown side by side stay as they are
   const openScenePath = useStore((s) => s.scene);
   useEffect(() => {
-    dv.current?.getPanel(playing ? 'game' : 'scene')?.api.setActive();
+    const p = dv.current?.getPanel(playing ? 'game' : 'scene');
+    if (p && !p.api.isVisible) p.api.setActive();
   }, [playing]);
   useEffect(() => {
     if (openScenePath) dv.current?.getPanel('scene')?.api.setActive();

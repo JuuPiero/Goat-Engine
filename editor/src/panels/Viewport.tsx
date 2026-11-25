@@ -5,7 +5,8 @@
 // gizmo (click an axis: look along it; the label under it toggles Persp / Iso), editing by mouse:
 //   right drag / Alt+left drag: orbit (pan in 2D) · middle drag or the Hand tool: pan · wheel: zoom
 //   F: frame · click: select (Ctrl / Shift: add / remove) · handles: move / rotate / scale (Ctrl snaps)
-// While playing it shows the running game through the editor camera (no picking / handles).
+// While playing it shows the running game through the editor camera, with the grid, gizmos,
+// picking and handles (Unity: Play-mode edits of the running objects, gone on Stop).
 // Game view: the game's cameras (also in edit mode), size menu (3DS screens, aspects,
 // resolutions), Scale, Stats; keyboard = 3DS buttons while playing.
 import { useEffect, useRef, useState } from 'react';
@@ -100,10 +101,10 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
     const e = getEngine();
     if (!e || !owner) return;
     const r = (ev.currentTarget as HTMLElement).querySelector('canvas')!.getBoundingClientRect();
-    const editing = !e.is_playing();
-    const onGizmo = editing && ev.button === 0 && !ev.altKey && tool !== 'hand' && e.gizmo_begin((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height, r.width, r.height);
+    // Play mode too (Unity): the handles move the running objects (changes are gone on Stop)
+    const onGizmo = ev.button === 0 && !ev.altKey && tool !== 'hand' && e.gizmo_begin((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height, r.width, r.height);
     // the drag is one Undo step (recorded before the first change)
-    if (onGizmo) e.record_undo(UNDO_LABEL[tool] ?? 'Move');
+    if (onGizmo && !e.is_playing()) e.record_undo(UNDO_LABEL[tool] ?? 'Move');
     const mode = onGizmo ? 'gizmo' : ev.button === 2 || (ev.button === 0 && ev.altKey) ? 'orbit' : ev.button === 1 || (ev.button === 0 && tool === 'hand') ? 'pan' : 'click';
     drag.current = { x: ev.clientX, y: ev.clientY, mode, moved: false };
     (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
@@ -115,7 +116,7 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
     const r = (ev.currentTarget as HTMLElement).querySelector('canvas')?.getBoundingClientRect();
     if (r) pointer.current = { x: ev.clientX - r.left, y: ev.clientY - r.top };
     // no button: highlight the handle under the pointer (like three.js TransformControls)
-    if (!d && e && r && owner && !e.is_playing() && tool !== 'hand') e.gizmo_hover((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height, r.width, r.height);
+    if (!d && e && r && owner && tool !== 'hand') e.gizmo_hover((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height, r.width, r.height);
     if (!d || !e) return;
     const dx = ev.clientX - d.x;
     const dy = ev.clientY - d.y;
@@ -138,7 +139,7 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
       if (d.moved) afterChange();
       return;
     }
-    if (!d || !e || d.mode !== 'click' || d.moved || e.is_playing()) return;
+    if (!d || !e || d.mode !== 'click' || d.moved) return;
     const r = (ev.currentTarget as HTMLElement).querySelector('canvas')!.getBoundingClientRect();
     const id = e.pick((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height) ?? null;
     // Ctrl / Shift + click: add to / remove from the selection (Unity)
@@ -191,7 +192,7 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
           onPointerLeave={() => {
             pointer.current = null;
             const e = getEngine();
-            if (!drag.current && e && !e.is_playing()) e.gizmo_hover(-1, -1, 1, 1);
+            if (!drag.current && e) e.gizmo_hover(-1, -1, 1, 1);
           }}
           onWheel={(ev) => owner && getEngine()?.zoom(ev.deltaY)}
           onContextMenu={(e) => e.preventDefault()}

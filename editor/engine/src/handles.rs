@@ -224,18 +224,16 @@ impl EditorCore {
         if let Some(d) = &self.tools.drag {
             return Some((d.origin, d.basis, d.unit));
         }
-        if self.is_playing() {
-            return None;
-        }
         let e = self.selected?;
-        if self.edit.world.get::<&InactiveInHierarchy>(e).is_ok() {
+        let world = crate::core::view_world!(self);
+        if world.get::<&InactiveInHierarchy>(e).is_ok() {
             return None;
         }
-        let g = self.edit.world.get::<&GlobalTransform>(e).ok()?.0;
+        let g = world.get::<&GlobalTransform>(e).ok()?.0;
         let (_, rot, pos) = g.to_scale_rotation_translation();
         let roots = self.selection_roots();
         let p = if self.tools.center && roots.len() > 1 {
-            let ps: Vec<Vec3> = roots.iter().filter_map(|r| self.edit.world.get::<&GlobalTransform>(*r).ok().map(|g| g.0.w_axis.truncate())).collect();
+            let ps: Vec<Vec3> = roots.iter().filter_map(|r| world.get::<&GlobalTransform>(*r).ok().map(|g| g.0.w_axis.truncate())).collect();
             ps.iter().copied().sum::<Vec3>() / ps.len().max(1) as f32
         } else {
             pos
@@ -448,7 +446,7 @@ impl EditorCore {
     /// selected object without a selected ancestor follows).
     pub fn gizmo_start(&mut self, handle: usize, at: Vec2) {
         let Some((origin, basis, unit)) = self.gizmo_frame() else { return };
-        let w = &self.edit.world;
+        let w = crate::core::view_world!(self);
         let parent_world = |e: Entity| w.get::<&Parent>(e).ok().and_then(|p| w.get::<&GlobalTransform>(p.0).ok().map(|g| g.0)).unwrap_or(Mat4::IDENTITY);
         let mut roots = self.selection_roots();
         if roots.is_empty() {
@@ -606,7 +604,7 @@ impl EditorCore {
             writes.push((o.entity, t));
         }
         for (e, t) in writes {
-            if let Ok(mut cur) = self.edit.world.get::<&mut Transform>(e) {
+            if let Ok(mut cur) = crate::core::view_world!(mut self).get::<&mut Transform>(e) {
                 *cur = t;
             }
         }
@@ -679,7 +677,7 @@ impl EditorCore {
             return None;
         }
         let p = Vec2::new(x, y) * self.tools.view_px;
-        let w = &self.edit.world;
+        let w = crate::core::view_world!(self);
         let mut best: Option<(f32, Entity)> = None;
         for (e, g) in w.query::<&GlobalTransform>().without::<&DontSave>().without::<&InactiveInHierarchy>().iter() {
             let is_icon = w.get::<&Camera>(e).is_ok() || w.get::<&DirectionalLight>(e).is_ok() || w.get::<&PointLight>(e).is_ok() || w.get::<&SpotLight>(e).is_ok();

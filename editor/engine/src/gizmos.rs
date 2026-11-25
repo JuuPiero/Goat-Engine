@@ -21,7 +21,7 @@ const PROBE_LINK: [f32; 4] = [1.0, 0.75, 0.3, 0.35];
 
 #[derive(Default)]
 pub struct Gizmos {
-    entity: Option<Entity>,
+    pub(crate) entity: Option<Entity>,
     mesh: Option<MeshId>,
     material: Option<MaterialId>,
 }
@@ -111,7 +111,7 @@ impl Lines {
 impl EditorCore {
     /// The gizmo lines of the current selection (also used by tests).
     pub fn gizmo_lines(&self) -> Lines {
-        let w = &self.edit.world;
+        let w = crate::core::view_world!(self);
         let eye = self.orbit.position();
         let mut l = Lines::new(eye, 0.0016);
         for &e in &self.selection {
@@ -255,13 +255,14 @@ impl EditorCore {
         let Some(mat) = self.gizmos.material else { return };
         if self.gizmos.entity.is_none() {
             let Ok(mesh) = gfx.create_mesh(&MeshData::default()) else { return };
-            let e = self.edit.world.spawn((Name("Component Gizmos".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, mat).with_layer(EDITOR_LAYER).with_sorting_order(1500)));
+            let e = crate::core::view_world!(mut self).spawn((Name("Component Gizmos".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, mat).with_layer(EDITOR_LAYER).with_sorting_order(1500)));
             self.gizmos.entity = Some(e);
             self.gizmos.mesh = Some(mesh);
         }
         let (Some(e), Some(mesh)) = (self.gizmos.entity, self.gizmos.mesh) else { return };
-        if let Ok(mut r) = self.edit.world.get::<&mut MeshRenderer>(e) {
-            r.visible = self.view.gizmos;
+        let show = self.view.gizmos;
+        if let Ok(mut r) = crate::core::view_world!(mut self).get::<&mut MeshRenderer>(e) {
+            r.visible = show;
         }
         if !self.view.gizmos {
             return;
@@ -270,7 +271,7 @@ impl EditorCore {
         if !empty {
             let _ = gfx.update_mesh(mesh, &lines.mesh);
         }
-        if let Ok(mut r) = self.edit.world.get::<&mut MeshRenderer>(e) {
+        if let Ok(mut r) = crate::core::view_world!(mut self).get::<&mut MeshRenderer>(e) {
             r.visible = !empty;
         }
     }

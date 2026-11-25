@@ -24,7 +24,10 @@ pub enum GizmoMode {
 
 pub struct Tools {
     pub mode: GizmoMode,
-    grid: Option<Entity>,
+    /// The grid entity of the world the Scene view shows (core `swap_scene_helpers`).
+    pub(crate) grid: Option<Entity>,
+    /// its mesh + material, shared by the edit and play worlds' grids
+    grid_gpu: Option<(goat_gfx::MeshId, goat_gfx::MaterialId)>,
     /// The handle being dragged / under the pointer (`handles::AXIS`…).
     pub dragging: Option<usize>,
     pub hover: Option<usize>,
@@ -41,7 +44,7 @@ pub struct Tools {
 
 impl Default for Tools {
     fn default() -> Self {
-        Tools { mode: GizmoMode::Move, grid: None, dragging: None, hover: None, view_px: Vec2::new(800.0, 600.0), local: false, center: false, snap: [0.25, 15.0, 0.1], drag: None }
+        Tools { mode: GizmoMode::Move, grid: None, grid_gpu: None, dragging: None, hover: None, view_px: Vec2::new(800.0, 600.0), local: false, center: false, snap: [0.25, 15.0, 0.1], drag: None }
     }
 }
 
@@ -254,23 +257,29 @@ impl EditorCore {
         (self.orbit.position(), dir)
     }
 
-    /// The grid of the edit world (created on first use). Handles: handles.rs (UI overlay).
+    /// The grid of the world the Scene view shows (created on first use). Handles: handles.rs (UI overlay).
     pub(crate) fn update_tools(&mut self, gfx: &mut dyn GraphicsBackend) {
         let unlit = |c: Color, depth_test: bool, blend: BlendMode| MaterialDesc { base_color: c, lighting: LightingModel::Unlit, blend, cull: CullMode::None, depth_write: false, depth_test, fog: false, ..Default::default() };
         if self.tools.grid.is_none() {
-            if let (Ok(mesh), Ok(mat)) = (gfx.create_mesh(&grid_mesh(30)), gfx.create_material(&unlit(Color::rgba(0.8, 0.85, 0.95, 1.0), true, BlendMode::Alpha))) {
-                let g = self.edit.world.spawn((Name("Grid".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, mat).with_layer(EDITOR_LAYER).with_sorting_order(-1000)));
+            if self.tools.grid_gpu.is_none() {
+                if let (Ok(mesh), Ok(mat)) = (gfx.create_mesh(&grid_mesh(30)), gfx.create_material(&unlit(Color::rgba(0.8, 0.85, 0.95, 1.0), true, BlendMode::Alpha))) {
+                    self.tools.grid_gpu = Some((mesh, mat));
+                }
+            }
+            if let Some((mesh, mat)) = self.tools.grid_gpu {
+                let g = crate::core::view_world!(mut self).spawn((Name("Grid".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, mat).with_layer(EDITOR_LAYER).with_sorting_order(-1000)));
                 self.tools.grid = Some(g);
             }
         }
         if let Some(g) = self.tools.grid {
-            let show = self.view.grid;
-            if let Ok(mut r) = self.edit.world.get::<&mut MeshRenderer>(g) {
+            let (show, mode2d) = (self.view.grid, self.view.mode2d);
+            let world = crate::core::view_world!(mut self);
+            if let Ok(mut r) = world.get::<&mut MeshRenderer>(g) {
                 r.visible = show;
             }
             // the 2D view looks along −Z: the grid stands up in the XY plane
-            if let Ok(mut t) = self.edit.world.get::<&mut Transform>(g) {
-                t.rotation = if self.view.mode2d { Quat::from_rotation_x(std::f32::consts::FRAC_PI_2) } else { Quat::IDENTITY };
+            if let Ok(mut t) = world.get::<&mut Transform>(g) {
+                t.rotation = if mode2d { Quat::from_rotation_x(std::f32::consts::FRAC_PI_2) } else { Quat::IDENTITY };
             }
         }
     }
