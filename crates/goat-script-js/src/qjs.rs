@@ -101,7 +101,7 @@ fn to_js<'js>(ctx: &Ctx<'js>, v: &Value) -> rquickjs::Result<JsValue<'js>> {
 /// A QuickJS value → JSON (undefined = null).
 fn from_js<'js>(ctx: &Ctx<'js>, v: &JsValue<'js>) -> rquickjs::Result<Value> {
     if let Some(n) = v.as_number() {
-        return Ok(serde_json::Number::from_f64(n).map(Value::Number).unwrap_or(Value::Null));
+        return Ok(goat_script::json_number(n));
     }
     if let Some(i) = v.as_int() {
         return Ok(Value::from(i));
@@ -438,6 +438,21 @@ impl ScriptHost for QjsHost {
             Ok(targets.len())
         })
     }
+}
+
+/// QuickJS's `pthread_mutex_init(m, NULL)` (renamed by the 3DS CFLAGS in tools/goat n3ds.rs):
+/// pthread-3ds reads `*attr` without a NULL check (a read of address 0: a data abort on
+/// hardware), so NULL becomes an explicit default (normal) attribute.
+#[cfg(target_os = "horizon")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn goat_pthread_mutex_init(lock: *mut core::ffi::c_void, attr: *const core::ffi::c_int) -> core::ffi::c_int {
+    unsafe extern "C" {
+        fn pthread_mutex_init(lock: *mut core::ffi::c_void, attr: *const core::ffi::c_int) -> core::ffi::c_int;
+    }
+    // PTHREAD_MUTEX_NORMAL (pthread-3ds reads the first int of the attribute: the kind)
+    let normal: [core::ffi::c_int; 2] = [0, 0];
+    // SAFETY: forwards to pthread-3ds with a valid attribute.
+    unsafe { pthread_mutex_init(lock, if attr.is_null() { normal.as_ptr() } else { attr }) }
 }
 
 /// `pthread_once` for QuickJS's one-time initialisations on the 3DS: the pthread-3ds crate

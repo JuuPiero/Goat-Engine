@@ -86,6 +86,9 @@ struct CameraJson {
     clear_depth: bool,
     depth: i32,
     culling_mask: u32,
+    /// A `.renderTexture.json` key (Unity's Target Texture); none / "" = the display.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_texture: Option<String>,
 }
 
 impl Default for CameraJson {
@@ -99,6 +102,7 @@ impl Default for CameraJson {
             clear_depth: true,
             depth: 0,
             culling_mask: u32::MAX,
+            target_texture: None,
         }
     }
 }
@@ -116,12 +120,17 @@ fn save_camera(ctx: &SaveContext, e: Entity) -> Option<Value> {
         clear_depth: c.clear_depth,
         depth: c.depth,
         culling_mask: c.culling_mask,
+        target_texture: c.target_texture.and_then(|t| ctx.assets.key_of_texture(t)).map(str::to_string),
     })
 }
 
 fn load_camera(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
     let j: CameraJson = from_value(v)?;
     let [x, y, w, h] = j.viewport;
+    let target_texture = match j.target_texture.as_deref().filter(|k| !k.is_empty()) {
+        Some(k) => Some(ctx.assets.texture(ctx.gfx, k).map_err(|e| e.to_string())?),
+        None => None,
+    };
     insert(
         ctx,
         e,
@@ -136,6 +145,7 @@ fn load_camera(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String
             clear_depth: j.clear_depth,
             depth: j.depth,
             culling_mask: j.culling_mask,
+            target_texture,
         },
     )
 }
@@ -373,6 +383,40 @@ fn load_reflection_probe(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<
     insert(ctx, e, ReflectionProbe { size: j.size.into(), center: j.center.into(), cubemap, importance: j.importance })
 }
 
+/// `"PropertyBlock": { "color": "#ff8080" }` (MaterialPropertyBlock `_Color`).
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct PropertyBlockJson {
+    color: Option<FileColor>,
+}
+fn save_property_block(ctx: &SaveContext, e: Entity) -> Option<Value> {
+    let b = *ctx.world.get::<&goat_runtime::PropertyBlock>(e).ok()?;
+    to_value(PropertyBlockJson { color: Some(FileColor(b.color)) })
+}
+fn load_property_block(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
+    let j: PropertyBlockJson = from_value(v)?;
+    insert(ctx, e, goat_runtime::PropertyBlock { color: j.color.map(|c| c.0).unwrap_or(goat_core::Color::WHITE) })
+}
+
+/// `"PostEffect": { "materials": ["materials/grayscale.mat.json"] }` (on a camera).
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct PostEffectJson {
+    materials: Vec<String>,
+}
+fn save_post_effect(ctx: &SaveContext, e: Entity) -> Option<Value> {
+    let p = ctx.world.get::<&goat_runtime::PostEffect>(e).ok()?;
+    to_value(PostEffectJson { materials: p.materials.iter().filter_map(|m| ctx.assets.key_of_material(*m).map(str::to_string)).collect() })
+}
+fn load_post_effect(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
+    let j: PostEffectJson = from_value(v)?;
+    let mut materials = Vec::new();
+    for k in j.materials.iter().filter(|k| !k.is_empty()) {
+        materials.push(ctx.assets.material(ctx.gfx, k).map_err(|e| e.to_string())?);
+    }
+    insert(ctx, e, goat_runtime::PostEffect { materials })
+}
+
 pub(crate) fn register(r: &mut SceneRegistry) {
     r.component(ComponentCodec { name: "Transform", save: save_transform, load: load_transform, remove: remove_typed::<Transform> })
         .component(ComponentCodec { name: "Camera", save: save_camera, load: load_camera, remove: remove_typed::<Camera> })
@@ -384,5 +428,7 @@ pub(crate) fn register(r: &mut SceneRegistry) {
         .component(ComponentCodec { name: "LodGroup", save: save_lod, load: load_lod, remove: remove_typed::<goat_runtime::LodGroup> })
         .component(ComponentCodec { name: "StaticBatching", save: save_static, load: load_static, remove: remove_typed::<goat_runtime::StaticBatching> })
         .component(ComponentCodec { name: "LightProbeGroup", save: save_probe_group, load: load_probe_group, remove: remove_typed::<LightProbeGroup> })
-        .component(ComponentCodec { name: "ReflectionProbe", save: save_reflection_probe, load: load_reflection_probe, remove: remove_typed::<ReflectionProbe> });
+        .component(ComponentCodec { name: "ReflectionProbe", save: save_reflection_probe, load: load_reflection_probe, remove: remove_typed::<ReflectionProbe> })
+        .component(ComponentCodec { name: "PropertyBlock", save: save_property_block, load: load_property_block, remove: remove_typed::<goat_runtime::PropertyBlock> })
+        .component(ComponentCodec { name: "PostEffect", save: save_post_effect, load: load_post_effect, remove: remove_typed::<goat_runtime::PostEffect> });
 }

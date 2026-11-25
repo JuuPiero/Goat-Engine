@@ -40,6 +40,22 @@ pub struct ModelInstance {
     pub key: String,
 }
 
+/// `.renderTexture.json` (the fields of Unity's Render Texture asset that matter here).
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct RenderTextureAsset {
+    pub width: u32,
+    pub height: u32,
+    /// Depth buffer bits: 0 = none (2D), 16 / 24.
+    pub depth: u32,
+}
+
+impl Default for RenderTextureAsset {
+    fn default() -> Self {
+        RenderTextureAsset { width: 256, height: 256, depth: 24 }
+    }
+}
+
 pub struct AssetServer {
     pub io: AssetIo,
     textures: HashMap<String, TextureId>,
@@ -105,6 +121,18 @@ impl AssetServer {
         self.textures.insert(key.to_string(), id);
         self.texture_keys.insert(id, key.to_string());
     }
+    /// Drops a key made with `register_texture` (the texture was destroyed).
+    pub fn forget_texture(&mut self, key: &str) -> Option<TextureId> {
+        let id = self.textures.remove(key)?;
+        self.texture_keys.remove(&id);
+        self.texture_sizes.remove(&id);
+        Some(id)
+    }
+    /// Size of a texture made in code (`register_texture` doesn't know it).
+    pub fn set_texture_size(&mut self, id: TextureId, size: (u32, u32)) {
+        self.texture_sizes.insert(id, size);
+    }
+
     pub fn register_material(&mut self, key: &str, id: MaterialId) {
         self.materials.insert(key.to_string(), id);
         self.material_keys.insert(id, key.to_string());
@@ -186,10 +214,30 @@ impl AssetServer {
             self.texture_sizes.insert(id, (t.width, t.height));
             return Ok(id);
         }
+        if key.ends_with(".renderTexture.json") {
+            return self.render_texture(gfx, key);
+        }
         let t = self.texture_data(key)?;
         let id = Self::upload_texture(gfx, key, &t)?;
         self.register_texture(key, id);
         self.texture_sizes.insert(id, (t.width, t.height));
+        Ok(id)
+    }
+
+    /// A `.renderTexture.json` asset (Unity's Render Texture: `{ "width": 256, "height": 256,
+    /// "depth": 16 }`): a texture cameras draw into and materials / Raw Images show. One GPU
+    /// target per asset, shared by everything that names it.
+    pub fn render_texture(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<TextureId, AssetError> {
+        let key: &str = &self.io.canonical(key);
+        if let Some(id) = self.textures.get(key) {
+            return Ok(*id);
+        }
+        let text = self.io.read_string(key)?;
+        let desc: RenderTextureAsset = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| AssetError::Format(key.into(), e.to_string()))?;
+        let (w, h) = (desc.width.clamp(1, 4096), desc.height.clamp(1, 4096));
+        let id = gfx.create_render_target(&goat_gfx::RenderTargetDesc { width: w, height: h, depth: desc.depth > 0 }).map_err(|e| AssetError::Gpu(key.into(), e))?;
+        self.register_texture(key, id);
+        self.texture_sizes.insert(id, (w, h));
         Ok(id)
     }
 

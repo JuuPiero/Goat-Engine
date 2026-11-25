@@ -48,7 +48,7 @@ impl Nintendo3ds {
         cmd.env("BINDGEN_EXTRA_CLANG_ARGS_armv6k_nintendo_3ds", clang_args.replace('\\', "/"))
             .env("CC_armv6k_nintendo_3ds", "arm-none-eabi-gcc")
             .env("AR_armv6k_nintendo_3ds", "arm-none-eabi-ar")
-            .env("CFLAGS_armv6k_nintendo_3ds", "-march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -D__3DS__ -Wno-incompatible-pointer-types");
+            .env("CFLAGS_armv6k_nintendo_3ds", "-march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -D__3DS__ -Wno-incompatible-pointer-types -Dpthread_mutex_init=goat_pthread_mutex_init");
         Ok(cmd)
     }
 }

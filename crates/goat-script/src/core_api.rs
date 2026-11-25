@@ -173,6 +173,11 @@ fn value4(v: &Value) -> Option<[f32; 4]> {
     }
 }
 
+/// For graphics_api.rs (material textures).
+pub(crate) fn own_material_pub(api: &mut Api, e: Entity) -> Result<(goat_gfx::MaterialId, goat_gfx::MaterialId), String> {
+    own_material(api, e)
+}
+
 /// The object's own material (made on first use) and the material it was copied from.
 fn own_material(api: &mut Api, e: Entity) -> Result<(goat_gfx::MaterialId, goat_gfx::MaterialId), String> {
     if let Some(m) = api.ctx.resources.get::<MaterialInstances>().and_then(|m| m.0.get(&e).copied()) {

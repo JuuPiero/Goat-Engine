@@ -900,7 +900,7 @@ impl Plugin for UiPlugin {
                     DontSave,
                     Transform::from_position(origin + Vec3::new(0.0, 0.0, 50.0)),
                     GlobalTransform::default(),
-                    Camera { display: canvas.display, viewport: Viewport::FULL, projection: Projection::Orthographic { height: h, near: 0.1, far: 100.0 }, clear: None, clear_depth: true, depth: 1000 + canvas.sorting_order, culling_mask: layer_mask(&[UI_LAYER]) },
+                    Camera { display: canvas.display, viewport: Viewport::FULL, projection: Projection::Orthographic { height: h, near: 0.1, far: 100.0 }, clear: None, clear_depth: true, depth: 1000 + canvas.sorting_order, culling_mask: layer_mask(&[UI_LAYER]), target_texture: None },
                 ));
                 CanvasState { camera, origin }
             });

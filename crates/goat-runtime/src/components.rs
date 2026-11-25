@@ -82,6 +82,9 @@ pub struct Camera {
     pub depth: i32,
     /// Bit i set = renders the objects of layer i (Unity's Culling Mask). Default: everything.
     pub culling_mask: u32,
+    /// Draws into this render texture instead of `display` (Unity's Target Texture): minimaps,
+    /// mirrors, picture-in-picture. Such cameras render before the displays' cameras.
+    pub target_texture: Option<goat_gfx::TextureId>,
 }
 
 impl Default for Camera {
@@ -94,6 +97,7 @@ impl Default for Camera {
             clear_depth: true,
             depth: 0,
             culling_mask: u32::MAX,
+            target_texture: None,
         }
     }
 }

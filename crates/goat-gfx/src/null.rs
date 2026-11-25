@@ -84,6 +84,17 @@ impl GraphicsBackend for NullBackend {
     fn destroy_material(&mut self, id: MaterialId) {
         self.materials.remove(id);
     }
+    fn create_render_target(&mut self, desc: &RenderTargetDesc) -> Result<TextureId, GfxError> {
+        Ok(self.textures.insert(TextureData::rgba8(desc.width, desc.height, Vec::new())))
+    }
+    fn texture_size(&self, id: TextureId) -> Option<(u32, u32)> {
+        self.textures.get(id).map(|t| (t.width, t.height))
+    }
+    /// Black pixels of the texture's size (nothing is drawn).
+    fn read_pixels(&mut self, id: TextureId) -> Result<TextureData, GfxError> {
+        let t = self.textures.get(id).ok_or_else(|| GfxError::Backend("unknown texture".into()))?;
+        Ok(TextureData::rgba8(t.width, t.height, vec![0; (t.width * t.height * 4) as usize]))
+    }
     fn render(&mut self, views: &[RenderView]) -> FrameStats {
         self.last_views = views.to_vec();
         FrameStats { draw_calls: views.iter().map(|v| v.items.len() as u32).sum(), ..Default::default() }

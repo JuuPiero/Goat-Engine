@@ -106,14 +106,23 @@ impl Mesh {
 
 struct Texture {
     tex: Box<c3d::C3D_Tex>,
-    /// Cube maps: the face table citro3d keeps a pointer to.
+    /// Cube maps: the face table citro3d keeps a pointer to (held, never read).
+    #[allow(dead_code)]
     cube: Option<Box<c3d::C3D_TexCube>>,
+    /// Render textures: the target drawing into this (VRAM) texture; null otherwise.
+    target: *mut c3d::C3D_RenderTarget,
 }
 
 impl Drop for Texture {
     fn drop(&mut self) {
-        // SAFETY: initialised by C3D_TexInitWithParams in create_texture.
-        unsafe { c3d::C3D_TexDelete(&mut *self.tex) }
+        // SAFETY: initialised by C3D_TexInit* in create_texture / create_render_target; the
+        // target (if any) goes first.
+        unsafe {
+            if !self.target.is_null() {
+                c3d::C3D_RenderTargetDelete(self.target);
+            }
+            c3d::C3D_TexDelete(&mut *self.tex)
+        }
     }
 }
 
@@ -183,6 +192,11 @@ pub struct Citro3dBackend {
     /// The view being drawn receives the shadow through this light (index in its lights).
     view_shadow: Option<usize>,
     stereo: bool,
+    /// The view being drawn goes into a render texture (not a rotated screen: plain projections,
+    /// viewport in texture pixels).
+    into_texture: bool,
+    /// Bound on texture units 1 / 2 when they have nothing (see `unbind_texture`).
+    white: Option<Texture>,
 }
 
 /// A shadow texture (RGBA8 = 24-bit depth + 8-bit intensity, GPU_TEX_SHADOW_2D) and the render
@@ -432,6 +446,8 @@ impl Citro3dBackend {
                 shadow_dir: None,
                 view_shadow: None,
                 stereo: false,
+                into_texture: false,
+                white: None,
             })
         }
     }
@@ -784,8 +800,8 @@ impl Citro3dBackend {
             c3d::C3D_AlphaTest(false, ctru::GPU_ALWAYS, 0);
             c3d::C3D_FogGasMode(ctru::GPU_NO_FOG, ctru::GPU_PLAIN_DENSITY, false);
             c3d::C3D_LightEnvBind(std::ptr::null_mut());
-            c3d::C3D_TexBind(0, std::ptr::null_mut());
-            c3d::C3D_TexBind(1, std::ptr::null_mut());
+            self.unbind_texture(0);
+            self.unbind_texture(1);
             // black: intensity (green) 0 = write the depth only
             let env0 = c3d::C3D_GetTexEnv(0);
             c3d::C3D_TexEnvInit(env0);
@@ -869,11 +885,53 @@ impl Citro3dBackend {
         }
     }
 
+    /// Nothing on a texture unit. citro3d's C3D_TexBind reads the texture's type for units 1 / 2
+    /// (a NULL there is a read of address 0xC: a data abort on hardware), so those units get an
+    /// 8×8 white texture instead; unit 0 takes NULL.
+    fn unbind_texture(&mut self, unit: i32) {
+        // SAFETY: the white texture is boxed and lives as long as the backend.
+        unsafe {
+            if unit == 0 {
+                c3d::C3D_TexBind(0, std::ptr::null_mut());
+                return;
+            }
+            if self.white.is_none() {
+                let mut tex: Box<c3d::C3D_Tex> = Box::new(std::mem::zeroed());
+                if !c3d::C3D_TexInit(&mut *tex, 8, 8, ctru::GPU_RGBA8) {
+                    return;
+                }
+                let px = vec![0xFFu8; 8 * 8 * 4];
+                c3d::C3D_TexLoadImage(&mut *tex, px.as_ptr() as *const c_void, ctru::GPU_TEXFACE_2D, 0);
+                c3d::C3D_TexFlush(&mut *tex);
+                self.white = Some(Texture { tex, cube: None, target: std::ptr::null_mut() });
+            }
+            if let Some(w) = self.white.as_mut() {
+                c3d::C3D_TexBind(unit, &mut *w.tex);
+            }
+        }
+    }
+
+    /// A render texture's id once its texture and target exist (create_render_target).
+    unsafe fn finish_render_target(&mut self, mut tex: Box<c3d::C3D_Tex>, target: *mut c3d::C3D_RenderTarget, w: u32, h: u32) -> TextureId {
+        c3d::C3D_TexSetFilter(&mut *tex, ctru::GPU_LINEAR, ctru::GPU_LINEAR);
+        c3d::C3D_TexSetWrap(&mut *tex, ctru::GPU_CLAMP_TO_EDGE, ctru::GPU_CLAMP_TO_EDGE);
+        c3d::C3D_RenderTargetClear(target, c3d::C3D_CLEAR_ALL, 0x000000ff, 0);
+        let id = self.textures.insert(TextureData::rgba8(w, h, Vec::new()));
+        self.gpu_textures.insert(id.index(), Texture { tex, cube: None, target });
+        id
+    }
+
     fn projection(&self, p: Projection, aspect: f32, eye: f32, slider: f32) -> c3d::C3D_Mtx {
         let mut m: c3d::C3D_Mtx = unsafe { std::mem::zeroed() };
         // SAFETY: writes a matrix in place.
         unsafe {
             match p {
+                Projection::Perspective { fov_y_radians, near, far } if self.into_texture => c3d::Mtx_Persp(&mut m, fov_y_radians, aspect, near, far, false),
+                Projection::Orthographic { height, near, far } if self.into_texture => {
+                    let h = height * 0.5;
+                    let w = h * aspect;
+                    c3d::Mtx_Ortho(&mut m, -w, w, -h, h, near, far, false);
+                }
                 Projection::Perspective { fov_y_radians, near, far } => {
                     if eye != 0.0 {
                         c3d::Mtx_PerspStereoTilt(&mut m, fov_y_radians, aspect, near, far, eye * slider / 3.0, 2.0, false);
@@ -942,10 +1000,10 @@ impl Citro3dBackend {
                 (Some(c), _) => c3d::C3D_TexBind(0, c),
                 (None, Some(e)) => c3d::C3D_TexBind(1, e),
                 (None, None) if receive => {}
-                (None, None) => c3d::C3D_TexBind(1, std::ptr::null_mut()),
+                (None, None) => self.unbind_texture(1),
             }
             if (env_map.is_some() || receive) && tex.is_none() {
-                c3d::C3D_TexBind(1, std::ptr::null_mut());
+                self.unbind_texture(1);
             }
             let env0 = c3d::C3D_GetTexEnv(0);
             c3d::C3D_TexEnvInit(env0);
@@ -1207,7 +1265,11 @@ impl Citro3dBackend {
         let (tw, th) = target_size(target);
         let vp = v.viewport;
         let full = vp == Viewport::FULL;
-        if !full && !debug("vpfull") {
+        if !full && self.into_texture {
+            // a texture isn't rotated: x / y as they are
+            // SAFETY: viewport inside the current target.
+            unsafe { c3d::C3D_SetViewport((vp.x * tw).round() as u32, (vp.y * th).round() as u32, (vp.width * tw).round().max(1.0) as u32, (vp.height * th).round().max(1.0) as u32) };
+        } else if !full && !debug("vpfull") {
             let x = ((1.0 - (vp.y + vp.height)) * tw).round().max(0.0);
             let y = ((1.0 - (vp.x + vp.width)) * th).round().max(0.0);
             let w = (vp.height * tw).round().max(1.0);
@@ -1228,7 +1290,7 @@ impl Citro3dBackend {
             // of earlier views that are still queued)
             self.clear_viewport(None);
         }
-        let (dw, dh) = if v.display == Display::Main { (400.0, 240.0) } else { (320.0, 240.0) };
+        let (dw, dh) = if self.into_texture { (tw, th) } else if v.display == Display::Main { (400.0, 240.0) } else { (320.0, 240.0) };
         let aspect = (dw * vp.width) / (dh * vp.height).max(1e-4);
         let proj = self.projection(v.projection, aspect, eye, slider);
         // Depth: perspective views use the PICA's W-buffer, depth = clip z × scale (no division
@@ -1272,14 +1334,20 @@ impl Citro3dBackend {
             }
             // a reflection probe's cube map replaces the env map of reflective materials
             let env = it.reflection.filter(|r| self.cubes.contains(&r.index()) && self.materials.get(it.material).is_some_and(|m| m.reflectivity > 0.0 && m.tev.is_none()));
-            if last_material != Some((it.material, env)) {
+            let tint = it.color.to_array().map(f32::to_bits);
+            if last_material != Some((it.material, env, tint)) {
                 let Some(mut m) = self.materials.get(it.material).cloned() else { continue };
                 if env.is_some() {
                     m.env_map = env;
                 }
+                // MaterialPropertyBlock / per-instance color: multiplies the material's color
+                if it.color != Color::WHITE {
+                    let (b, c) = (m.base_color, it.color);
+                    m.base_color = Color::rgba(b.r * c.r, b.g * c.g, b.b * c.b, b.a * c.a);
+                }
                 let tex = m.texture.and_then(|t| self.gpu_textures.get_mut(&t.index())).map(|t| &mut *t.tex as *mut c3d::C3D_Tex);
                 self.set_material(&m, tex);
-                last_material = Some((it.material, env));
+                last_material = Some((it.material, env, tint));
             }
             self.set_probe_light(v, it.light_probe);
             let mv = to_c3d(v.view * it.model);
@@ -1495,9 +1563,52 @@ impl GraphicsBackend for Citro3dBackend {
             let w = if t.wrap == Wrap::Repeat { ctru::GPU_REPEAT } else { ctru::GPU_CLAMP_TO_EDGE };
             c3d::C3D_TexSetWrap(&mut *tex, w, w);
             let id = self.textures.insert(t.clone_meta());
-            self.gpu_textures.insert(id.index(), Texture { tex, cube: None });
+            self.gpu_textures.insert(id.index(), Texture { tex, cube: None, target: std::ptr::null_mut() });
             Ok(id)
         }
+    }
+
+    /// A VRAM texture + its render target. Sizes become powers of two (8..512, the PICA's
+    /// rule); VRAM is shared with the screens' targets, so keep them small (128–256).
+    fn create_render_target(&mut self, desc: &goat_gfx::RenderTargetDesc) -> Result<TextureId, GfxError> {
+        let size = |s: u32| s.clamp(8, 512).next_power_of_two().min(512);
+        let (w, h) = (size(desc.width), size(desc.height));
+        // VRAM is mostly the screens' targets: color in VRAM if it fits, else in linear FCRAM (the
+        // PICA renders there too, a little slower); 16-bit depth; smaller sizes as a last resort
+        let depth = if desc.depth { c3d::C3D_DEPTHTYPE { __i: ctru::GPU_RB_DEPTH16 as i32 } } else { c3d::C3D_DEPTHTYPE { __i: -1 } };
+        let mut sizes = vec![(w, h)];
+        let (mut sw, mut sh) = (w, h);
+        while sw > 32 && sh > 32 {
+            sw /= 2;
+            sh /= 2;
+            sizes.push((sw, sh));
+        }
+        // SAFETY: C3D_Tex boxed (stable address); the target is deleted with the texture.
+        unsafe {
+            for (w, h) in sizes {
+                for vram in [true, false] {
+                    let mut tex: Box<c3d::C3D_Tex> = Box::new(std::mem::zeroed());
+                    let ok = if vram { c3d::C3D_TexInitVRAM(&mut *tex, w as u16, h as u16, ctru::GPU_RGBA8) } else { c3d::C3D_TexInit(&mut *tex, w as u16, h as u16, ctru::GPU_RGBA8) };
+                    if !ok {
+                        continue;
+                    }
+                    let target = c3d::C3D_RenderTargetCreateFromTex(&mut *tex, ctru::GPU_TEXFACE_2D, 0, depth);
+                    if target.is_null() {
+                        c3d::C3D_TexDelete(&mut *tex);
+                        continue;
+                    }
+                    if (w, h) != (desc.width, desc.height) || !vram {
+                        goat_core::info!("render texture {}×{} → {w}×{h}{}", desc.width, desc.height, if vram { "" } else { " (color in FCRAM)" });
+                    }
+                    return Ok(self.finish_render_target(tex, target, w, h));
+                }
+            }
+        }
+        Err(GfxError::OutOfMemory(format!("render texture {w}×{h}: no VRAM for its depth buffer")))
+    }
+
+    fn texture_size(&self, id: TextureId) -> Option<(u32, u32)> {
+        self.textures.get(id).map(|t| (t.width, t.height))
     }
 
     fn create_cubemap(&mut self, faces: &[TextureData; 6]) -> Result<TextureId, GfxError> {
@@ -1520,7 +1631,7 @@ impl GraphicsBackend for Citro3dBackend {
             c3d::C3D_TexSetFilter(&mut *tex, ctru::GPU_LINEAR, ctru::GPU_LINEAR);
             c3d::C3D_TexSetWrap(&mut *tex, ctru::GPU_CLAMP_TO_EDGE, ctru::GPU_CLAMP_TO_EDGE);
             let id = self.textures.insert(faces[0].clone_meta());
-            self.gpu_textures.insert(id.index(), Texture { tex, cube: Some(cube) });
+            self.gpu_textures.insert(id.index(), Texture { tex, cube: Some(cube), target: std::ptr::null_mut() });
             self.cubes.insert(id.index());
             Ok(id)
         }
@@ -1588,6 +1699,20 @@ impl GraphicsBackend for Citro3dBackend {
         if trace {
             goat_core::info!("stereo frame: begin ok");
         }
+        // cameras drawing into render textures first (their textures are sampled by the screens)
+        for v in views.iter().filter(|v| v.target.is_some()) {
+            let Some(target) = v.target.and_then(|t| self.gpu_textures.get(&t.index())).map(|t| t.target).filter(|t| !t.is_null()) else { continue };
+            // SAFETY: a render target owned by one of our textures.
+            unsafe {
+                if let (Some(c), true) = (v.clear, v.viewport == Viewport::FULL) {
+                    c3d::C3D_RenderTargetClear(target, c3d::C3D_CLEAR_ALL, rgba_u32(c), 0);
+                }
+                c3d::C3D_FrameDrawOn(target);
+            }
+            self.into_texture = true;
+            self.draw_view(target, v, 0.0, slider, &mut stats);
+            self.into_texture = false;
+        }
         let passes: Vec<(*mut c3d::C3D_RenderTarget, Display, f32)> = if self.stereo {
             vec![(self.top_left, Display::Main, -1.0), (self.top_right, Display::Main, 1.0), (self.bottom, Display::Secondary, 0.0)]
         } else {
@@ -1595,12 +1720,12 @@ impl GraphicsBackend for Citro3dBackend {
         };
         for (target, display, eye) in passes {
             let full_clear = |v: &RenderView| v.clear.is_some() && v.viewport == Viewport::FULL;
-            if !views.iter().any(|v| v.display == display && full_clear(v)) {
+            if !views.iter().any(|v| v.target.is_none() && v.display == display && full_clear(v)) {
                 // no camera clears this whole display: start from black so stale frames don't stay
                 // SAFETY: target is valid.
                 unsafe { c3d::C3D_RenderTargetClear(target, c3d::C3D_CLEAR_ALL, 0x000000ff, 0) };
             }
-            for v in views.iter().filter(|v| v.display == display) {
+            for v in views.iter().filter(|v| v.display == display && v.target.is_none()) {
                 // SAFETY: target is valid.
                 unsafe {
                     if let (Some(c), true) = (v.clear, full_clear(v)) {

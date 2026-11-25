@@ -386,6 +386,7 @@ impl Game for HelloGame {
                 clear_depth: true,
                 depth: 0,
                 culling_mask: !layer_mask(&[hud::HUD_LAYER]),
+                target_texture: None,
             },
         ));
         hud::spawn(ctx);

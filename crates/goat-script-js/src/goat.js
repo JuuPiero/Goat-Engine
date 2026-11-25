@@ -875,6 +875,13 @@ export const Debug = {
   logError(...a) { N.log(4, text(a)); },
   /** Pauses the game in the editor (Unity's Debug.Break), with an optional message. */
   break(message = '') { N.debugBreak(String(message)); },
+  /** A line in the world for `duration` seconds (0 = this frame), in the Scene and Game views. */
+  drawLine(start, end, color = Color.white, duration = 0, depthTest = true) {
+    N.call('Debug.drawLine', -1, [[start.x, start.y, start.z], [end.x, end.y, end.z], colorArray(color), duration, depthTest]);
+  },
+  drawRay(start, dir, color = Color.white, duration = 0, depthTest = true) {
+    this.drawLine(start, { x: start.x + dir.x, y: start.y + dir.y, z: start.z + dir.z }, color, duration, depthTest);
+  },
 };
 
 /** The editor console's view of a value. */
@@ -1263,6 +1270,9 @@ export class Camera {
   _patch(f) { const c = this._c(); f(c); N.setComponent(this._h, 'Camera', c); }
   get fieldOfView() { return this._c().projection?.perspective?.fov ?? 60; }
   set fieldOfView(v) { this._patch((c) => { c.projection = { perspective: { ...(c.projection?.perspective ?? { near: 0.1, far: 100 }), fov: v } }; }); }
+  /** Draws into this render texture instead of the screen (Unity's targetTexture); null = screen. */
+  get targetTexture() { const k = this._c().target_texture; return k ? Texture.fromKey(k) : null; }
+  set targetTexture(rt) { this._patch((c) => { c.target_texture = rt ? textureKey(rt) : ''; }); }
   get orthographic() { return !!this._c().projection?.orthographic; }
   get orthographicSize() { return (this._c().projection?.orthographic?.height ?? 10) / 2; }
   set orthographicSize(v) { this._patch((c) => { c.projection = { orthographic: { ...(c.projection?.orthographic ?? { near: 0.1, far: 100 }), height: v * 2 } }; }); }
@@ -1293,6 +1303,11 @@ export class Material {
   getVector(name) { const v = N.call('Renderer.getProperty', this._h, [name]); return new Vector4(v[0], v[1], v[2], v[3]); }
   get color() { return this.getColor('_Color'); }
   set color(c) { this.setColor('_Color', c); }
+  /** The main texture (a Texture2D, RenderTexture or texture asset). */
+  get mainTexture() { const k = N.call('Renderer.getTexture', this._h, ['_MainTex']); return k ? Texture.fromKey(k) : null; }
+  set mainTexture(t) { this.setTexture('_MainTex', t); }
+  setTexture(name, t) { N.call('Renderer.setTexture', this._h, [name, t ? textureKey(t) : null]); }
+  getTexture(name) { const k = N.call('Renderer.getTexture', this._h, [name]); return k ? Texture.fromKey(k) : null; }
 }
 
 /** Unity's Renderer of a mesh object: enabled, material. */
@@ -1302,7 +1317,199 @@ export class Renderer {
   get material() { return new Material(this._h); }
   get enabled() { return N.call('Renderer.enabled', this._h, []); }
   set enabled(on) { N.call('Renderer.setEnabled', this._h, [!!on]); }
+  /** Per-object values over the shared material (no material copy): `_Color` for now. */
+  setPropertyBlock(block) { N.call('Renderer.setPropertyBlock', this._h, [block && block._color ? colorArray(block._color) : null]); }
+  getPropertyBlock(block) { const c = N.call('Renderer.propertyBlock', this._h, []); block.clear(); if (c) block.setColor('_Color', new Color(c[0], c[1], c[2], c[3])); return block; }
+  hasPropertyBlock() { return N.call('Renderer.propertyBlock', this._h, []) !== null; }
 }
+
+// ------------------------------------------------------------------ low-level graphics
+
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const B64I = (() => { const t = new Int16Array(128).fill(-1); for (let i = 0; i < 64; i++) t[B64.charCodeAt(i)] = i; return t; })();
+function toBase64(u8) {
+  let s = '';
+  const n = u8.length;
+  for (let i = 0; i < n; i += 3) {
+    const a = u8[i], b = i + 1 < n ? u8[i + 1] : 0, c = i + 2 < n ? u8[i + 2] : 0;
+    s += B64[a >> 2] + B64[((a & 3) << 4) | (b >> 4)] + (i + 1 < n ? B64[((b & 15) << 2) | (c >> 6)] : '=') + (i + 2 < n ? B64[c & 63] : '=');
+  }
+  return s;
+}
+function fromBase64(s) {
+  const len = s.length, pad = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0;
+  const out = new Uint8Array((len / 4) * 3 - pad);
+  let o = 0;
+  for (let i = 0; i < len; i += 4) {
+    const v = (B64I[s.charCodeAt(i)] << 18) | (B64I[s.charCodeAt(i + 1)] << 12) | ((B64I[s.charCodeAt(i + 2)] & 63) << 6) | (B64I[s.charCodeAt(i + 3)] & 63);
+    if (o < out.length) out[o++] = (v >> 16) & 255;
+    if (o < out.length) out[o++] = (v >> 8) & 255;
+    if (o < out.length) out[o++] = v & 255;
+  }
+  return out;
+}
+const textureKey = (t) => (typeof t === 'string' ? t : t instanceof Texture2D ? t._ensure() : t?._key ?? null);
+const meshName = (m) => (typeof m === 'string' ? m : m?._key ?? 'Cube');
+const materialKey = (m) => (m == null ? null : typeof m === 'string' ? m : m._key ?? null);
+
+/** A texture by asset key (texture files, `.renderTexture.json`, textures made by scripts). */
+export class Texture {
+  constructor(key) { this._key = key; }
+  static fromKey(key) { return key.endsWith('.renderTexture.json') || key.startsWith('runtime:rendertexture/') ? new RenderTexture(key) : new Texture(key); }
+  get name() { return this._key ? this._key.split('/').pop() : ''; }
+  _size() { return (this._sz ??= N.call('Texture.size', -1, [this._key])); }
+  get width() { return this._size().width; }
+  get height() { return this._size().height; }
+  toString() { return `Texture(${this._key})`; }
+}
+
+/** Unity's RenderTexture: a texture cameras draw into (`camera.targetTexture = rt`), shown by
+ *  materials (`material.mainTexture = rt`) or a Raw Image. `new RenderTexture(256, 256, 24)`, or a
+ *  `.renderTexture.json` asset by key. */
+export class RenderTexture extends Texture {
+  constructor(width = 256, height = 256, depth = 24) {
+    if (typeof width === 'string') { super(width); return; }
+    super(N.call('RenderTexture.create', -1, [width, height, depth]));
+    this._sz = { width, height };
+  }
+  static active = null;
+  static _pool = [];
+  static getTemporary(width, height, depth = 0) {
+    const i = RenderTexture._pool.findIndex((r) => r.width === width && r.height === height);
+    return i >= 0 ? RenderTexture._pool.splice(i, 1)[0] : new RenderTexture(width, height, depth);
+  }
+  static releaseTemporary(rt) { if (rt) RenderTexture._pool.push(rt); }
+  /** Frees the GPU texture (textures made by scripts). */
+  release() { N.call('Texture.release', -1, [this._key]); }
+}
+
+/** Unity's Texture2D: pixels in the script (RGBA32, (0, 0) = bottom-left), `apply()` sends them to
+ *  the GPU. `Texture2D.load(key)` reads a texture file (Read/Write), `readPixels` a render texture. */
+export class Texture2D extends Texture {
+  constructor(width = 1, height = 1) {
+    super(null);
+    this._w = width; this._h = height;
+    this._px = new Uint8Array(width * height * 4).fill(255);
+    this.filterMode = 'bilinear'; // 'point' | 'bilinear'
+    this.wrapMode = 'clamp'; // 'clamp' | 'repeat'
+    this._dirty = true;
+  }
+  get width() { return this._w; }
+  get height() { return this._h; }
+  get isReadable() { return true; }
+  static load(key) {
+    const r = N.call('Texture.read', -1, [key]);
+    const t = new Texture2D(r.width, r.height);
+    t._px = fromBase64(r.data);
+    return t;
+  }
+  _i(x, y) {
+    if (this.wrapMode === 'repeat') { x = ((x % this._w) + this._w) % this._w; y = ((y % this._h) + this._h) % this._h; }
+    else { x = Math.min(Math.max(x | 0, 0), this._w - 1); y = Math.min(Math.max(y | 0, 0), this._h - 1); }
+    return ((y | 0) * this._w + (x | 0)) * 4;
+  }
+  setPixel(x, y, c) {
+    if (x < 0 || y < 0 || x >= this._w || y >= this._h) return;
+    const i = ((y | 0) * this._w + (x | 0)) * 4, p = this._px;
+    p[i] = Math.round(Math.min(Math.max(c.r, 0), 1) * 255); p[i + 1] = Math.round(Math.min(Math.max(c.g, 0), 1) * 255);
+    p[i + 2] = Math.round(Math.min(Math.max(c.b, 0), 1) * 255); p[i + 3] = Math.round(Math.min(Math.max(c.a ?? 1, 0), 1) * 255);
+  }
+  getPixel(x, y) { const i = this._i(x, y), p = this._px; return new Color(p[i] / 255, p[i + 1] / 255, p[i + 2] / 255, p[i + 3] / 255); }
+  getPixelBilinear(u, v) {
+    const x = u * this._w - 0.5, y = v * this._h - 0.5, x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+    const a = this.getPixel(x0, y0), b = this.getPixel(x0 + 1, y0), c = this.getPixel(x0, y0 + 1), d = this.getPixel(x0 + 1, y0 + 1);
+    const m = (k) => (a[k] * (1 - fx) + b[k] * fx) * (1 - fy) + (c[k] * (1 - fx) + d[k] * fx) * fy;
+    return new Color(m('r'), m('g'), m('b'), m('a'));
+  }
+  setPixels(x, y, w, h, colors) { let k = 0; for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) this.setPixel(x + i, y + j, colors[k++]); }
+  getPixels() { const out = []; for (let y = 0; y < this._h; y++) for (let x = 0; x < this._w; x++) out.push(this.getPixel(x, y)); return out; }
+  /** The pixel bytes (RGBA, rows bottom-up): edit them directly, then `apply()`. */
+  getRawTextureData() { return this._px; }
+  loadRawTextureData(bytes) { this._px.set(bytes.subarray ? bytes.subarray(0, this._px.length) : bytes); }
+  reinitialize(w, h) { this._w = w; this._h = h; this._px = new Uint8Array(w * h * 4).fill(255); this._dirty = true; return true; }
+  /** Sends the pixels to the GPU (once for many changes). */
+  apply() { this._key = N.call('Texture2D.apply', -1, [this._key, this._w, this._h, toBase64(this._px), this.filterMode === 'point' ? 'point' : 'bilinear', this.wrapMode]); this._dirty = false; }
+  _ensure() { if (!this._key) this.apply(); return this._key; }
+  /** PNG / JPEG file bytes → these pixels (size changes to the image's). */
+  loadImage(bytes) {
+    try { const r = N.call('Texture2D.decode', -1, [toBase64(bytes)]); this._w = r.width; this._h = r.height; this._px = fromBase64(r.data); this.apply(); return true; }
+    catch (e) { Debug.logError(String(e?.message ?? e)); return false; }
+  }
+  encodeToPNG() { return fromBase64(N.call('Texture2D.encodePNG', -1, [this._w, this._h, toBase64(this._px)])); }
+  /** Copies a rectangle of `RenderTexture.active` (what it last drew) to (destX, destY). */
+  readPixels(rect, destX = 0, destY = 0) {
+    const src = RenderTexture.active;
+    if (!src) { Debug.logError('Texture2D.readPixels: set RenderTexture.active first'); return; }
+    const r = N.call('Texture.read', -1, [src._key]);
+    const px = fromBase64(r.data);
+    for (let y = 0; y < rect.height; y++) for (let x = 0; x < rect.width; x++) {
+      const sx = (rect.x | 0) + x, sy = (rect.y | 0) + y, dx = destX + x, dy = destY + y;
+      if (sx < 0 || sy < 0 || sx >= r.width || sy >= r.height || dx >= this._w || dy >= this._h) continue;
+      const s = (sy * r.width + sx) * 4, d = (dy * this._w + dx) * 4;
+      this._px[d] = px[s]; this._px[d + 1] = px[s + 1]; this._px[d + 2] = px[s + 2]; this._px[d + 3] = px[s + 3];
+    }
+  }
+}
+
+/** Unity's MaterialPropertyBlock (per-object values without copying the material). */
+export class MaterialPropertyBlock {
+  constructor() { this._color = null; }
+  setColor(name, c) { if (name === '_Color' || name === '_BaseColor') this._color = c; }
+  getColor(name) { return name === '_Color' || name === '_BaseColor' ? (this._color ?? Color.white) : Color.white; }
+  get isEmpty() { return !this._color; }
+  clear() { this._color = null; }
+}
+
+/** Unity's Graphics: meshes drawn for one frame (call every update), blits. */
+export const Graphics = {
+  /** drawMesh(mesh, position, rotation, material, layer = 0, camera, submesh, properties)
+   *  mesh: 'Cube' | 'Sphere' | 'Quad' | 'Plane' | 'Capsule' | 'Cylinder' or a mesh key; material: a .mat.json key. */
+  drawMesh(mesh, position, rotation, material, layer = 0, camera = null, submesh = 0, properties = null) {
+    const r = rotation ?? Quaternion.identity;
+    const s = arguments[8] ?? { x: 1, y: 1, z: 1 };
+    N.call('Graphics.drawMesh', -1, [meshName(mesh), materialKey(material), [position.x, position.y, position.z], [r.x, r.y, r.z, r.w], [s.x, s.y, s.z], properties?._color ? colorArray(properties._color) : null, layer]);
+  },
+  /** drawMeshInstanced(mesh, submesh, material, matrices (Matrix4x4[] or 16 numbers each), count, properties)
+   *  properties: a MaterialPropertyBlock with `setVectorArray('_Color', colors)` (4 numbers / instance). */
+  drawMeshInstanced(mesh, submesh, material, matrices, count, properties = null, castShadows, receiveShadows, layer = 0) {
+    let flat;
+    if (Array.isArray(matrices) && matrices[0] instanceof Matrix4x4) { flat = []; const n = Math.min(count ?? matrices.length, matrices.length); for (let i = 0; i < n; i++) flat.push(...matrices[i].m); }
+    else { const n = (count ?? matrices.length / 16) * 16; flat = Array.from(matrices.length > n ? matrices.subarray ? matrices.subarray(0, n) : matrices.slice(0, n) : matrices); }
+    const colors = properties?._colors ? Array.from(properties._colors) : null;
+    return N.call('Graphics.drawMeshInstanced', -1, [meshName(mesh), materialKey(material), flat, colors, layer]);
+  },
+  /** blit(source, dest = null (the screen), material = null): `material` gets `source` as _MainTex. */
+  blit(source, dest = null, material = null) { N.call('Graphics.blit', -1, [textureKey(source), dest ? textureKey(dest) : null, materialKey(material)]); },
+};
+MaterialPropertyBlock.prototype.setVectorArray = function (name, values) { if (name === '_Color' || name === '_BaseColor') this._colors = values; };
+
+/** Unity's GL immediate mode: GL.begin(GL.LINES); GL.color(c); GL.vertex3(x, y, z); GL.end().
+ *  World space, or the screen after GL.loadOrtho() (0..1) / GL.loadPixelMatrix() (pixels), from the bottom-left. */
+export const GL = {
+  LINES: 'LINES', LINE_STRIP: 'LINE_STRIP', TRIANGLES: 'TRIANGLES', TRIANGLE_STRIP: 'TRIANGLE_STRIP', QUADS: 'QUADS',
+  _mode: null, _v: [], _c: [1, 1, 1, 1], _m: null, _space: 'world', _stack: [],
+  begin(mode) { this._mode = mode; this._v = []; },
+  color(c) { this._c = colorArray(c); },
+  vertex3(x, y, z) {
+    if (this._m) { const m = this._m; const X = m[0] * x + m[4] * y + m[8] * z + m[12], Y = m[1] * x + m[5] * y + m[9] * z + m[13], Z = m[2] * x + m[6] * y + m[10] * z + m[14]; x = X; y = Y; z = Z; }
+    this._v.push(x, y, z, this._c[0], this._c[1], this._c[2], this._c[3] ?? 1);
+  },
+  vertex(v) { this.vertex3(v.x, v.y, v.z ?? 0); },
+  texCoord2() {}, texCoord() {},
+  end() { if (this._mode && this._v.length) N.call('GL.draw', -1, [this._mode, this._space, this._v]); this._mode = null; this._v = []; },
+  pushMatrix() { this._stack.push([this._m, this._space]); },
+  popMatrix() { const s = this._stack.pop(); if (s) [this._m, this._space] = s; },
+  loadOrtho() { this._space = 'ortho'; this._m = null; },
+  loadPixelMatrix() { this._space = 'pixels'; this._m = null; },
+  loadIdentity() { this._m = null; },
+  multMatrix(mat) {
+    const b = mat.m ?? mat;
+    if (!this._m) { this._m = [...b]; return; }
+    const a = this._m, o = new Array(16);
+    for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    this._m = o;
+  },
+};
 
 // ------------------------------------------------------------------ ScriptableObject
 

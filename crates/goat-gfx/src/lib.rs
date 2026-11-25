@@ -92,6 +92,11 @@ impl TextureData {
         TextureData { width: size, height: size, rgba, filter: Filter::Nearest, wrap: Wrap::Repeat, mipmaps: false, format: TextureFormat::Rgba8, compressed: None, bc: None }
     }
 
+    /// RGBA8 pixels (linear filter, clamped), no mips: textures made at run time.
+    pub fn rgba8(width: u32, height: u32, rgba: Vec<u8>) -> Self {
+        TextureData { width, height, rgba, filter: Filter::Linear, wrap: Wrap::Clamp, mipmaps: false, format: TextureFormat::Rgba8, compressed: None, bc: None }
+    }
+
     /// Same settings, no pixels (what backends keep after uploading).
     pub fn clone_meta(&self) -> Self {
         TextureData { width: self.width, height: self.height, rgba: Vec::new(), filter: self.filter, wrap: self.wrap, mipmaps: self.mipmaps, format: self.format, compressed: None, bc: None }
@@ -577,12 +582,25 @@ pub struct DrawItem {
     /// A reflection probe's cube map: replaces the material's env map (materials with
     /// reflectivity > 0).
     pub reflection: Option<TextureId>,
+    /// Multiplies the material's color for this draw only (Unity's MaterialPropertyBlock
+    /// `_Color`, per-instance colors of `Graphics.drawMeshInstanced`). White = unchanged.
+    pub color: Color,
 }
 
 impl DrawItem {
     pub fn new(mesh: MeshId, material: MaterialId, model: Mat4) -> Self {
-        DrawItem { mesh, material, model, sorting_order: 0, light_probe: None, reflection: None }
+        DrawItem { mesh, material, model, sorting_order: 0, light_probe: None, reflection: None, color: Color::WHITE }
     }
+}
+
+/// A texture cameras can draw into (Unity's RenderTexture), see
+/// [`GraphicsBackend::create_render_target`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RenderTargetDesc {
+    pub width: u32,
+    pub height: u32,
+    /// With a depth buffer (3D scenes); without = 2D / blits.
+    pub depth: bool,
 }
 
 /// The light probes' light at an object: ambient (from every direction) + one directional light.
@@ -618,6 +636,10 @@ pub struct RenderView {
     /// Color grading / screen effects (desktop: a post pass over the frame; the 3DS applies the
     /// color part per draw).
     pub post: Option<PostFx>,
+    /// Draws into this render target (a texture from [`GraphicsBackend::create_render_target`])
+    /// instead of `display`; the viewport is a fraction of the target. Views into targets are
+    /// drawn before the displays' views (Unity: cameras with a target texture render first).
+    pub target: Option<TextureId>,
 }
 
 /// Screen effects (Unity's post-processing volume, the essentials).
@@ -739,6 +761,24 @@ pub trait GraphicsBackend {
     /// (font glyphs), procedural textures.
     fn update_texture(&mut self, id: TextureId, tex: &TextureData) -> Result<(), GfxError>;
 
+    /// A texture that views can draw into ([`RenderView::target`]) and materials can sample
+    /// (Unity's RenderTexture). Destroyed with `destroy_texture`.
+    fn create_render_target(&mut self, _desc: &RenderTargetDesc) -> Result<TextureId, GfxError> {
+        Err(GfxError::Unsupported("render targets".into()))
+    }
+
+    /// A texture's size in pixels (cameras drawing into a render target take its aspect).
+    fn texture_size(&self, _id: TextureId) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// A texture's pixels as last drawn (render targets: what the last `render` drew), RGBA8,
+    /// rows top-down like every [`TextureData`] (Unity's bottom-up Texture2D flips in the
+    /// script API).
+    fn read_pixels(&mut self, _id: TextureId) -> Result<TextureData, GfxError> {
+        Err(GfxError::Unsupported("reading textures back".into()))
+    }
+
     /// Draws a frame: every view, then presents every display.
     fn render(&mut self, views: &[RenderView]) -> FrameStats;
 }
@@ -771,6 +811,7 @@ mod tests {
             depth: 0,
             time: 0.0,
             post: None,
+            target: None,
         };
         let order = view.draw_order(|m| materials.get(m).map(|m| m.blend));
         assert_eq!(order, vec![3, 1, 2, 0]);

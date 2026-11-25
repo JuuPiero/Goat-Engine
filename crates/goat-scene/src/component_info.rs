@@ -51,7 +51,23 @@ pub(crate) fn describe_engine_components(r: &mut SceneRegistry) {
                 .kind("culling_mask", "mask")
                 .options("display", &["main", "secondary"])
                 .tip("depth", "Cameras render in increasing depth order")
-                .tip("viewport", "Normalized rect x, y, width, height"),
+                .tip("viewport", "Normalized rect x, y, width, height")
+                .asset("target_texture", "renderTexture")
+                .tip("target_texture", "Draw into this Render Texture instead of the screen (minimaps, mirrors, picture-in-picture)"),
+        ),
+        (
+            "PostEffect",
+            I::new("Rendering/Post Effect")
+                .defaults(json!({ "materials": [] }))
+                .asset("materials", "material")
+                .tip("materials", "Drawn over the camera's image in order; each material gets the previous image as _MainTex"),
+        ),
+        (
+            "PropertyBlock",
+            I::new("Rendering/Material Property Block")
+                .defaults(json!({ "color": "#ffffff" }))
+                .kind("color", "color")
+                .tip("color", "Multiplies the shared material's color for this object only (no material copy)"),
         ),
         ("DirectionalLight", I::new("Rendering/Directional Light").range("intensity", 0.0, 8.0).options("mode", LIGHT_MODE).tip("mode", LIGHT_MODE_TIP)),
         ("PointLight", I::new("Rendering/Point Light").range("intensity", 0.0, 8.0).options("mode", LIGHT_MODE).tip("mode", LIGHT_MODE_TIP)),

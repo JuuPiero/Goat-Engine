@@ -1,0 +1,1 @@
+{ "shader": "../shaders/PostGrayscale.shader", "properties": { "_Amount": 1, "_Vignette": 0.35 } }

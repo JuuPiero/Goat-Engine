@@ -722,7 +722,7 @@ impl Default for JsHost {
 /// A JavaScript value as JSON (numbers / strings directly; undefined = null).
 fn js_to_value(v: &JsValue, ctx: &mut Context) -> JsResult<Value> {
     if let Some(n) = v.as_number() {
-        return Ok(serde_json::Number::from_f64(n).map(Value::Number).unwrap_or(Value::Null));
+        return Ok(goat_script::json_number(n));
     }
     if let Some(s) = v.as_string() {
         return Ok(Value::String(s.to_std_string_escaped()));
@@ -730,7 +730,9 @@ fn js_to_value(v: &JsValue, ctx: &mut Context) -> JsResult<Value> {
     if v.is_undefined() || v.is_null() {
         return Ok(Value::Null);
     }
-    Ok(v.to_json(ctx)?.unwrap_or(Value::Null))
+    let mut j = v.to_json(ctx)?.unwrap_or(Value::Null);
+    goat_script::normalize_numbers(&mut j);
+    Ok(j)
 }
 
 impl ScriptHost for JsHost {

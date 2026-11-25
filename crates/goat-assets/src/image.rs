@@ -7,6 +7,22 @@ use goat_gfx::{Filter, TextureData, TextureFormat, Wrap};
 use serde::Deserialize;
 
 /// Decodes a PNG into RGBA8.
+/// RGBA8 pixels (rows top-down) as a PNG file (Texture2D.EncodeToPNG).
+pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    if rgba.len() != (width * height * 4) as usize {
+        return Err(format!("encode_png: {} bytes for {width}×{height}", rgba.len()));
+    }
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, width, height);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header().map_err(|e| e.to_string())?;
+        w.write_image_data(rgba).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
+}
+
 pub fn decode_png(bytes: &[u8]) -> Result<TextureData, String> {
     let mut decoder = png::Decoder::new(bytes);
     // palette → RGB, < 8 bits → 8, tRNS → alpha, 16 bits → 8

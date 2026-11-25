@@ -14,5 +14,6 @@ goat-input.workspace = true
 goat-gfx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+base64 = "0.22"
 
 [dev-dependencies]

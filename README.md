@@ -333,6 +333,17 @@ fixed4 frag (v2f i) : SV_Target { return tex2D(_MainTex, i.uv) * _Time.y; }
 - Chưa có: Stencil / GrabPass, tangent (normal map theo tangent space), bóng đổ theo `clip`.
 - Ví dụ: `games/hello/assets/shaders` (Hologram, Dissolve, Wobble — Fallback trên 3DS; TintGlow, Blend2, Cutout (clip + tiling + keyword GLOW + 2 pass) — chạy bằng TEV trên 3DS), scene `scenes/shaders.scene.json` (`goat-hello --scene scenes/shaders.scene.json`).
 
+### Đồ hoạ cấp thấp (RenderTexture, Texture2D, Graphics, GL)
+
+API như Unity / PiaEngine, chạy trên desktop, editor (WebGPU) và 3DS. Ví dụ đầy đủ: scene `scenes/graphics.scene.json` + `scripts/GraphicsDemo.ts` của game mẫu.
+
+- **Render Texture**: Project ▸ Create ▸ Render Texture → `*.renderTexture.json` (`{ "width": 256, "height": 256, "depth": 24 }`). **Camera ▸ Target Texture** = camera vẽ vào texture thay cho màn hình (minimap, gương, picture-in-picture); camera loại này vẽ trước camera màn hình. Dùng texture ở bất cứ đâu nhận texture: material (`"texture": "../textures/minimap.renderTexture.json"`), `material.mainTexture = rt`. Trong script: `new RenderTexture(256, 256, 24)`, `RenderTexture.getTemporary / releaseTemporary`, `rt.release()`, `camera.targetTexture = rt`. Scene view cũng vẽ các camera này nên texture vẫn sống khi không Play. 3DS: kích thước làm tròn lên luỹ thừa 2 (tối đa 512); VRAM gần hết cho màn hình nên texture lớn tự xuống 128² (log báo).
+- **Post Effect** (Add Component ▸ Rendering ▸ Post Effect, trên camera): mỗi material vẽ lên toàn ảnh của camera theo thứ tự, ảnh trước là `_MainTex` của nó (ví dụ `shaders/PostGrayscale.shader`). `Graphics.blit(source, dest, material)` gọi được bất cứ lúc nào (`dest = null` = màn hình). 3DS: shader cần tính toán từng pixel (dot, lerp...) dùng Fallback.
+- **Texture2D** tạo / sửa lúc chạy: `new Texture2D(w, h)`, `setPixel / getPixel / setPixels / getPixels / getPixelBilinear`, `getRawTextureData()` (sửa thẳng mảng byte), `apply()`, `filterMode` / `wrapMode`; (0, 0) là góc **dưới trái** như Unity. `Texture2D.load(key)` đọc điểm ảnh của file ảnh, `loadImage(bytes)` (PNG / JPEG), `encodeToPNG()`, `readPixels(rect, x, y)` từ `RenderTexture.active` (desktop; web và 3DS chưa đọc ngược được từ GPU).
+- **Graphics.drawMesh / drawMeshInstanced**: vẽ mesh trong **một frame** (gọi lại mỗi `update`), không cần GameObject; mesh `'Cube'`, `'Sphere'`, `'Quad'`, `'Plane'`, `'Capsule'`, `'Cylinder'` hoặc key mesh, material là key `.mat.json`. Màu từng instance: `MaterialPropertyBlock.setVectorArray('_Color', colors)` (4 số mỗi instance).
+- **MaterialPropertyBlock** trên renderer (`renderer.setPropertyBlock(block)` / component **Material Property Block**): đổi màu từng object mà vẫn dùng chung material (không tạo bản sao như `renderer.material`).
+- **GL**: `GL.begin(GL.LINES | LINE_STRIP | TRIANGLES | TRIANGLE_STRIP | QUADS)`, `GL.color`, `GL.vertex3`, `GL.end`; toạ độ thế giới, hoặc màn hình sau `GL.loadOrtho()` (0..1) / `GL.loadPixelMatrix()` (pixel), gốc dưới trái; `pushMatrix / popMatrix / multMatrix`. Phần trên màn hình chỉ hiện ở Game view.
+- **Debug.drawLine / drawRay** (`color`, `duration` giây, `depthTest`): hiện ở cả Scene view và Game view.
 ## Text, physics, audio
 
 Chữ có thể có viền (`.with_outline(màu, 0.06)`), bóng (`.with_shadow(màu, [0.05, 0.05])`) và rich text (`.rich()`: `<color=#ff8800>`, `<size=1.5>`, `<b>`, `<i>`). Trong scene, các key tương ứng là `rich` / `outline` / `shadow` của `Text` và `UiText`.

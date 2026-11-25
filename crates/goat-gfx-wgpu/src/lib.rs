@@ -246,6 +246,25 @@ struct PipelineKey {
     shader: u32,
 }
 
+struct RenderTarget {
+    size: (u32, u32),
+    /// Always there: every pipeline has a depth state (a 2D target just never tests against it).
+    depth: wgpu::TextureView,
+    format: wgpu::TextureFormat,
+}
+
+/// One view's draws, planned before the passes (uniform offsets resolved).
+struct Planned {
+    /// Index into the frame's views.
+    view: usize,
+    target: Option<TextureId>,
+    rect: (f32, f32, f32, f32),
+    clear_off: Option<u32>,
+    clear_depth: bool,
+    frame_off: u32,
+    objects: Vec<(MeshId, MaterialId, u32, Option<TextureId>)>,
+}
+
 /// What belongs to one drawing surface (window / canvas). The active one lives in the backend's
 /// fields; the others wait in `slots` (the editor's Scene and Game views are two canvases).
 struct SurfaceSlot {
@@ -300,6 +319,8 @@ pub struct WgpuBackend {
     black_cube: GpuTexture,
     /// Texture ids that are cube maps.
     cubes: std::collections::HashSet<u32>,
+    /// Render targets (Unity's RenderTexture) by texture index: their depth buffer + format.
+    render_targets: HashMap<u32, RenderTarget>,
     screenshot: Option<std::path::PathBuf>,
 }
 
@@ -542,6 +563,7 @@ impl WgpuBackend {
             white,
             black_cube,
             cubes: Default::default(),
+            render_targets: HashMap::new(),
             screenshot: None,
         })
     }
@@ -733,6 +755,58 @@ impl WgpuBackend {
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&t3.view) },
             ],
         })
+    }
+
+    /// The views of one pass (a render target or the surface): viewport, clear, objects.
+    fn draw_plans(&self, pass: &mut wgpu::RenderPass<'_>, plans: &[&Planned], size: (u32, u32), groups: (&wgpu::BindGroup, &wgpu::BindGroup, &wgpu::BindGroup), stats: &mut FrameStats) {
+        let (frame_bg, object_bg, clear_bg) = groups;
+        for p in plans {
+            let (x, y, w, h) = p.rect;
+            pass.set_viewport(x, y, w, h, 0.0, 1.0);
+            let (sx, sy) = (x.max(0.0) as u32, y.max(0.0) as u32);
+            let sw = (w as u32).min(size.0.saturating_sub(sx));
+            let sh = (h as u32).min(size.1.saturating_sub(sy));
+            if sw == 0 || sh == 0 {
+                continue;
+            }
+            pass.set_scissor_rect(sx, sy, sw, sh);
+            if let Some(off) = p.clear_off {
+                pass.set_pipeline(&self.clear_pipeline);
+                pass.set_bind_group(0, clear_bg, &[off]);
+                pass.draw(0..3, 0..1);
+            } else if p.clear_depth {
+                pass.set_pipeline(&self.clear_depth_pipeline);
+                pass.set_bind_group(0, clear_bg, &[0]);
+                pass.draw(0..3, 0..1);
+            }
+            pass.set_bind_group(0, frame_bg, &[p.frame_off]);
+            for &(mesh, material, off, env) in &p.objects {
+                let (Some(gm), Some(mat)) = (self.gpu_meshes.get(&mesh.index()), self.gpu_materials.get(&material.index())) else { continue };
+                if gm.index_count == 0 {
+                    continue;
+                }
+                let material_group = env.and_then(|e| mat.probe_groups.get(&e.index())).unwrap_or(&mat.bind_group);
+                let shader = mat.desc.shader.filter(|s| self.gpu_shaders.contains_key(&s.index())).map(|s| s.index() + 1).unwrap_or(0);
+                let key = PipelineKey { blend: mat.desc.blend as u8, cull: mat.desc.cull as u8, depth_write: mat.desc.depth_write, depth_test: mat.desc.depth_test, outline: false, shader };
+                let Some(pipe) = self.pipelines.get(&key) else { continue };
+                pass.set_pipeline(pipe);
+                pass.set_bind_group(1, object_bg, &[off]);
+                pass.set_bind_group(2, material_group, &[]);
+                pass.set_bind_group(3, &self.shadow_bind, &[]);
+                pass.set_vertex_buffer(0, gm.vertices.slice(..));
+                pass.set_index_buffer(gm.indices.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(0..gm.index_count, 0, 0..1);
+                stats.draw_calls += 1;
+                stats.triangles += gm.index_count / 3;
+                if mat.desc.outline_width > 0.0 {
+                    if let Some(p) = self.pipelines.get(&PipelineKey { outline: true, shader: 0, ..key }) {
+                        pass.set_pipeline(p);
+                        pass.draw_indexed(0..gm.index_count, 0, 0..1);
+                        stats.draw_calls += 1;
+                    }
+                }
+            }
+        }
     }
 
     #[cfg(feature = "screenshot")]
@@ -995,6 +1069,77 @@ impl GraphicsBackend for WgpuBackend {
         Ok(id)
     }
 
+    fn create_render_target(&mut self, desc: &RenderTargetDesc) -> Result<TextureId, GfxError> {
+        let (w, h) = (desc.width.clamp(1, 8192), desc.height.clamp(1, 8192));
+        // the surface's format: the material pipelines are built for it
+        let format = self.config.format;
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("render texture"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let meta = TextureData::rgba8(w, h, Vec::new());
+        let gpu = finish_texture(&self.device, tex, &meta, 1);
+        let id = self.textures.insert(meta);
+        self.gpu_textures.insert(id.index(), gpu);
+        self.render_targets.insert(id.index(), RenderTarget { size: (w, h), depth: make_depth(&self.device, w, h), format });
+        Ok(id)
+    }
+
+    fn texture_size(&self, id: TextureId) -> Option<(u32, u32)> {
+        self.textures.get(id).map(|t| (t.width, t.height))
+    }
+
+    /// Copies the texture to a buffer and waits for it (desktop). The web can't wait for the GPU.
+    fn read_pixels(&mut self, id: TextureId) -> Result<TextureData, GfxError> {
+        let meta = self.textures.get(id).ok_or_else(|| GfxError::Backend("read_pixels: unknown texture".into()))?;
+        let (w, h) = (meta.width, meta.height);
+        let format = match self.render_targets.get(&id.index()) {
+            Some(rt) => rt.format,
+            None => wgpu::TextureFormat::Rgba8UnormSrgb,
+        };
+        if cfg!(target_arch = "wasm32") {
+            return Err(GfxError::Unsupported("read_pixels on the web (the GPU can't be waited for)".into()));
+        }
+        if self.cubes.contains(&id.index()) || !matches!(format, wgpu::TextureFormat::Rgba8UnormSrgb | wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb) {
+            return Err(GfxError::Unsupported("read_pixels: texture format".into()));
+        }
+        let g = self.gpu_textures.get(&id.index()).ok_or_else(|| GfxError::Backend("read_pixels: no GPU texture".into()))?;
+        let row = (w * 4).div_ceil(256) * 256;
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("read pixels"), size: (row * h) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        enc.copy_texture_to_buffer(
+            g.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        self.queue.submit([enc.finish()]);
+        let slice = buf.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.device.poll(wgpu::PollType::Wait);
+        let data = slice.get_mapped_range();
+        let bgra = matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb);
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            let line = &data[(y * row) as usize..(y * row + w * 4) as usize];
+            for px in line.chunks_exact(4) {
+                if bgra {
+                    rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+                } else {
+                    rgba.extend_from_slice(px);
+                }
+            }
+        }
+        drop(data);
+        buf.unmap();
+        Ok(TextureData::rgba8(w, h, rgba))
+    }
+
     fn create_shader(&mut self, desc: &ShaderDesc) -> Result<ShaderId, GfxError> {
         // checked first: an invalid module would be a device error (a panic on native)
         goat_shader::validate_wgsl(&desc.wgsl).map_err(|e| GfxError::Backend(format!("{}: {e}", desc.name)))?;
@@ -1061,6 +1206,7 @@ impl GraphicsBackend for WgpuBackend {
     fn destroy_texture(&mut self, id: TextureId) {
         if self.textures.remove(id).is_some() {
             self.gpu_textures.remove(&id.index());
+            self.render_targets.remove(&id.index());
         }
     }
     fn destroy_material(&mut self, id: MaterialId) {
@@ -1115,13 +1261,6 @@ impl GraphicsBackend for WgpuBackend {
             slot += (bytes.len() as u64).div_ceil(UNIFORM_ALIGN).max(1);
             off as u32
         };
-        struct Planned {
-            rect: (f32, f32, f32, f32),
-            clear_off: Option<u32>,
-            clear_depth: bool,
-            frame_off: u32,
-            objects: Vec<(MeshId, MaterialId, u32, Option<TextureId>)>,
-        }
         let lin = self.config.format.is_srgb();
         // the shadow map follows the first perspective view with a shadow-casting light
         let shadow_src = views.iter().position(|v| v.lighting.shadow.is_some() && matches!(v.projection, Projection::Perspective { .. }));
@@ -1132,9 +1271,16 @@ impl GraphicsBackend for WgpuBackend {
             Some(shadow_matrix(l.direction, cw.w_axis.truncate(), cw.transform_vector3(Vec3::NEG_Z)))
         });
         let mut planned = Vec::with_capacity(views.len());
-        for v in views {
-            let Some((dx, dy, dw, dh)) = self.display_rect(v.display) else { continue };
+        for (view_index, v) in views.iter().enumerate() {
+            // a render target (its own size) or a display of the surface
+            let area = match v.target {
+                Some(t) => self.render_targets.get(&t.index()).map(|r| (0.0, 0.0, r.size.0 as f32, r.size.1 as f32)),
+                None => self.display_rect(v.display),
+            };
+            let Some((dx, dy, dw, dh)) = area else { continue };
             let rect = (dx + v.viewport.x * dw, dy + v.viewport.y * dh, (v.viewport.width * dw).max(1.0), (v.viewport.height * dh).max(1.0));
+            // a target can't be sampled while drawn into: its own users skip that view
+            let samples_target = |d: &MaterialDesc| v.target.is_some_and(|t| d.texture == Some(t) || d.emissive_texture == Some(t) || d.shader_textures.contains(&Some(t)));
             let clear_off = v.clear.map(|c| put(bytemuck::bytes_of(&c4(c, lin))));
             let proj = projection_matrix(v.projection, rect.2 / rect.3);
             let cam_world = v.view.inverse();
@@ -1179,10 +1325,15 @@ impl GraphicsBackend for WgpuBackend {
               for _pass in 0..4 {
                 let Some(m) = self.gpu_materials.get(&material.index()) else { break };
                 let d = &m.desc;
+                if samples_target(d) {
+                    break;
+                }
+                let tint = c4(it.color, lin);
+                let base = c4(d.base_color, lin);
                 let ou = ObjectUniform {
                     model: it.model.to_cols_array_2d(),
                     normal_matrix: it.model.inverse().transpose().to_cols_array_2d(),
-                    base_color: c4(d.base_color, lin),
+                    base_color: [base[0] * tint[0], base[1] * tint[1], base[2] * tint[2], base[3] * tint[3]],
                     specular: { let s = c4(d.specular, lin); [s[0], s[1], s[2], d.shininess.max(1.0)] },
                     emissive: c4(d.emissive, lin),
                     toon: [d.toon_steps as f32, d.rim_power.max(0.01), d.outline_width, 0.0],
@@ -1205,7 +1356,7 @@ impl GraphicsBackend for WgpuBackend {
                 }
               }
             }
-            planned.push(Planned { rect, clear_off, clear_depth: v.clear_depth, frame_off, objects });
+            planned.push(Planned { view: view_index, target: v.target, rect, clear_off, clear_depth: v.clear_depth, frame_off, objects });
         }
         self.queue.write_buffer(&self.uniforms, 0, &data);
 
@@ -1244,7 +1395,7 @@ impl GraphicsBackend for WgpuBackend {
         });
 
         // post effects: the frame goes to an offscreen texture first
-        let post = views.iter().find_map(|v| v.post);
+        let post = views.iter().filter(|v| v.target.is_none()).find_map(|v| v.post);
         if post.is_some() {
             let (w, h) = (self.config.width, self.config.height);
             if self.post_targets.as_ref().is_none_or(|t| t.size != (w, h)) {
@@ -1279,9 +1430,7 @@ impl GraphicsBackend for WgpuBackend {
                 occlusion_query_set: None,
             });
             if let (Some(i), Some(_)) = (shadow_src, light_vp) {
-                // `planned` skips views without a display: find the plan of view i
-                let plan_index = views[..i].iter().filter(|v| self.display_rect(v.display).is_some()).count();
-                if let Some(p) = planned.get(plan_index) {
+                if let Some(p) = planned.iter().find(|p| p.view == i) {
                     pass.set_pipeline(&self.shadow_pipeline);
                     pass.set_bind_group(0, &frame_bg, &[p.frame_off]);
                     for &(mesh, material, off, _) in &p.objects {
@@ -1296,6 +1445,25 @@ impl GraphicsBackend for WgpuBackend {
                     }
                 }
             }
+        }
+        // views into render targets first (cameras with a target texture), one pass per target
+        let mut targets: Vec<TextureId> = Vec::new();
+        for p in &planned {
+            if let Some(t) = p.target.filter(|t| !targets.contains(t)) {
+                targets.push(t);
+            }
+        }
+        for t in targets {
+            let (Some(rt), Some(gt)) = (self.render_targets.get(&t.index()), self.gpu_textures.get(&t.index())) else { continue };
+            let plans: Vec<&Planned> = planned.iter().filter(|p| p.target == Some(t)).collect();
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render texture"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &gt.view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &rt.depth, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.draw_plans(&mut pass, &plans, rt.size, (&frame_bg, &object_bg, &clear_bg), &mut stats);
         }
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1313,53 +1481,8 @@ impl GraphicsBackend for WgpuBackend {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            for p in &planned {
-                let (x, y, w, h) = p.rect;
-                pass.set_viewport(x, y, w, h, 0.0, 1.0);
-                let (sx, sy) = (x.max(0.0) as u32, y.max(0.0) as u32);
-                let sw = (w as u32).min(self.config.width.saturating_sub(sx));
-                let sh = (h as u32).min(self.config.height.saturating_sub(sy));
-                if sw == 0 || sh == 0 {
-                    continue;
-                }
-                pass.set_scissor_rect(sx, sy, sw, sh);
-                if let Some(off) = p.clear_off {
-                    pass.set_pipeline(&self.clear_pipeline);
-                    pass.set_bind_group(0, &clear_bg, &[off]);
-                    pass.draw(0..3, 0..1);
-                } else if p.clear_depth {
-                    pass.set_pipeline(&self.clear_depth_pipeline);
-                    pass.set_bind_group(0, &clear_bg, &[0]);
-                    pass.draw(0..3, 0..1);
-                }
-                pass.set_bind_group(0, &frame_bg, &[p.frame_off]);
-                for &(mesh, material, off, env) in &p.objects {
-                    let (Some(gm), Some(mat)) = (self.gpu_meshes.get(&mesh.index()), self.gpu_materials.get(&material.index())) else { continue };
-                    if gm.index_count == 0 {
-                        continue;
-                    }
-                    let material_group = env.and_then(|e| mat.probe_groups.get(&e.index())).unwrap_or(&mat.bind_group);
-                    let shader = mat.desc.shader.filter(|s| self.gpu_shaders.contains_key(&s.index())).map(|s| s.index() + 1).unwrap_or(0);
-                    let key = PipelineKey { blend: mat.desc.blend as u8, cull: mat.desc.cull as u8, depth_write: mat.desc.depth_write, depth_test: mat.desc.depth_test, outline: false, shader };
-                    let Some(pipe) = self.pipelines.get(&key) else { continue };
-                    pass.set_pipeline(pipe);
-                    pass.set_bind_group(1, &object_bg, &[off]);
-                    pass.set_bind_group(2, material_group, &[]);
-                    pass.set_bind_group(3, &self.shadow_bind, &[]);
-                    pass.set_vertex_buffer(0, gm.vertices.slice(..));
-                    pass.set_index_buffer(gm.indices.slice(..), wgpu::IndexFormat::Uint16);
-                    pass.draw_indexed(0..gm.index_count, 0, 0..1);
-                    stats.draw_calls += 1;
-                    stats.triangles += gm.index_count / 3;
-                    if mat.desc.outline_width > 0.0 {
-                        if let Some(p) = self.pipelines.get(&PipelineKey { outline: true, shader: 0, ..key }) {
-                            pass.set_pipeline(p);
-                            pass.draw_indexed(0..gm.index_count, 0, 0..1);
-                            stats.draw_calls += 1;
-                        }
-                    }
-                }
-            }
+            let plans: Vec<&Planned> = planned.iter().filter(|p| p.target.is_none()).collect();
+            self.draw_plans(&mut pass, &plans, (self.config.width, self.config.height), (&frame_bg, &object_bg, &clear_bg), &mut stats);
         }
         // post effects: bright pass (¼ size) → horizontal + vertical blur → composite to the window
         if let (Some(fx), Some(t), Some(pp)) = (post, &self.post_targets, &self.post_pipes) {

@@ -16,6 +16,29 @@
 //!   or the script goes away. A script that throws is logged and disabled.
 
 pub mod core_api;
+pub mod graphics_api;
+
+/// A script number as JSON: whole numbers as integers (so `u32` / `i32` fields of components
+/// read them: JavaScript has only doubles), others as floats, NaN / infinity as null.
+pub fn json_number(n: f64) -> serde_json::Value {
+    if n.fract() == 0.0 && n.abs() < 9.007_199_254_740_992e15 {
+        if n >= 0.0 {
+            return serde_json::Value::from(n as u64);
+        }
+        return serde_json::Value::from(n as i64);
+    }
+    serde_json::Number::from_f64(n).map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null)
+}
+
+/// [`json_number`] through a whole value (objects converted by a script engine).
+pub fn normalize_numbers(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Number(n) if n.is_f64() => *v = json_number(n.as_f64().unwrap_or(f64::NAN)),
+        serde_json::Value::Array(a) => a.iter_mut().for_each(normalize_numbers),
+        serde_json::Value::Object(o) => o.values_mut().for_each(normalize_numbers),
+        _ => {}
+    }
+}
 pub mod pointer;
 use std::collections::HashMap;
 
@@ -166,6 +189,7 @@ pub fn entity_arg(v: &Value) -> Option<Entity> {
 /// activeSelf, activeInHierarchy, tag, CompareTag, FindWithTag, FindGameObjectsWithTag).
 fn register_core(x: &mut Extensions) {
     core_api::register(x);
+    graphics_api::register(x);
     fn set_active(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
         goat_runtime::set_active(api.ctx.world, e, a.first().and_then(|v| v.as_bool()).unwrap_or(true));
         Ok(Value::Null)

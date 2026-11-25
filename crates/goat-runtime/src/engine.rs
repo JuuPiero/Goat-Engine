@@ -138,6 +138,9 @@ impl Engine {
             self.time.time_scale = ts.0;
         }
         self.time.advance(if self.started { dt } else { 0.0 });
+        // last frame's Graphics / GL / Debug.DrawLine submissions end here
+        let now = self.time.elapsed;
+        self.resources.get_or_default::<crate::graphics::GraphicsQueue>().begin_frame(now);
         if self.editing {
             if !self.started {
                 self.started = true;
@@ -152,8 +155,7 @@ impl Engine {
                 }
             });
             let t2 = crate::profiler::now();
-            let mut views = extract_views(&self.world, &self.displays, &*gfx, self.view_camera);
-            views.iter_mut().for_each(|v| v.time = self.time.unscaled_elapsed);
+            let views = self.build_views(gfx, self.time.unscaled_elapsed);
             let t3 = crate::profiler::now();
             self.last_stats = gfx.render(&views);
             let t4 = crate::profiler::now();
@@ -216,8 +218,7 @@ impl Engine {
         let t1 = crate::profiler::now();
         self.each_plugin(gfx, |p, ctx| p.late_update(ctx));
         let t2 = crate::profiler::now();
-        let mut views = extract_views(&self.world, &self.displays, &*gfx, self.view_camera);
-        views.iter_mut().for_each(|v| v.time = self.time.elapsed);
+        let views = self.build_views(gfx, self.time.elapsed);
         let t3 = crate::profiler::now();
         self.last_stats = gfx.render(&views);
         let t4 = crate::profiler::now();
@@ -234,9 +235,17 @@ impl Engine {
     pub fn render_only(&mut self, gfx: &mut dyn GraphicsBackend) {
         self.displays = gfx.displays();
         propagate_transforms(&mut self.world);
-        let mut views = extract_views(&self.world, &self.displays, &*gfx, self.view_camera);
-        views.iter_mut().for_each(|v| v.time = self.time.elapsed);
+        let views = self.build_views(gfx, self.time.elapsed);
         self.last_stats = gfx.render(&views);
+    }
+
+    /// The cameras' views + this frame's low-level drawing (graphics.rs).
+    fn build_views(&mut self, gfx: &mut dyn GraphicsBackend, time: f32) -> Vec<RenderView> {
+        let (mut views, mut cameras) = extract_camera_views(&self.world, &self.displays, &*gfx, self.view_camera);
+        let game_screen = self.view_camera.is_none();
+        crate::graphics::apply(&self.world, &mut self.resources, gfx, &self.displays, &mut views, &mut cameras, game_screen);
+        views.iter_mut().for_each(|v| v.time = time);
+        views
     }
 
     fn each_plugin(&mut self, gfx: &mut dyn GraphicsBackend, mut f: impl FnMut(&mut dyn Plugin, &mut Context)) {
@@ -450,16 +459,21 @@ fn pick_lights(directional: &[Light], local: &[Light], camera: Vec3, frustum: &F
 /// One RenderView per enabled camera (sorted by depth): the lights that matter for it and the
 /// renderers inside its frustum.
 pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn GraphicsBackend, only: Option<Entity>) -> Vec<RenderView> {
+    extract_camera_views(world, displays, gfx, only).0
+}
+
+/// [`extract_views`] + the camera entity of each view.
+pub fn extract_camera_views(world: &World, displays: &[DisplayInfo], gfx: &dyn GraphicsBackend, only: Option<Entity>) -> (Vec<RenderView>, Vec<Entity>) {
     let settings = world.query::<&RenderSettings>().iter().next().map(|(_, s)| *s).unwrap_or_default();
     let (directional, local, shadow, baked) = collect_lights(world);
     let probes = crate::probes::ProbeField::capture(world, &baked);
     let reflections = crate::probes::reflection_boxes(world);
     // world-space bounding spheres (None = always drawn), layer bit, LOD levels
     let renderers: Vec<(DrawItem, Option<(Vec3, f32)>, u32, Option<LodGroup>)> = world
-        .query::<(&MeshRenderer, &GlobalTransform, Option<&LodGroup>)>().without::<&InactiveInHierarchy>()
+        .query::<(&MeshRenderer, &GlobalTransform, Option<&LodGroup>, Option<&crate::graphics::PropertyBlock>)>().without::<&InactiveInHierarchy>()
         .iter()
-        .filter(|(_, (r, _, _))| r.visible)
-        .map(|(_, (r, g, lod))| {
+        .filter(|(_, (r, _, _, _))| r.visible)
+        .map(|(_, (r, g, lod, block))| {
             let mesh = lod.and_then(|l| l.levels.first()).map(|l| l.mesh).unwrap_or(r.mesh);
             let sphere = gfx.mesh_bounds(mesh).map(|b| {
                 let scale = g.0.x_axis.truncate().length().max(g.0.y_axis.truncate().length()).max(g.0.z_axis.truncate().length());
@@ -470,22 +484,31 @@ pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn Graphics
                 sorting_order: r.sorting_order,
                 light_probe: probes.as_ref().map(|p| p.sample(at)),
                 reflection: crate::probes::reflection_at(&reflections, at),
+                color: block.map(|b| b.color).unwrap_or(Color::WHITE),
                 ..DrawItem::new(mesh, r.material, g.0)
             };
             (item, sphere, 1u32 << r.layer.min(31), lod.cloned())
         })
         .collect();
-    let mut views: Vec<RenderView> = world
+    let mut views: Vec<(Entity, RenderView)> = world
         .query::<(&Camera, &GlobalTransform)>().without::<&InactiveInHierarchy>()
         .iter()
-        .filter(|(e, _)| only.is_none_or(|o| o == *e))
-        .map(|(_, (c, g))| {
+        // only (the editor's Scene view camera) + the cameras drawing into render textures, so
+        // what those textures show stays live in the Scene view (Unity / PiaEngine)
+        .filter(|(e, (c, _))| only.is_none_or(|o| o == *e) || c.target_texture.is_some())
+        .map(|(cam, (c, g))| {
             let view = g.0.inverse();
-            let (dw, dh) = displays
-                .iter()
-                .find(|d| d.display == c.display)
-                .map(|d| (d.width as f32, d.height as f32))
-                .unwrap_or((16.0, 9.0));
+            // beside the editor's view camera, other cameras never see the editor's layer 31 (grid, gizmos)
+            let mask = if only.is_some_and(|o| o != cam) { c.culling_mask & !(1 << 31) } else { c.culling_mask };
+            // a render target's size, else the display's
+            let target_size = c.target_texture.and_then(|t| gfx.texture_size(t)).map(|(w, h)| (w as f32, h as f32));
+            let (dw, dh) = target_size.unwrap_or_else(|| {
+                displays
+                    .iter()
+                    .find(|d| d.display == c.display)
+                    .map(|d| (d.width as f32, d.height as f32))
+                    .unwrap_or((16.0, 9.0))
+            });
             let aspect = (dw * c.viewport.width) / (dh * c.viewport.height).max(1e-4);
             let frustum = Frustum::from_matrix(c.projection.gl_matrix(aspect) * view);
             let cam_pos = g.0.w_axis.truncate();
@@ -499,13 +522,13 @@ pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn Graphics
             };
             let items = renderers
                 .iter()
-                .filter(|(_, s, layer, _)| c.culling_mask & layer != 0 && s.is_none_or(|(center, radius)| frustum.intersects_sphere(center, radius)))
+                .filter(|(_, s, layer, _)| mask & layer != 0 && s.is_none_or(|(center, radius)| frustum.intersects_sphere(center, radius)))
                 .filter_map(|(it, s, _, lod)| match (lod, s) {
                     (Some(l), Some((center, radius))) => l.pick(screen_height(*center, *radius)).map(|mesh| DrawItem { mesh, ..*it }),
                     _ => Some(*it),
                 })
                 .collect();
-            RenderView {
+            (cam, RenderView {
                 display: c.display,
                 viewport: c.viewport,
                 view,
@@ -518,11 +541,13 @@ pub fn extract_views(world: &World, displays: &[DisplayInfo], gfx: &dyn Graphics
                 depth: c.depth,
                 time: 0.0,
                 post: settings.post,
-            }
+                target: c.target_texture.filter(|_| target_size.is_some()),
+            })
         })
         .collect();
-    views.sort_by_key(|v| v.depth);
-    views
+    // render-texture cameras first (Unity), then by depth
+    views.sort_by_key(|(_, v)| (v.target.is_none(), v.depth));
+    views.into_iter().map(|(e, v)| (v, e)).unzip()
 }
 
 #[cfg(test)]

@@ -128,3 +128,34 @@ Mỗi nền tảng = backend đồ họa + platform + `Builder` trong `tools/goa
 - Mỗi tính năng đều được kiểm chứng thật: 3DS trên emulator (và máy thật khi có thể), desktop bằng ảnh chụp tự động.
 - ✅ Cửa sổ Animation (dopesheet, Preview, Record, Add Property) + component Animation + API script (2026-11-25)
 - ✅ API core như Pia / Unity cho script (JS / TS / C#): Vector4, Quaternion đủ hàm, Mathf / Random đủ bộ, Color, Rect, Bounds, Ray, Plane, Matrix4x4, AnimationCurve, Gradient, GoatEvent; Transform world / local + cây con; Invoke; Camera.main / ScreenPointToRay; renderer.material.SetColor... (bản sao vật liệu theo object); Screen, Application.platform (2026-11-25)
+
+## Đối chiếu từng mục với PiaEngine (2026-11-25)
+
+Duyệt bảng "Đối chiếu với Unity" và từng phần README / API của PiaEngine; mục nào GoatEngine chưa có thì ghi ở đây và làm dần theo thứ tự nhóm. ✅ = đã có.
+
+**A. API lõi cho script (JS / TS / C#)**
+- ✅ GameObject / Component / Transform, vòng đời MonoBehaviour, field tự hiện trong Inspector, ScriptableObject, Instantiate / Destroy, coroutine, Awaitable, Invoke / InvokeRepeating, PlayerPrefs, Time / Input / Debug / Mathf, SceneManager.loadScene, Camera.main / ScreenPointToRay / ScreenToWorldPoint, physics 3D / 2D + callback, OnMouse*, AudioSource, NavMesh, Animator, Tween, Resources.load
+- ✅ Đồ hoạ cấp thấp (desktop, editor, 3DS): `RenderTexture` (asset + `new`) + `Camera.targetTexture`, `Texture2D` (setPixel / getPixel / apply / loadImage / encodeToPNG / readPixels), `Graphics.drawMesh` / `drawMeshInstanced` + `MaterialPropertyBlock` (màu), `Graphics.blit` + component Post Effect, `GL`, `Debug.drawLine` / `drawRay`
+- ⬜ Còn lại của đồ hoạ cấp thấp: RawImage hiện render texture, `Sprite.create`, `Graphics.drawTexture`, `onRenderImage` trong script, `readPixels` trên web / 3DS, GPU instancing thật (desktop), Inspector của asset Render Texture
+- ⬜ `Gizmos.*` / `Handles.*` + `onDrawGizmos` / `onDrawGizmosSelected` của script
+- ⬜ Nhiều scene: `LoadSceneMode.Additive`, `loadSceneAsync` → AsyncOperation, `unloadSceneAsync`, `dontDestroyOnLoad`, Hierarchy nhiều scene
+- ⬜ `TextAsset` / `JsonAsset` / `BufferAsset`, `Resources.loadPrefab` / `loadAll` / `find`
+- ⬜ Attribute field: `@hideInInspector`, `@nonSerialized`, mảng + struct `@serializable`, `@createAssetMenu`, `@contextMenu`, decorator kiểu Odin (`@button`, `@showIf`, `@boxGroup`...)
+- ⬜ API script cho LineRenderer / TrailRenderer / ParticleSystem / Light / Camera (field + hàm), EventSystem kéo thả (`onBeginDrag` / `onDrag` / `onDrop` / `onScroll`)
+- ⬜ `RenderStats`, `ProfilerMarker` / `Profiler.beginSample` / `ProfilerRecorder`, `Screen.safeArea` / `dpi` / `orientation`
+- ⬜ GPU Instancing (material `enableInstancing`; desktop), Baked Animation (GPU) cho đám đông, GPU skinning
+- ⬜ Model FBX / OBJ (hiện chỉ glTF / GLB), ModelImporter đủ tab (Rig / Animation / Materials, Optimize Game Objects)
+
+**B. Editor**
+- ✅ Hub, Scene / Game view độc lập (kể cả khi Play), gizmo, Undo, Prefab Mode, Animation / Animator / Profiler, Build / Project Settings
+- ⬜ Edit Collider (kéo mặt / cạnh), Edit Points của Line Renderer
+- ⬜ Device Simulator (khung máy, safe area), cửa sổ Stats đầy đủ
+- ⬜ Find References In Scene, khoá Inspector, Sprite Editor (sprite Multiple, border 9-slice), Anchor Presets của RectTransform, tool Rect (T)
+- ⬜ Editor scripting kiểu Unity: `@menuItem`, `EditorWindow` + `onGUI`, `@customEditor`, `PropertyDrawer`, `EditorGUILayout`, `SerializedObject`, `Undo`; `onGUI` trên component
+- ⬜ Package Manager (package của project + package chính thức), xuất / nhập `.goatpackage` (như `.unitypackage`)
+- ⬜ Cửa sổ Input Actions, xem state Animator khi Play, Edit ▸ Clear All PlayerPrefs, MCP cho AI agent
+
+**C. Package như của Pia**
+- ⬜ Tilemap (+ Tile Palette), Spline, Cinemachine, TextMeshPro (font SDF), Spine, UI Toolkit (HTML / CSS — chỉ desktop / web), Injector (DI), Animancer, Netcode (+ Dedicated Server), Entities (ECS), Job System + Burst-lite
+
+**D. Nền tảng** — xem Giai đoạn 6 (web, Playable Ads...).

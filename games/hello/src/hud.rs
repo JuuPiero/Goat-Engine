@@ -102,6 +102,7 @@ pub fn spawn(ctx: &mut Context) {
             clear_depth: true,
             depth: 1,
             culling_mask: layer_mask(&[HUD_LAYER]),
+            target_texture: None,
         },
     ));
     for i in 0..3 {

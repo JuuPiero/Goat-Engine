@@ -127,7 +127,8 @@ function rgbaToHex(c: number[], withAlpha: boolean): string {
 }
 
 const ASSET_EXT: Record<string, RegExp> = {
-  texture: /\.(png|jpe?g|ktx)$/i,
+  texture: /\.(png|jpe?g|ktx)$|\.renderTexture\.json$/i,
+  renderTexture: /\.renderTexture\.json$/i,
   material: /\.mat\.json$/i,
   mesh: /\.(glb|gltf)$/i,
   model: /\.(glb|gltf)$/i,
@@ -141,7 +142,7 @@ const ASSET_EXT: Record<string, RegExp> = {
   shader: /\.shader$/i,
   cubemap: /\.cubemap\.json$/i,
 };
-const KIND_LABEL: Record<string, string> = { scriptableObject: 'ScriptableObject', script: 'Script', controller: 'Animator Controller', cubemap: 'Cubemap' };
+const KIND_LABEL: Record<string, string> = { scriptableObject: 'ScriptableObject', script: 'Script', controller: 'Animator Controller', cubemap: 'Cubemap', renderTexture: 'Render Texture' };
 const BUILTINS: Record<string, string[]> = {
   mesh: ['builtin:cube', 'builtin:sphere', 'builtin:capsule', 'builtin:cylinder', 'builtin:plane', 'builtin:quad'],
   material: ['builtin:default'],

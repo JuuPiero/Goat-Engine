@@ -856,3 +856,80 @@ export default class Busy extends Behaviour {
     }
     println!("{}: {:.2} ms per frame (100 behaviours)", module_path!(), start.elapsed().as_secs_f64() * 1000.0 / 200.0);
 }
+
+/// The low-level graphics API (Graphics / GL / Debug.drawLine / RenderTexture / Texture2D /
+/// MaterialPropertyBlock) as views the backend receives.
+#[test]
+fn low_level_graphics_from_scripts() {
+    fn gfx_io() -> AssetIo {
+            let io = io();
+            io.put(
+                "scripts/Gfx.ts",
+                br#"
+import { Behaviour, Graphics, GL, Debug, Color, Vector3, Quaternion, Matrix4x4, MaterialPropertyBlock, RenderTexture, Texture2D, Camera, GameObject } from "goat";
+export default class Gfx extends Behaviour {
+  rt: any = null;
+  start() {
+    this.rt = new RenderTexture(64, 32, 16);
+    Camera.of(GameObject.find("MiniCam")).targetTexture = this.rt;
+    const t = new Texture2D(4, 2);
+    t.setPixel(0, 0, Color.red);
+    t.apply();
+    const back = t.getPixel(0, 0);
+    if (back.r !== 1 || back.g !== 0) throw new Error("getPixel " + back);
+    const png = t.encodeToPNG();
+    if (png[1] !== 0x50 || png[2] !== 0x4e) throw new Error("png header");
+    const again = new Texture2D(1, 1);
+    if (!again.loadImage(png) || again.width !== 4 || again.height !== 2) throw new Error("loadImage " + again.width);
+    if (again.getPixel(0, 0).r !== 1 || again.getPixel(0, 1).r !== 1 || again.getPixel(0, 1).g !== 1) throw new Error("bottom-up rows");
+    RenderTexture.active = this.rt;
+    const r = new Texture2D(64, 32);
+    r.readPixels({ x: 0, y: 0, width: 64, height: 32 }, 0, 0);
+    if (this.rt.width !== 64 || this.rt.height !== 32) throw new Error("rt size");
+    this.gameObject.name = "ok";
+  }
+  update() {
+    Graphics.drawMesh("Cube", new Vector3(0, 0, -5), Quaternion.identity, "builtin:default");
+    const block = new MaterialPropertyBlock();
+    block.setVectorArray("_Color", [1, 0, 0, 1, 0, 1, 0, 1]);
+    Graphics.drawMeshInstanced("Sphere", 0, "builtin:default", [Matrix4x4.TRS(new Vector3(1, 0, -5), Quaternion.identity, Vector3.one), Matrix4x4.TRS(new Vector3(-1, 0, -5), Quaternion.identity, Vector3.one)], 2, block);
+    Debug.drawLine(new Vector3(0, 0, -3), new Vector3(1, 1, -3), Color.yellow);
+    GL.pushMatrix(); GL.loadOrtho();
+    GL.begin(GL.LINES); GL.color(Color.green); GL.vertex3(0, 0, 0); GL.vertex3(1, 1, 0); GL.end();
+    GL.popMatrix();
+  }
+}
+"#
+                .to_vec(),
+            );
+            io
+    }
+    struct Gfx;
+    impl Game for Gfx {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(gfx_io()));
+            let w = &mut *ctx.world;
+            w.spawn((Name("Cam".into()), Transform::default(), GlobalTransform::default(), goat_runtime::Camera::default()));
+            w.spawn((Name("MiniCam".into()), Transform::default(), GlobalTransform::default(), goat_runtime::Camera::default()));
+            w.spawn((Name("Gfx".into()), Transform::default(), GlobalTransform::default(), Script::one("scripts/Gfx.ts")));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(gfx_io())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(Gfx);
+    for _ in 0..3 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    assert!(find(&e, "ok").is_some(), "the script's checks passed");
+    let views = &gfx.last_views;
+    let target = views.iter().find(|v| v.target.is_some()).expect("MiniCam draws into the render texture");
+    assert_eq!(goat_gfx::GraphicsBackend::texture_size(&gfx, target.target.unwrap()), Some((64, 32)));
+    assert_eq!(views.iter().position(|v| v.target.is_some()), Some(0), "render-texture cameras first");
+    let screen = views.iter().find(|v| v.target.is_none() && v.depth == 0).unwrap();
+    let tinted: Vec<_> = screen.items.iter().filter(|i| i.color != goat_core::Color::WHITE).map(|i| i.color).collect();
+    assert_eq!(tinted.len(), 2, "two instance colors: {tinted:?}");
+    assert!(screen.items.len() >= 4, "cube + 2 spheres + the line mesh: {}", screen.items.len());
+    assert!(views.iter().any(|v| v.depth == i32::MAX), "GL in screen space: an overlay view");
+}

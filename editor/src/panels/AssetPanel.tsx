@@ -335,6 +335,7 @@ export function AssetPanel() {
     { label: 'Scene', action: () => void createAsset('scene') },
     { label: 'Prefab', action: () => void createAsset('prefab') },
     { label: 'Material', action: () => void createMaterial() },
+    { label: 'Render Texture', action: () => void freeName('New Render Texture', '.renderTexture.json').then((k) => writeNew(k, JSON.stringify({ width: 256, height: 256, depth: 24 }, null, 2) + '\n')) },
     {
       label: 'Shader',
       children: [
