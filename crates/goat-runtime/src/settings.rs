@@ -1,5 +1,5 @@
 //! Project settings (Unity's ProjectSettings + Build Settings' scene list), from
-//! `assets/project.json` (loaded by `AssetsPlugin`, a resource):
+//! `goat.project.json` (next to `assets/`, like PiaEngine's `pia.project.json`) (loaded by `AssetsPlugin`, a resource):
 //!
 //! ```json
 //! { "name": "My Game", "version": "1.0",
@@ -88,3 +88,7 @@ mod tests {
         assert!((s.fixed_timestep - 1.0 / 60.0).abs() < 1e-6);
     }
 }
+
+/// The project settings file: at the project's root, next to `assets/` (builds put it at the root of
+/// the shipped assets). Older projects had `assets/project.json` (still read).
+pub const PROJECT_FILE: &str = "goat.project.json";

@@ -4,6 +4,7 @@ use goat_assets::AssetIo;
 use goat_gfx_wgpu::{DisplayLayout, WgpuBackend};
 use wasm_bindgen::prelude::*;
 
+use crate::core::ViewPass;
 use crate::core::{entity_of, id_of, EditorCore, TransformEdit};
 use crate::tools::GizmoMode;
 
@@ -33,6 +34,10 @@ pub struct EditorEngine {
     height: u32,
     /// The Game view shows the 3DS's two screens (else the window).
     dual: bool,
+    /// The Game view's own canvas (surface id): Scene and Game views drawn independently.
+    game_surface: Option<usize>,
+    scene_visible: bool,
+    game_visible: bool,
 }
 
 #[wasm_bindgen]
@@ -46,7 +51,7 @@ impl EditorEngine {
         let gfx = WgpuBackend::new_async(wgpu::SurfaceTarget::Canvas(canvas), w, h, DisplayLayout::Window).await.map_err(|e| JsValue::from_str(&e.to_string()))?;
         let mut core = EditorCore::new(AssetIo::new("assets"));
         core.aspect = w as f32 / h as f32;
-        let mut me = EditorEngine { gfx, core, width: w, height: h, dual: false };
+        let mut me = EditorEngine { gfx, core, width: w, height: h, dual: false, game_surface: None, scene_visible: true, game_visible: false };
         me.core.first_frame(&mut me.gfx);
         Ok(me)
     }
@@ -71,11 +76,37 @@ impl EditorEngine {
         }
     }
 
+    /// The Scene view's canvas was resized.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width.max(1);
         self.height = height.max(1);
+        self.gfx.use_surface(0);
         self.gfx.resize(self.width, self.height);
         self.core.aspect = self.width as f32 / self.height as f32;
+    }
+
+    /// The Game view's own canvas (Unity: Scene and Game views are separate and can show side by
+    /// side). Without it the one canvas shows whichever view `set_scene_view` picks.
+    pub fn attach_game_canvas(&mut self, canvas: web_sys::HtmlCanvasElement) -> Result<(), JsValue> {
+        let (w, h) = (canvas.width().max(1), canvas.height().max(1));
+        let id = self.gfx.add_surface(wgpu::SurfaceTarget::Canvas(canvas), w, h, DisplayLayout::Window).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.gfx.use_surface(0);
+        self.game_surface = Some(id);
+        self.game_visible = true;
+        Ok(())
+    }
+    /// The Game view's canvas was resized.
+    pub fn resize_game(&mut self, width: u32, height: u32) {
+        if let Some(id) = self.game_surface {
+            self.gfx.use_surface(id);
+            self.gfx.resize(width.max(1), height.max(1));
+            self.gfx.use_surface(0);
+        }
+    }
+    /// Which views are on screen (hidden dock tabs aren't drawn).
+    pub fn set_views(&mut self, scene: bool, game: bool) {
+        self.scene_visible = scene;
+        self.game_visible = game;
     }
 
     pub fn open_scene(&mut self, key: &str) -> Result<(), JsValue> {
@@ -405,12 +436,37 @@ impl EditorEngine {
 
     /// One frame (`dt` seconds).
     pub fn frame(&mut self, dt: f32) {
-        // the 3DS screens only in the Game view
-        let layout = if self.dual && !self.core.view.scene_view { DisplayLayout::Dual3ds } else { DisplayLayout::Window };
-        if self.gfx.layout() != layout {
-            self.gfx.set_layout(layout);
+        let dt = dt.min(0.1);
+        let Some(game) = self.game_surface else {
+            // one canvas: the 3DS screens only in the Game view
+            let layout = if self.dual && !self.core.view.scene_view { DisplayLayout::Dual3ds } else { DisplayLayout::Window };
+            if self.gfx.layout() != layout {
+                self.gfx.set_layout(layout);
+            }
+            self.core.frame(&mut self.gfx, dt);
+            return;
+        };
+        // two canvases: the frame runs once (the game while playing, the edit world's tick
+        // otherwise) in the pass that is on screen, the other view only draws
+        let playing = self.core.is_playing();
+        let (scene, game_on) = (self.scene_visible, self.game_visible);
+        let game_simulates = if playing { game_on || !scene } else { !scene };
+        if game_on || game_simulates {
+            self.gfx.use_surface(game);
+            let layout = if self.dual { DisplayLayout::Dual3ds } else { DisplayLayout::Window };
+            if self.gfx.layout() != layout {
+                self.gfx.set_layout(layout);
+            }
+            self.core.frame_pass(&mut self.gfx, dt, ViewPass::Game, game_simulates);
         }
-        self.core.frame(&mut self.gfx, dt.min(0.1));
+        if scene || !game_simulates {
+            self.gfx.use_surface(0);
+            if self.gfx.layout() != DisplayLayout::Window {
+                self.gfx.set_layout(DisplayLayout::Window);
+            }
+            self.core.frame_pass(&mut self.gfx, dt, ViewPass::Scene, !game_simulates);
+        }
+        self.gfx.use_surface(0);
     }
 
     /// Draw calls / triangles of the last frame.

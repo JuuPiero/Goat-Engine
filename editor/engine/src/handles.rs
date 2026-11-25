@@ -699,6 +699,12 @@ impl EditorCore {
     /// `[{ k: "l" (polyline) | "p" (polygon) | "c" (circle) | "t" (text) | "i" (icon), … }]`.
     pub fn scene_overlay(&mut self, gfx: &dyn GraphicsBackend, w: f32, h: f32, pointer: Option<Vec2>) -> Value {
         self.tools.view_px = Vec2::new(w, h);
+        // world matrices of this moment (a handle drag / Inspector edit since the last frame):
+        // the outlines and handles stay on the object instead of trailing it a frame
+        match self.play.as_mut() {
+            Some(p) => goat_runtime::engine::propagate_transforms(&mut p.world),
+            None => goat_runtime::engine::propagate_transforms(&mut self.edit.world),
+        }
         let mut items: Vec<Value> = Vec::new();
         if !self.view.gizmos {
             return Value::Array(items);

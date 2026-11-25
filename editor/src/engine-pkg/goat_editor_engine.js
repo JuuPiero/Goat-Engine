@@ -89,6 +89,17 @@ export class EditorEngine {
         }
     }
     /**
+     * The Game view's own canvas (Unity: Scene and Game views are separate and can show side by
+     * side). Without it the one canvas shows whichever view `set_scene_view` picks.
+     * @param {HTMLCanvasElement} canvas
+     */
+    attach_game_canvas(canvas) {
+        const ret = wasm.editorengine_attach_game_canvas(this.__wbg_ptr, canvas);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @returns {string}
      */
     backend_name() {
@@ -622,11 +633,20 @@ export class EditorEngine {
         wasm.editorengine_rename(this.__wbg_ptr, ptr0, len0, ptr1, len1);
     }
     /**
+     * The Scene view's canvas was resized.
      * @param {number} width
      * @param {number} height
      */
     resize(width, height) {
         wasm.editorengine_resize(this.__wbg_ptr, width, height);
+    }
+    /**
+     * The Game view's canvas was resized.
+     * @param {number} width
+     * @param {number} height
+     */
+    resize_game(width, height) {
+        wasm.editorengine_resize_game(this.__wbg_ptr, width, height);
     }
     /**
      * Revert All: returns the new root id.
@@ -938,6 +958,14 @@ export class EditorEngine {
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
+    }
+    /**
+     * Which views are on screen (hidden dock tabs aren't drawn).
+     * @param {boolean} scene
+     * @param {boolean} game
+     */
+    set_views(scene, game) {
+        wasm.editorengine_set_views(this.__wbg_ptr, scene, game);
     }
     /**
      * `{ name, kind, properties, state, … }` or `{ errors }` of a `.shader` file.

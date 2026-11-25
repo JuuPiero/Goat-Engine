@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod fsops;
+mod hub;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -13,8 +14,9 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
 struct AppState {
-    project: Mutex<Project>,
-    _watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// None: the Project Hub is showing.
+    project: Mutex<Option<Project>>,
+    watcher: Mutex<Option<notify::RecommendedWatcher>>,
 }
 
 #[derive(Serialize)]
@@ -28,7 +30,96 @@ type Res<T> = Result<T, String>;
 
 fn with<T>(s: &State<AppState>, f: impl FnOnce(&Project) -> Res<T>) -> Res<T> {
     let guard = s.project.lock().map_err(|e| e.to_string())?;
-    f(&guard)
+    let p = guard.as_ref().ok_or("no project is open")?;
+    f(p)
+}
+
+// ------------------------------------------------------------------ Project Hub
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HubState {
+    /// The open project's folder (None: the Hub shows).
+    project: Option<String>,
+    engine_root: Option<String>,
+    default_location: String,
+}
+
+#[tauri::command]
+fn hub_state(s: State<AppState>) -> Res<HubState> {
+    let open = s.project.lock().map_err(|e| e.to_string())?.as_ref().map(|p| hub::display(p.assets.parent().unwrap_or(&p.assets)));
+    Ok(HubState { project: open, engine_root: engine_root().map(|r| hub::display(&r)), default_location: hub::default_location() })
+}
+#[tauri::command]
+fn hub_projects() -> Res<Vec<hub::HubProject>> {
+    Ok(hub::projects(engine_root().as_deref()))
+}
+#[tauri::command]
+fn hub_ls(path: String) -> Res<hub::DirListing> {
+    hub::ls(&path)
+}
+#[tauri::command]
+fn hub_create(name: String, location: String, dimension: String) -> Res<String> {
+    hub::create(&name, &location, &dimension)
+}
+#[tauri::command]
+fn hub_remove(path: String) -> Res<()> {
+    hub::remove(&path)
+}
+#[tauri::command]
+fn hub_reveal(path: String) -> Res<()> {
+    #[cfg(windows)]
+    let r = std::process::Command::new("explorer").arg(path.replace('/', "\\")).spawn();
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(&path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(&path).spawn();
+    r.map(|_| ()).map_err(|e| e.to_string())
+}
+/// Opens a project (a folder with assets/project.json): the editor page reloads on it.
+#[tauri::command]
+fn hub_open(app: tauri::AppHandle, s: State<AppState>, path: String) -> Res<()> {
+    let dir = PathBuf::from(&path);
+    if !hub::is_project(&dir) {
+        return Err(format!("{path} isn't a GoatEngine project (no goat.project.json)"));
+    }
+    open_project(&app, &s, &dir)
+}
+/// The project settings file (goat.project.json at the project's root, outside the assets).
+fn settings_path(s: &State<AppState>) -> Res<PathBuf> {
+    with(s, |p| Ok(p.assets.parent().unwrap_or(&p.assets).join(hub::PROJECT_FILE)))
+}
+#[tauri::command]
+fn read_project_settings(s: State<AppState>) -> Res<String> {
+    let path = settings_path(&s)?;
+    std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))
+}
+#[tauri::command]
+fn write_project_settings(s: State<AppState>, text: String) -> Res<()> {
+    let path = settings_path(&s)?;
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Back to the Hub (File ▸ Open Project… / New Project…).
+#[tauri::command]
+fn close_project(s: State<AppState>) -> Res<()> {
+    *s.watcher.lock().map_err(|e| e.to_string())? = None;
+    *s.project.lock().map_err(|e| e.to_string())? = None;
+    Ok(())
+}
+
+fn open_project(app: &tauri::AppHandle, s: &AppState, dir: &std::path::Path) -> Res<()> {
+    hub::migrate(dir)?;
+    let assets = dir.join("assets");
+    // the old watcher stops when replaced
+    *s.watcher.lock().map_err(|e| e.to_string())? = watch(app.clone(), assets.clone());
+    *s.project.lock().map_err(|e| e.to_string())? = Some(Project::new(assets));
+    hub::record(dir)?;
+    if let Some(w) = app.get_webview_window("main") {
+        let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let _ = w.set_title(&format!("{name} - GoatEngine Editor"));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -147,26 +238,19 @@ fn drag_icon(app: tauri::AppHandle) -> Res<String> {
     Ok(path.display().to_string())
 }
 
-/// The project: `--project <dir>` (a game folder with `assets/`), else the sample next to the
-/// engine sources, else the current folder.
-fn find_project() -> PathBuf {
+/// The project to open at start: `--project <dir>` (a game folder with `assets/`), `--last` (the
+/// one opened last), else none: the Project Hub shows.
+fn find_project() -> Option<PathBuf> {
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--project") {
         if let Some(dir) = args.get(i + 1) {
-            return PathBuf::from(dir).join("assets");
+            return Some(PathBuf::from(dir));
         }
     }
-    let mut dir = std::env::current_dir().unwrap_or_default();
-    loop {
-        let sample = dir.join("games").join("hello").join("assets");
-        if sample.is_dir() {
-            return sample;
-        }
-        if !dir.pop() {
-            break;
-        }
+    if args.iter().any(|a| a == "--last") {
+        return hub::last();
     }
-    PathBuf::from("assets")
+    None
 }
 
 /// tools/goat-cs (C# → JavaScript), found above the editor executable.
@@ -341,21 +425,35 @@ fn watch(app: tauri::AppHandle, root: PathBuf) -> Option<notify::RecommendedWatc
 }
 
 fn main() {
-    let assets = find_project();
+    let start = find_project();
     tauri::Builder::default()
         .plugin(tauri_plugin_drag::init())
         .setup(move |app| {
-            let watcher = watch(app.handle().clone(), assets.clone());
-            app.manage(AppState { project: Mutex::new(Project::new(assets.clone())), _watcher: Mutex::new(watcher) });
+            app.manage(AppState { project: Mutex::new(None), watcher: Mutex::new(None) });
             // the main window (tauri.conf.json, "create": false): built here so `window.open` is
             // allowed — panels popped out of the dock (tab menu ▸ Pop Out) are popup windows
             // sharing the page's JavaScript (WebView2's default new-window handling)
             if let Some(cfg) = app.config().app.windows.iter().find(|w| w.label == "main").cloned() {
                 tauri::WebviewWindowBuilder::from_config(app, &cfg)?.on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow).build()?;
             }
+            if let Some(dir) = start.as_ref() {
+                if let Err(e) = open_project(app.handle(), &app.state::<AppState>(), dir) {
+                    eprintln!("goat-editor: {e}");
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            hub_state,
+            hub_projects,
+            hub_ls,
+            hub_create,
+            hub_remove,
+            hub_reveal,
+            hub_open,
+            close_project,
+            read_project_settings,
+            write_project_settings,
             project_info,
             build_game,
             list_dir,

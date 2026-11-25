@@ -246,7 +246,7 @@ fn newer_versions_are_refused() {
 
 #[test]
 fn scenes_resolve_by_build_index_and_name() {
-    let s: goat_runtime::ProjectSettings = serde_json::from_str(include_str!("../../../games/hello/assets/project.json")).unwrap();
+    let s: goat_runtime::ProjectSettings = serde_json::from_str(include_str!("../../../games/hello/goat.project.json")).unwrap();
     assert_eq!(s.gravity.y, -9.81);
     assert_eq!(resolve_scene(Some(&s), "1").as_deref(), Some("scenes/playground.scene.json"));
     assert_eq!(resolve_scene(Some(&s), "navigation").as_deref(), Some("scenes/navigation.scene.json"));

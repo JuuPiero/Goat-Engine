@@ -554,11 +554,25 @@ impl EditorCore {
     }
 
     // ------------------------------------------------------------------ frame
+    /// One frame on one canvas: the Scene view or the Game view, whichever `view.scene_view` says.
     pub fn frame(&mut self, gfx: &mut dyn GraphicsBackend, dt: f32) {
+        let pass = if self.view.scene_view { ViewPass::Scene } else { ViewPass::Game };
+        self.frame_pass(gfx, dt, pass, true);
+    }
+
+    /// One drawing of a view (Unity's Scene and Game views are independent: the editor draws
+    /// both every frame on two canvases). `simulate`: this pass runs the frame (the edit world's
+    /// tick, or the game while playing); the other pass only draws.
+    pub fn frame_pass(&mut self, gfx: &mut dyn GraphicsBackend, dt: f32, pass: ViewPass, simulate: bool) {
+        self.view.scene_view = pass == ViewPass::Scene;
         if self.play.is_some() {
             self.sync_play_camera();
         }
         if let Some(play) = self.play.as_mut() {
+            if !simulate {
+                play.render_only(gfx);
+                return;
+            }
             // Pause: draw only; Step: one 1/60 s frame
             if self.paused && !self.step_once && !self.step_zero {
                 play.render_only(gfx);
@@ -589,22 +603,41 @@ impl EditorCore {
         if let Ok(mut c) = self.edit.world.get::<&mut Camera>(self.camera) {
             c.projection = projection;
         }
-        self.update_selection_box(gfx);
-        self.update_tools(gfx);
-        self.update_nav_preview(gfx);
-        self.update_gizmos(gfx);
-        // Game view in edit mode: the scene's cameras draw (Unity), without the editor's drawables
         let game_view = !self.view.scene_view;
+        if !game_view {
+            // gizmo meshes from this frame's world matrices (else they trail moving objects)
+            goat_runtime::engine::propagate_transforms(&mut self.edit.world);
+            self.update_selection_box(gfx);
+            self.update_tools(gfx);
+            self.update_nav_preview(gfx);
+            self.update_gizmos(gfx);
+        }
+        // Game view in edit mode: the scene's cameras draw (Unity), without the editor's drawables
         goat_runtime::set_active(&mut self.edit.world, self.camera, !game_view);
         self.edit.view_camera = if game_view { None } else { Some(self.camera) };
+        let mut hidden = Vec::new();
         if game_view {
-            for (_, r) in self.edit.world.query_mut::<&mut MeshRenderer>() {
-                if r.layer == EDITOR_LAYER {
+            for (e, r) in self.edit.world.query_mut::<&mut MeshRenderer>() {
+                if r.layer == EDITOR_LAYER && r.visible {
                     r.visible = false;
+                    hidden.push(e);
                 }
             }
         }
-        self.edit.frame(dt, gfx);
+        if simulate {
+            self.edit.frame(dt, gfx);
+        } else {
+            self.edit.render_only(gfx);
+        }
+        // the Scene view draws them again (both views every frame)
+        for e in hidden {
+            if let Ok(mut r) = self.edit.world.get::<&mut MeshRenderer>(e) {
+                r.visible = true;
+            }
+        }
+        if game_view {
+            goat_runtime::set_active(&mut self.edit.world, self.camera, true);
+        }
     }
 
     /// Drops deleted entities from the selection (outlines: handles.rs `scene_overlay`).
@@ -660,10 +693,12 @@ impl EditorCore {
             if let Ok(mut c) = play.world.get::<&mut Camera>(cam) {
                 c.projection = projection;
             }
+            goat_runtime::set_active(&mut play.world, cam, true);
             play.view_camera = Some(cam);
         } else {
-            if let Some(e) = self.play_camera.take() {
-                let _ = play.world.despawn(e);
+            // kept for the Scene view's next pass, switched off for the game's cameras
+            if let Some(e) = self.play_camera.filter(|e| play.world.contains(*e)) {
+                goat_runtime::set_active(&mut play.world, e, false);
             }
             play.view_camera = None;
         }
@@ -959,4 +994,10 @@ mod playground_tests {
         assert!(c.prefab_info(p)["overrides"].as_array().unwrap().is_empty(), "applied: {}", c.prefab_info(p));
         assert!(io.read_string("prefabs/shrine.prefab.json").unwrap().contains("Big Pedestal"));
     }
+}
+/// Which view a drawing pass is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewPass {
+    Scene,
+    Game,
 }

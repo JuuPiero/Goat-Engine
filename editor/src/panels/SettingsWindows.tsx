@@ -1,5 +1,5 @@
 // File ▸ Build Settings… and Edit ▸ Project Settings… (Unity's windows), both editing
-// assets/project.json. Build Settings: the scene list (index 0 = start scene; drag to reorder,
+// goat.project.json (the project's root). Build Settings: the scene list (index 0 = start scene; drag to reorder,
 // Del removes, drop scenes from the Project window), the platform, Build (goat build, output in
 // the Console). Project Settings: Player (name / version), Time, Physics / Physics 2D gravity,
 // Tags and Layers.
@@ -204,7 +204,7 @@ export function ProjectSettingsWindow() {
         {section === 'Physics' && field('Gravity', vec(s.gravity, (g) => update(s, { gravity: g as [number, number, number] })))}
         {section === 'Physics 2D' && field('Gravity', vec(s.gravity_2d, (g) => update(s, { gravity_2d: g as [number, number] })))}
         {section === 'Tags and Layers' && <TagsAndLayers s={s} />}
-        <div className="dim settings-note">Saved to Assets/project.json · applied when Play starts and in builds</div>
+        <div className="dim settings-note">Saved to goat.project.json (project root) · applied when Play starts and in builds</div>
       </div>
     </div>
   );

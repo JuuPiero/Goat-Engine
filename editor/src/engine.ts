@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 // The engine inside the editor (WebAssembly, built from editor/engine): one instance shared by
 // the Scene / Game view, the Hierarchy and the Inspector.
 import init, { EditorEngine } from './engine-pkg/goat_editor_engine.js';
@@ -17,6 +18,15 @@ export async function syncFiles(e: EditorEngine, only?: (key: string) => boolean
   const p = getState().project;
   if (!p) return;
   const files = (await api.search('')).filter((f) => !only || only(f.key));
+  // the project settings live outside assets/ (goat.project.json at the project's root)
+  if (!only) {
+    try {
+      const settings = await invoke<string>('read_project_settings');
+      e.put_file('goat.project.json', new TextEncoder().encode(settings));
+    } catch {
+      /* a project without settings */
+    }
+  }
   await Promise.all(
     files.map(async (f) => {
       const r = await fetch(fileUrl(p.assets, f.key, Date.now()));

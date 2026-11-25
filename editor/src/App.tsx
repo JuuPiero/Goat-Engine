@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 // The editor window, laid out like the PiaEngine editor (Unity's): the main menu bar, the main
 // toolbar (transform tools, Pivot / Local, Play / Pause / Step, Animation / Profiler / Build),
 // dockable panels (dockview: drag tabs to rearrange, split, stack; the layout is remembered) and
@@ -27,6 +28,14 @@ import { frameSelected } from './selection';
 import { componentInfo, displayName } from './panels/ComponentEditor';
 
 const LAYOUT_KEY = 'goat.editor.layout.v2';
+
+/// File ▸ New / Open Project…: back to the Project Hub (Unity closes the project the same way).
+async function backToHub(hash: '#new' | '#open') {
+  if (getState().sceneDirty && !confirm('The open scene has unsaved changes. Leave it?')) return;
+  await invoke('close_project');
+  location.hash = hash;
+  location.reload();
+}
 
 const panel = (el: React.ReactNode, cls = '') => <div className={`g-panel ${cls}`}>{el}</div>;
 const components: Record<string, React.FunctionComponent<IDockviewPanelProps>> = {
@@ -358,6 +367,9 @@ function menus(dv: React.RefObject<DockviewApi | null>, resetLayout: () => void,
     {
       title: 'File',
       items: () => [
+        { label: 'New Project…', action: () => void backToHub('#new') },
+        { label: 'Open Project…', action: () => void backToHub('#open') },
+        '-',
         {
           label: 'New Scene',
           shortcut: 'Ctrl+N',

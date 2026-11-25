@@ -131,9 +131,9 @@ impl Engine {
     /// Runs one frame of `dt` seconds and renders it. Platforms call this once per frame, after
     /// filling [`Engine::input`].
     pub fn frame(&mut self, dt: f32, gfx: &mut dyn GraphicsBackend) {
-        if self.displays.is_empty() {
-            self.displays = gfx.displays();
-        }
+        // every frame: the window / canvas may have been resized, or be another surface (the
+        // editor draws its Scene and Game views on two)
+        self.displays = gfx.displays();
         if let Some(ts) = self.resources.get::<crate::coroutine::TimeScale>() {
             self.time.time_scale = ts.0;
         }
@@ -232,6 +232,7 @@ impl Engine {
 
     /// Draws the current state without running anything (a paused game in the editor).
     pub fn render_only(&mut self, gfx: &mut dyn GraphicsBackend) {
+        self.displays = gfx.displays();
         propagate_transforms(&mut self.world);
         let mut views = extract_views(&self.world, &self.displays, &*gfx, self.view_camera);
         views.iter_mut().for_each(|v| v.time = self.time.elapsed);

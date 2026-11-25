@@ -1,5 +1,5 @@
-// Scene view and Game view panels (Unity's / PiaEngine's), sharing the engine's one canvas
-// (viewport.ts): the panel on screen holds it.
+// Scene view and Game view panels (Unity's / PiaEngine's), each with its own canvas (viewport.ts):
+// both draw every frame, side by side or as tabs.
 //
 // Scene view: bar (2D, Grid, Gizmos, renderer badge, hints), the tools overlay (Q W E R), the view
 // gizmo (click an axis: look along it; the label under it toggles Persp / Iso), editing by mouse:
@@ -15,25 +15,26 @@ import { frameSelected, selectEntities } from '../selection';
 import { afterChange } from '../commands';
 import { exitPrefab, getEngine, saveScene, startPlay, stopPlay } from '../engine';
 import { getState, log, setState, useStore } from '../store';
-import { attach, GAME_SIZES, onViewChange, relayout, viewHost, viewMode, type ViewMode } from '../viewport';
+import { attach, GAME_SIZES, relayout, setVisible, viewMode, type ViewMode } from '../viewport';
 
-/// Keeps the shared canvas in this panel's view while the panel is on screen.
+/// The view's own canvas in this panel; the engine draws it while the panel is on screen.
 function useCanvasHost(api: DockviewPanelApi, m: ViewMode) {
   const host = useRef<HTMLDivElement>(null);
   const [owner, setOwner] = useState(false);
   useEffect(() => {
-    const take = () => host.current && api.isVisible && attach(host.current, m);
-    take();
-    const offs = [api.onDidVisibilityChange((e) => e.isVisible && take()), api.onDidActiveChange((e) => e.isActive && take())];
-    const off = onViewChange((_, h) => setOwner(h === host.current));
-    setOwner(viewHost() === host.current && viewMode() === m);
+    const show = (on: boolean) => {
+      if (on && host.current) attach(host.current, m);
+      else setVisible(m, false);
+      setOwner(on);
+    };
+    show(api.isVisible);
+    const offs = [api.onDidVisibilityChange((e) => show(e.isVisible))];
     return () => {
       offs.forEach((d) => d.dispose());
-      off();
+      setVisible(m, false);
     };
   }, [api, m]);
-  const claim = () => host.current && attach(host.current, m);
-  return { host, owner, claim };
+  return { host, owner };
 }
 
 const TOOLS = [
@@ -49,7 +50,7 @@ const UNDO_LABEL: Record<string, string> = { move: 'Move', rotate: 'Rotate', sca
 const typing = () => ['INPUT', 'TEXTAREA', 'SELECT'].includes((document.activeElement?.tagName ?? '').toUpperCase());
 
 export function SceneView({ api }: { api: DockviewPanelApi }) {
-  const { host, owner, claim } = useCanvasHost(api, 'scene');
+  const { host, owner } = useCanvasHost(api, 'scene');
   const playing = useStore((s) => s.playing);
   const scene = useStore((s) => s.scene);
   const dirty = useStore((s) => s.sceneDirty);
@@ -71,7 +72,7 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
   // keyboard (pointer over the Scene view): Q W E R tools, Z / X handles, F frame
   useEffect(() => {
     const down = (ev: KeyboardEvent) => {
-      if (typing() || viewMode() !== 'scene' || !host.current?.matches(':hover')) return;
+      if (typing() || !host.current?.matches(':hover')) return;
       if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
       const s = getState();
       const k = ev.code;
@@ -195,11 +196,7 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
           onWheel={(ev) => owner && getEngine()?.zoom(ev.deltaY)}
           onContextMenu={(e) => e.preventDefault()}
         >
-          {!owner && (
-            <div className="g-nocamera soft" onClick={claim}>
-              Scene view — click to show it here
-            </div>
-          )}
+
           {error && <div className="g-nocamera">{error}</div>}
         </div>
         {owner && (
@@ -233,7 +230,7 @@ function SceneOverlay({ host, pointer }: { host: React.RefObject<HTMLDivElement 
       const c = ref.current;
       const e = getEngine();
       const view = host.current?.querySelector('canvas:not(.g-overlay)') as HTMLCanvasElement | null;
-      if (!c || !e || !view || viewMode() !== 'scene') return;
+      if (!c || !e || !view) return;
       const wrap = c.parentElement!.getBoundingClientRect();
       const r = view.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
@@ -444,14 +441,14 @@ function ViewGizmo({ view2d }: { view2d: boolean }) {
 }
 
 export function GameView({ api }: { api: DockviewPanelApi }) {
-  const { host, owner, claim } = useCanvasHost(api, 'game');
+  const { host, owner } = useCanvasHost(api, 'game');
   const playing = useStore((s) => s.playing);
   const dual = useStore((s) => s.dual3ds);
   const size = useStore((s) => s.gameSize);
   const zoom = useStore((s) => s.gameZoom);
   const showStats = useStore((s) => s.gameStats);
   const stats = useStore((s) => s.stats);
-  useEffect(() => relayout(), [dual, size, zoom, owner]);
+  useEffect(() => relayout('game'), [dual, size, zoom, owner]);
 
   // keyboard: the 3DS buttons while playing (when the Game view holds the canvas)
   useEffect(() => {
@@ -512,11 +509,7 @@ export function GameView({ api }: { api: DockviewPanelApi }) {
         )}
       </div>
       <div ref={host} className={`g-viewport g-gameview${playing ? ' playing' : ''}`} tabIndex={0}>
-        {!owner && (
-          <div className="g-nocamera soft" onClick={claim}>
-            Game view — click to show it here
-          </div>
-        )}
+
         {owner && showStats && <div className="g-stats">{stats.replace(/ · /g, '\n')}</div>}
       </div>
     </div>

@@ -1,7 +1,7 @@
 @echo off
 rem GoatEngine - run.
 rem
-rem   run.bat                         the editor on the sample project (games\hello)
+rem   run.bat                         the editor: the Project Hub (recent projects, examples, New project)
 rem   run.bat editor [project-dir]    the editor on a project (a folder holding assets\)
 rem   run.bat desktop [args...]       the game in a desktop window (e.g. run.bat desktop --layout 3ds)
 rem   run.bat 3ds                     the game in the 3DS emulator set in goat.local.toml (citra = ...)

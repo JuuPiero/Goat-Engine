@@ -246,7 +246,21 @@ struct PipelineKey {
     shader: u32,
 }
 
+/// What belongs to one drawing surface (window / canvas). The active one lives in the backend's
+/// fields; the others wait in `slots` (the editor's Scene and Game views are two canvases).
+struct SurfaceSlot {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    depth: wgpu::TextureView,
+    layout: DisplayLayout,
+    post_targets: Option<PostTargets>,
+}
+
 pub struct WgpuBackend {
+    instance: wgpu::Instance,
+    /// Surfaces by id; the active one is `None` here (its parts are the fields below).
+    slots: Vec<Option<SurfaceSlot>>,
+    active: usize,
     device: wgpu::Device,
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
@@ -309,6 +323,7 @@ impl WgpuBackend {
             _ => wgpu::Backends::PRIMARY,
         };
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor { backends, ..Default::default() });
+        let instance_keep = instance.clone();
         let surface = instance.create_surface(target).map_err(|e| GfxError::Backend(format!("surface: {e}")))?;
         let adapter = (instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -492,6 +507,9 @@ impl WgpuBackend {
             queue,
             surface,
             config,
+            instance: instance_keep,
+            slots: vec![None],
+            active: 0,
             adapter_name,
             layout,
             depth,
@@ -537,6 +555,39 @@ impl WgpuBackend {
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
         self.depth = make_depth(&self.device, width, height);
+    }
+
+    /// Another drawing surface (a second canvas / window) sharing every GPU resource; returns its
+    /// id (the first surface is 0). Draw on it after [`use_surface`](Self::use_surface).
+    pub fn add_surface(&mut self, target: impl Into<wgpu::SurfaceTarget<'static>>, width: u32, height: u32, layout: DisplayLayout) -> Result<usize, GfxError> {
+        let surface = self.instance.create_surface(target).map_err(|e| GfxError::Backend(format!("surface: {e}")))?;
+        let config = wgpu::SurfaceConfiguration { width: width.max(1), height: height.max(1), ..self.config.clone() };
+        surface.configure(&self.device, &config);
+        let depth = make_depth(&self.device, config.width, config.height);
+        self.slots.push(Some(SurfaceSlot { surface, config, depth, layout, post_targets: None }));
+        Ok(self.slots.len() - 1)
+    }
+
+    /// Makes surface `id` the one `render`, `resize`, `set_layout` and `displays` work on.
+    pub fn use_surface(&mut self, id: usize) {
+        if id == self.active || self.slots.get(id).is_none_or(|s| s.is_none()) {
+            return;
+        }
+        let incoming = self.slots[id].take().expect("surface slot");
+        let outgoing = SurfaceSlot {
+            surface: std::mem::replace(&mut self.surface, incoming.surface),
+            config: std::mem::replace(&mut self.config, incoming.config),
+            depth: std::mem::replace(&mut self.depth, incoming.depth),
+            layout: std::mem::replace(&mut self.layout, incoming.layout),
+            post_targets: std::mem::replace(&mut self.post_targets, incoming.post_targets),
+        };
+        self.slots[self.active] = Some(outgoing);
+        self.active = id;
+    }
+
+    /// The surface `render` draws on.
+    pub fn active_surface(&self) -> usize {
+        self.active
     }
 
     /// Saves the next rendered frame as a PNG.

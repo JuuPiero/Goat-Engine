@@ -757,11 +757,16 @@ impl Plugin for AssetsPlugin {
         }
         // project settings (Unity's ProjectSettings + Build Settings)
         if ctx.resources.get::<goat_runtime::ProjectSettings>().is_none() {
-            let text = ctx.resources.get::<AssetServer>().and_then(|a| a.io.read_string("project.json").ok());
+            // goat.project.json: at the root of a build's assets, next to a project's assets/
+            // folder (players run from the sources), or the older assets/project.json
+            let file = goat_runtime::settings::PROJECT_FILE;
+            let text = ctx.resources.get::<AssetServer>().and_then(|a| {
+                [file.to_string(), format!("../{file}"), "project.json".to_string()].into_iter().find_map(|k| a.io.read_string(&k).ok())
+            });
             if let Some(text) = text {
                 match serde_json::from_str::<goat_runtime::ProjectSettings>(&text) {
                     Ok(s) => ctx.resources.insert(s),
-                    Err(e) => goat_core::warn!("project.json: {e}"),
+                    Err(e) => goat_core::warn!("{file}: {e}"),
                 }
             }
         }

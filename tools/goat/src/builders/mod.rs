@@ -80,6 +80,10 @@ pub(crate) fn game_assets(config: &Config) -> std::path::PathBuf {
 pub(crate) fn stage_assets(config: &Config, dest: &Path, target: goat_assets::bake::Target) -> Result<(), String> {
     let src = game_assets(config);
     copy_dir(&src, dest)?;
+    // the project settings (goat.project.json next to assets/) ship at the root of the assets
+    if let Some(settings) = src.parent().map(|p| p.join(goat_runtime_settings_file())).filter(|p| p.is_file()) {
+        std::fs::copy(&settings, dest.join(goat_runtime_settings_file())).map_err(|e| format!("{}: {e}", settings.display()))?;
+    }
     let mut files = Vec::new();
     walk(dest, &mut files);
     if files.iter().any(|f| f.extension().is_some_and(|e| e == "cs")) {
@@ -217,4 +221,9 @@ pub(crate) fn exe(name: &str) -> String {
     } else {
         name.to_string()
     }
+}
+
+/// `goat.project.json` (goat-runtime's `PROJECT_FILE`).
+fn goat_runtime_settings_file() -> &'static str {
+    "goat.project.json"
 }

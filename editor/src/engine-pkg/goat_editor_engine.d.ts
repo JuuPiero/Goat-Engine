@@ -18,6 +18,11 @@ export class EditorEngine {
      * Apply All: returns `{ key, text }` (the prefab file to write).
      */
     apply_prefab(id: string): string;
+    /**
+     * The Game view's own canvas (Unity: Scene and Game views are separate and can show side by
+     * side). Without it the one canvas shows whichever view `set_scene_view` picks.
+     */
+    attach_game_canvas(canvas: HTMLCanvasElement): void;
     backend_name(): string;
     /**
      * Runs an Inspector button of a component (e.g. NavMeshSurface ▸ Bake); returns its message.
@@ -122,7 +127,14 @@ export class EditorEngine {
     redo_label(): string | undefined;
     remove_component(id: string, name: string): void;
     rename(id: string, name: string): void;
+    /**
+     * The Scene view's canvas was resized.
+     */
     resize(width: number, height: number): void;
+    /**
+     * The Game view's canvas was resized.
+     */
+    resize_game(width: number, height: number): void;
     /**
      * Revert All: returns the new root id.
      */
@@ -194,6 +206,10 @@ export class EditorEngine {
     set_tool_handles(local: boolean, center: boolean, snap_move: number, snap_rotate: number, snap_scale: number): void;
     set_transform(id: string, json: string): void;
     /**
+     * Which views are on screen (hidden dock tabs aren't drawn).
+     */
+    set_views(scene: boolean, game: boolean): void;
+    /**
      * `{ name, kind, properties, state, … }` or `{ errors }` of a `.shader` file.
      */
     shader_info(key: string): string;
@@ -240,6 +256,7 @@ export interface InitOutput {
     readonly editorengine_anim_preview: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly editorengine_anim_preview_end: (a: number) => void;
     readonly editorengine_apply_prefab: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly editorengine_attach_game_canvas: (a: number, b: any) => [number, number];
     readonly editorengine_backend_name: (a: number) => [number, number];
     readonly editorengine_component_action: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly editorengine_component_info: (a: number) => [number, number];
@@ -278,6 +295,7 @@ export interface InitOutput {
     readonly editorengine_remove_component: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_rename: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_resize: (a: number, b: number, c: number) => void;
+    readonly editorengine_resize_game: (a: number, b: number, c: number) => void;
     readonly editorengine_revert_prefab: (a: number, b: number, c: number) => [number, number, number, number];
     readonly editorengine_save_scene: (a: number) => [number, number, number, number];
     readonly editorengine_scene: (a: number) => [number, number];
@@ -302,6 +320,7 @@ export interface InitOutput {
     readonly editorengine_set_tag: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_set_tool_handles: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly editorengine_set_transform: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly editorengine_set_views: (a: number, b: number, c: number) => void;
     readonly editorengine_shader_info: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_stats: (a: number) => [number, number];
     readonly editorengine_step: (a: number) => void;
