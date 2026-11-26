@@ -781,6 +781,7 @@ impl ScriptHost for JsHost {
             let object = class.construct(&[], None, &mut h.ctx).map_err(|e| h.describe(e))?;
             let handle = h.handles.borrow_mut().of(entity);
             object.set(js_string!("_h"), JsValue::from(handle), true, &mut h.ctx).map_err(|e| h.describe(e))?;
+            object.set(js_string!("_src"), JsValue::from(js_string!(src)), true, &mut h.ctx).map_err(|e| h.describe(e))?;
             if !props.is_null() {
                 let p = JsValue::from_json(props, &mut h.ctx).map_err(|e| h.describe(e))?;
                 if let Some(apply) = h.apply_props.clone() {

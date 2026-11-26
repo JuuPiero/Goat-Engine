@@ -272,15 +272,122 @@ fn application(api: &mut Api, _: Entity, _: &[Value]) -> Result<Value, String> {
         "Linux"
     };
     let editor = api.ctx.resources.get::<EditorMarker>().is_some();
-    Ok(json!({ "platform": platform, "editor": editor }))
+    let s = api.ctx.resources.get::<goat_runtime::ProjectSettings>();
+    let (name, version) = s.map(|s| (s.name.clone(), s.version.clone())).unwrap_or_default();
+    Ok(json!({ "platform": platform, "editor": editor, "productName": name, "version": version }))
 }
 
 /// Present while the game runs inside the editor (Application.isEditor).
 #[derive(Default)]
 pub struct EditorMarker;
 
+/// `[names, includeInactive]` → the objects having one of these components (Unity's
+/// FindObjectsByType), in creation order.
+fn find_with_component(api: &mut Api, _: Entity, a: &[Value]) -> Result<Value, String> {
+    let names: Vec<String> = a.first().and_then(Value::as_array).map(|l| l.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let inactive = a.get(1).and_then(Value::as_bool).unwrap_or(false);
+    let mut list: Vec<Entity> = api
+        .ctx
+        .world
+        .query::<()>()
+        .without::<&goat_runtime::DontSave>()
+        .iter()
+        .map(|(e, _)| e)
+        .filter(|e| inactive || api.ctx.world.get::<&goat_runtime::InactiveInHierarchy>(*e).is_err())
+        .collect();
+    list.sort_by_key(|e| e.id());
+    let found: Vec<Value> = list.into_iter().filter(|e| names.iter().any(|n| api.has_component(*e, n))).map(crate::entity_json).collect();
+    Ok(Value::Array(found))
+}
+
+/// Seconds of a high-resolution clock (ProfilerMarker / Stopwatch-like timings).
+fn profiler_now(_: &mut Api, _: Entity, _: &[Value]) -> Result<Value, String> {
+    Ok(json!(goat_runtime::profiler::now()))
+}
+/// `[name, seconds]`: adds a script's sample to this frame's profiler section (Profiler window).
+fn profiler_sample(api: &mut Api, _: Entity, a: &[Value]) -> Result<Value, String> {
+    let name = a.first().and_then(Value::as_str).unwrap_or("Script");
+    let s = a.get(1).and_then(Value::as_f64).unwrap_or(0.0);
+    api.ctx.resources.get_or_default::<goat_runtime::Profiler>().add(name, s);
+    Ok(Value::Null)
+}
+/// `{ drawCalls, triangles, sections: { name: ms of the last frame } }` (RenderStats, ProfilerRecorder).
+fn profiler_stats(api: &mut Api, _: Entity, _: &[Value]) -> Result<Value, String> {
+    let p = api.ctx.resources.get_or_default::<goat_runtime::Profiler>();
+    Ok(json!({ "drawCalls": p.draw_calls, "triangles": p.triangles, "sections": p.last }))
+}
+
+/// `[code]` → bits: 1 held, 2 went down, 4 went up (Input.GetKey / GetKeyDown / GetKeyUp).
+fn input_key(api: &mut Api, _: Entity, a: &[Value]) -> Result<Value, String> {
+    let code = a.first().and_then(Value::as_str).unwrap_or("");
+    let i = api.ctx.input;
+    Ok(json!(i.key(code) as u8 | (i.key_pressed(code) as u8) << 1 | (i.key_released(code) as u8) << 2))
+}
+
+/// `{ mouse: [bits per button], scroll, anyKey, anyKeyDown, text }` (Input.GetMouseButton...).
+fn input_state(api: &mut Api, _: Entity, _: &[Value]) -> Result<Value, String> {
+    let i = api.ctx.input;
+    let mouse: Vec<u8> = (0..3).map(|b| i.mouse_button(b) as u8 | (i.mouse_pressed(b) as u8) << 1 | (i.mouse_released(b) as u8) << 2).collect();
+    let any_button = goat_runtime::Button::ALL.iter().any(|b| i.held(*b));
+    let any_button_down = goat_runtime::Button::ALL.iter().any(|b| i.pressed(*b));
+    Ok(json!({
+        "mouse": mouse,
+        "scroll": [i.scroll.x, i.scroll.y],
+        "anyKey": !i.keys.is_empty() || any_button || i.mouse_buttons.iter().any(|b| *b),
+        "anyKeyDown": i.any_key_pressed() || any_button_down || (0..3).any(|b| i.mouse_pressed(b)),
+        "text": i.text,
+    }))
+}
+
+/// `[src, on?]` (entity): the `enabled` of the entity's script `src` (Behaviour.enabled); with `on`,
+/// sets it (OnEnable / OnDisable follow at the next update).
+fn script_enabled(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
+    let src = a.first().and_then(Value::as_str).unwrap_or("").to_string();
+    let mut s = api.ctx.world.get::<&mut crate::Script>(e).map_err(|_| "no Script on this object".to_string())?;
+    let r = s.0.iter_mut().find(|r| r.src == src).ok_or("no such script on this object")?;
+    if let Some(on) = a.get(1).and_then(Value::as_bool) {
+        r.enabled = on;
+    }
+    Ok(Value::Bool(r.enabled))
+}
+
+/// (entity, `[parent | null]`) → a copy of the object and its children (Unity's Instantiate of a
+/// scene object), named "<name>(Clone)"; scripts start again from their saved values.
+fn clone_object(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
+    let parent = a.first().and_then(crate::entity_arg).filter(|p| api.ctx.world.contains(*p));
+    let registry = api.ctx.resources.take::<goat_scene::SceneRegistry>().ok_or("no scene registry")?;
+    let result = (|| {
+        let assets = api.ctx.resources.get_mut::<goat_assets::AssetServer>().ok_or("no asset server")?;
+        let file = goat_scene::save_entities(api.ctx.world, assets, &registry, &[e]);
+        goat_scene::spawn_file(api.ctx.world, api.ctx.gfx, assets, &registry, &file, "instantiate", parent).map_err(|e| e.to_string())
+    })();
+    api.ctx.resources.put_back(registry);
+    let roots = result?;
+    let root = *roots.first().ok_or("nothing was copied")?;
+    if let Ok(mut n) = api.ctx.world.get::<&mut goat_runtime::Name>(root) {
+        n.0 = format!("{}(Clone)", n.0);
+    }
+    Ok(crate::entity_json(root))
+}
+
+/// (entity) → the names of the components it has (getComponent of components without fields,
+/// getComponents).
+fn component_names(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
+    let names: Vec<String> = match api.ctx.resources.get::<goat_scene::SceneRegistry>() {
+        Some(r) => r.components().iter().map(|c| c.name.to_string()).collect(),
+        None => Vec::new(),
+    };
+    Ok(Value::Array(names.into_iter().filter(|n| api.has_component(e, n)).map(Value::String).collect()))
+}
+
 pub fn register(x: &mut Extensions) {
     x.add("Application.info", application);
+    x.add("GameObject.componentNames", component_names);
+    x.add("Input.key", input_key).add("Input.state", input_state);
+    x.add("Script.enabled", script_enabled);
+    x.add("GameObject.clone", clone_object);
+    x.add("Profiler.now", profiler_now).add("Profiler.sample", profiler_sample).add("Profiler.stats", profiler_stats);
+    x.add("GameObject.findWithComponent", find_with_component);
     x.add("Transform.world", world)
         .add("Transform.setWorldPosition", set_world_position)
         .add("Transform.setWorldRotation", set_world_rotation)

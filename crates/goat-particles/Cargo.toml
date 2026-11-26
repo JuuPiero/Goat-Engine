@@ -15,12 +15,16 @@ hecs.workspace = true
 serde.workspace = true
 goat-scene = { workspace = true, optional = true }
 goat-physics = { workspace = true, optional = true }
+goat-script = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [features]
 # ParticleSystem in scene files
 scene = ["dep:goat-scene"]
 # particles collide with goat-physics colliders
 physics = ["dep:goat-physics"]
+# ParticleSystem.* calls for scripts (play / stop / clear / emit / particleCount)
+script = ["dep:goat-script", "dep:serde_json"]
 
 [dev-dependencies]
 goat-gfx.workspace = true

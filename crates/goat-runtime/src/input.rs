@@ -66,6 +66,15 @@ pub struct Input {
     pub text: String,
     /// The platform asked the game to quit (window closed, HOME → close).
     pub quit_requested: bool,
+    /// Physical keys held, by the web's `KeyboardEvent.code` names ("KeyA", "Space", "ArrowUp",
+    /// "ShiftLeft", "Digit1"... — winit's KeyCode names are the same). Empty on the 3DS.
+    pub keys: std::collections::BTreeSet<String>,
+    keys_prev: std::collections::BTreeSet<String>,
+    /// Mouse buttons held: left, right, middle (a touch is the left button).
+    pub mouse_buttons: [bool; 3],
+    mouse_prev: [bool; 3],
+    /// Mouse wheel this frame (y > 0 = away from the user, Unity's mouseScrollDelta).
+    pub scroll: Vec2,
 }
 
 impl Input {
@@ -74,6 +83,34 @@ impl Input {
         self.prev = self.held;
         self.pointer_prev = self.pointer_down;
         self.text.clear();
+        if self.keys_prev != self.keys {
+            self.keys_prev = self.keys.clone();
+        }
+        self.mouse_prev = self.mouse_buttons;
+        self.scroll = Vec2::ZERO;
+    }
+    /// A physical key is held (`code`: "KeyA", "Space"...).
+    pub fn key(&self, code: &str) -> bool {
+        self.keys.contains(code)
+    }
+    pub fn key_pressed(&self, code: &str) -> bool {
+        self.keys.contains(code) && !self.keys_prev.contains(code)
+    }
+    pub fn key_released(&self, code: &str) -> bool {
+        !self.keys.contains(code) && self.keys_prev.contains(code)
+    }
+    /// Keys that went down this frame (Input.anyKeyDown).
+    pub fn any_key_pressed(&self) -> bool {
+        self.keys.iter().any(|k| !self.keys_prev.contains(k))
+    }
+    pub fn mouse_button(&self, i: usize) -> bool {
+        self.mouse_buttons.get(i).copied().unwrap_or(false)
+    }
+    pub fn mouse_pressed(&self, i: usize) -> bool {
+        i < 3 && self.mouse_buttons[i] && !self.mouse_prev[i]
+    }
+    pub fn mouse_released(&self, i: usize) -> bool {
+        i < 3 && !self.mouse_buttons[i] && self.mouse_prev[i]
     }
     /// Platforms: sets a button's state for this frame.
     pub fn set(&mut self, b: Button, down: bool) {

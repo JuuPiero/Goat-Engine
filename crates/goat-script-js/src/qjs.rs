@@ -363,6 +363,7 @@ impl ScriptHost for QjsHost {
             let object: Object = class.construct(()).catch(ctx).map_err(|e| e.to_string())?;
             let handle = h.handles.borrow_mut().of(entity);
             object.set("_h", handle).map_err(|e| e.to_string())?;
+            object.set("_src", src).map_err(|e| e.to_string())?;
             if !props.is_null() {
                 let apply: Function = h.goat(ctx)?.get("__applyProps").map_err(|e| e.to_string())?;
                 let p = to_js(ctx, props).map_err(|e| e.to_string())?;

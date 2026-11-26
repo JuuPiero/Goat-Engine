@@ -29,7 +29,7 @@ pub use scenes::{dont_destroy_on_load, LoadedScene, LoadedScenes, SceneMember, D
 
 pub use prefab::{apply_overrides, find_in_instance, merge_overrides, resolve_file, set_track_overrides, PrefabBaseline, PrefabOverride, PrefabSource};
 
-pub use registry::{load_serde, remove_typed, save_serde, serde_codec, ActionFn, ComponentCodec, ComponentInfo, FieldHint, LoadContext, SaveContext, SceneRegistry};
+pub use registry::{load_serde, load_serde_keep, remove_typed, save_serde, serde_codec, serde_codec_keep, ActionFn, KeepRuntimeState, ComponentCodec, ComponentInfo, FieldHint, LoadContext, SaveContext, SceneRegistry};
 
 use std::collections::{HashMap, HashSet};
 

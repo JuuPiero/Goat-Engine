@@ -385,6 +385,31 @@ export default class LevelManager extends Behaviour {
 ### Decorator cho field (kiểu Odin / attribute của Unity)
 
 `@field(Type)` (TextAsset, JsonAsset, BufferAsset, Texture, Material, một lớp ScriptableObject; `[Type]` = danh sách), `@hideInInspector` (vẫn lưu), `@nonSerialized` (không lưu, không hiện), `@header('Tiêu đề')`, `@tooltip('...')`, `@range(min, max)` (thanh trượt), `@readOnly`, `@showIf('field', giá trị?)` / `@hideIf(...)`, `@button('Nhãn')` trên method (nút trong Inspector: lúc chưa Play chạy trên giá trị đã lưu rồi lưu lại thay đổi; khi Play gọi trên object đang chạy), `@contextMenu('Tên')` (mục trong menu ⋮ của component).
+### Component kiểu Unity trong script (getComponent(Rigidbody)...)
+
+Mỗi component của engine có lớp riêng, tên và thành viên như Unity (camelCase):
+
+```ts
+import { Behaviour, Rigidbody, Light, ParticleSystem, LineRenderer, Image, Slider, ForceMode, Vector3 } from "goat";
+export default class Demo extends Behaviour {
+  start() {
+    this.getComponent(Rigidbody)!.addForce(new Vector3(0, 5, 0), ForceMode.Impulse);
+    const light = this.gameObject.getComponentInChildren(Light)!; light.intensity = 2;
+    const ps = this.getComponent(ParticleSystem)!; ps.stop(); ps.emit(20); ps.startSpeed = 4;
+    const line = this.gameObject.addComponent(LineRenderer); line.positionCount = 2; line.setPosition(1, Vector3.up);
+    this.getComponent(Slider)?.onValueChanged.addListener((v) => {});
+  }
+}
+```
+
+- Có: Rigidbody / Rigidbody2D, Collider / BoxCollider / SphereCollider / CapsuleCollider / MeshCollider, các Collider2D, CharacterController, ConstantForce(2D), Joint(2D), các Effector2D, Light (Directional / Point / Spot), MeshRenderer / MeshFilter, SpriteRenderer, SpriteMask, TextMesh, LineRenderer, TrailRenderer, ParticleSystem, PostEffect, probe, NavMesh*, Camera, Animator, Animation, AudioSource / AudioListener, UI (Canvas, RectTransform, Image, RawImage, Text, Button, Toggle, Slider, Scrollbar, InputField, Dropdown, CanvasGroup, ScrollRect, layout, Mask, Outline / Shadow, EventSystem).
+- `getComponent` / `getComponents` / `tryGetComponent` / `getComponentInChildren` / `getComponentInParent` / `addComponent`, `GameObject.destroy(component)`, `GameObject.findObjectOfType` / `findObjectsByType` (cả lớp script), `getComponent(MyScript)` trả về instance script đang chạy. `getComponent("Tên")` (chuỗi) vẫn trả JSON như trước.
+- `GameObject.instantiate(gameObjectHoặcComponent)` sao chép object trong scene; `GameObject.createPrimitive(PrimitiveType.Sphere)`; `sendMessage` / `broadcastMessage` / `sendMessageUpwards`.
+- Vòng đời như Unity: `awake`, `onEnable`, `start`, `update`..., `onDisable`, `onDestroy`; `this.enabled = false` dừng Update (gọi onDisable) mà giữ nguyên trạng thái script.
+- **Input** kiểu Unity: `Input.getKey(KeyCode.Space)` / `getKeyDown("a")`, `getAxis("Horizontal")`, `getButton("Jump")` / `"Fire1"`, `mousePosition` (pixel, gốc trên trái — dùng thẳng cho `camera.screenPointToRay`), `getMouseButton(0)`, `mouseScrollDelta`, `touchCount` / `getTouch(0)`, `anyKeyDown`, `inputString`. Trong editor, chuột / bàn phím ở Game view đi vào game.
+- **EventSystem kéo thả**: `onBeginDrag`, `onDrag`, `onEndDrag`, `onDrop`, `onInitializePotentialDrag` (cần PhysicsRaycaster / Physics2DRaycaster trên camera), `eventData.delta` / `pressPosition` / `pointerDrag`.
+- `Screen.safeArea` / `dpi` / `currentResolution`, `Application.productName` / `version` / `targetFrameRate`, `Time.smoothDeltaTime`, `Profiler.beginSample` / `ProfilerMarker` / `ProfilerRecorder` (hiện trong cửa sổ Profiler), `RenderStats.drawCalls`, `Sprite.create(texture)`, `Graphics.drawTexture(rect, texture)`, `onRenderImage(src, dst)` trên script của camera.
+- Decorator thêm: `@serializable` (struct lồng trong field, danh sách struct trong Inspector), `@createAssetMenu({ menuName, fileName })` (Project ▸ Create ▸ …), `@boxGroup` / `@foldoutGroup` / `@horizontalGroup`, `@space`, `@textArea`, `@labelText`, `@infoBox`.
 ## Text, physics, audio
 
 Chữ có thể có viền (`.with_outline(màu, 0.06)`), bóng (`.with_shadow(màu, [0.05, 0.05])`) và rich text (`.rich()`: `<color=#ff8800>`, `<size=1.5>`, `<b>`, `<i>`). Trong scene, các key tương ứng là `rich` / `outline` / `shadow` của `Text` và `UiText`.

@@ -40,6 +40,8 @@ pub struct Profiler {
     pub keep_history: usize,
     /// Recent frames, oldest first: raw milliseconds per section (+ `draw_calls`).
     pub history: std::collections::VecDeque<FrameSample>,
+    /// The last finished frame's milliseconds per section (ProfilerRecorder.lastValue).
+    pub last: BTreeMap<String, f32>,
 }
 
 /// One frame of [`Profiler::history`].
@@ -63,8 +65,17 @@ impl Profiler {
                 self.history.pop_front();
             }
         }
+        for v in self.last.values_mut() {
+            *v = 0.0;
+        }
         for (k, v) in std::mem::take(&mut self.frame) {
             let ms = (v * 1000.0) as f32;
+            match self.last.get_mut(&k) {
+                Some(l) => *l = ms,
+                None => {
+                    self.last.insert(k.clone(), ms);
+                }
+            }
             let s = self.sections.entry(k).or_insert(ms);
             *s += (ms - *s) * 0.1;
         }

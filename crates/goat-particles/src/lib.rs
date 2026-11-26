@@ -14,6 +14,9 @@ pub mod modules;
 
 pub use modules::{Collision, Curve, Gradient, SubEmitter, SubEmitterEvent, TextureSheet, Trail};
 
+#[cfg(feature = "script")]
+pub mod script;
+
 use goat_assets::AssetServer;
 use goat_core::math::{Quat, Vec3};
 use goat_core::Color;
@@ -201,6 +204,17 @@ impl ParticleSystem {
     pub fn with_seed(mut self, seed: u32) -> Self {
         self.state.rng = seed.max(1);
         self
+    }
+
+    /// The live particles and emission state of `old` (its settings were edited while it runs).
+    pub fn take_runtime_state(&mut self, old: ParticleSystem) {
+        self.particles = old.particles;
+        self.state = old.state;
+    }
+
+    /// Seconds into the current cycle (Unity's ParticleSystem.time).
+    pub fn time(&self) -> f32 {
+        self.state.time
     }
 
     /// Restarts the cycle (and clears the particles).
@@ -465,7 +479,9 @@ impl Default for ParticlePlugin {
 impl Plugin for ParticlePlugin {
     fn build(&mut self, _ctx: &mut Context) {
         #[cfg(feature = "scene")]
-        goat_scene::registry(_ctx).component(goat_scene::serde_codec::<ParticleSystem>("ParticleSystem"));
+        goat_scene::registry(_ctx).component(goat_scene::serde_codec_keep::<ParticleSystem>("ParticleSystem"));
+        #[cfg(feature = "script")]
+        script::register(goat_script::extensions(_ctx));
     }
 
     fn update(&mut self, ctx: &mut Context) {
@@ -661,5 +677,12 @@ mod tests {
         let p = Particle { age: 0.5, lifetime: 1.0, ..sparks.particles[0].clone() };
         let (c, s) = g.look(&p);
         assert!((c.g - 0.5).abs() < 1e-5 && (s - 1.0).abs() < 1e-5);
+    }
+}
+
+#[cfg(feature = "scene")]
+impl goat_scene::KeepRuntimeState for ParticleSystem {
+    fn keep_runtime_state(&mut self, old: Self) {
+        self.take_runtime_state(old);
     }
 }

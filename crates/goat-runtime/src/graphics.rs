@@ -61,6 +61,31 @@ pub struct DrawGizmos {
     pub selected: Vec<Entity>,
 }
 
+/// Where a blit draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlitDest {
+    Texture(TextureId),
+    /// The Main display.
+    Screen,
+    /// A camera's own destination (its display + viewport, or its target texture): onRenderImage's
+    /// `dst`.
+    Camera(Entity),
+}
+
+/// A texture drawn over a destination with a material (`Graphics.Blit`) or into a screen
+/// rectangle (`Graphics.DrawTexture`).
+#[derive(Clone, Copy, Debug)]
+pub struct Blit {
+    pub source: TextureId,
+    pub dest: BlitDest,
+    pub material: Option<MaterialId>,
+    /// Pixels of the destination from its top-left (x, y, width, height); None = all of it.
+    pub rect: Option<[f32; 4]>,
+    /// Alpha blended (DrawTexture) instead of replacing.
+    pub alpha: bool,
+    pub color: Color,
+}
+
 /// A mesh drawn for one frame (`Graphics.DrawMesh`).
 #[derive(Clone, Copy, Debug)]
 pub struct QueuedDraw {
@@ -117,7 +142,10 @@ pub struct GraphicsQueue {
     pub draws: Vec<QueuedDraw>,
     debug_lines: Vec<DebugLine>,
     prims: Vec<Prim>,
-    blits: Vec<(TextureId, Option<TextureId>, Option<MaterialId>)>,
+    blits: Vec<Blit>,
+    /// Cameras whose scripts define onRenderImage: their source texture (drawn into this frame).
+    image_effects: HashMap<Entity, (TextureId, u32, u32)>,
+    image_effects_wanted: Vec<Entity>,
     now: f32,
     // GL state
     gl_mode: Option<GlMode>,
@@ -132,7 +160,7 @@ pub struct GraphicsQueue {
     meshes_last: usize,
     line_materials: [Option<MaterialId>; 2],
     quad: Option<MeshId>,
-    blit_materials: HashMap<(Option<MaterialId>, TextureId), MaterialId>,
+    blit_materials: HashMap<(Option<MaterialId>, TextureId, bool), MaterialId>,
     post_targets: HashMap<(Entity, usize), (TextureId, u32, u32)>,
 }
 
@@ -149,6 +177,7 @@ impl GraphicsQueue {
         self.draws.clear();
         self.prims.clear();
         self.blits.clear();
+        self.image_effects_wanted.clear();
         self.debug_lines.retain(|l| l.until > now);
         self.gl_mode = None;
         self.gl_verts.clear();
@@ -184,7 +213,37 @@ impl GraphicsQueue {
 
     /// `Graphics.Blit(source, dest, material)`: dest None = the screen (Main display).
     pub fn blit(&mut self, source: TextureId, dest: Option<TextureId>, material: Option<MaterialId>) {
-        self.blits.push((source, dest, material));
+        let dest = match dest {
+            Some(t) => BlitDest::Texture(t),
+            None => BlitDest::Screen,
+        };
+        self.blits.push(Blit { source, dest, material, rect: None, alpha: false, color: Color::WHITE });
+    }
+
+    /// Any blit (see [`Blit`]): `Graphics.Blit` into a camera's destination (onRenderImage), or
+    /// `Graphics.DrawTexture` (a screen rectangle, alpha blended, tinted).
+    pub fn blit_with(&mut self, b: Blit) {
+        self.blits.push(b);
+    }
+
+    /// onRenderImage: this camera draws into a texture this frame (made / resized here); returns it.
+    pub fn image_effect_source(&mut self, gfx: &mut dyn GraphicsBackend, camera: Entity, width: u32, height: u32) -> Option<TextureId> {
+        let (w, h) = (width.max(1), height.max(1));
+        let t = match self.image_effects.get(&camera) {
+            Some((t, tw, th)) if (*tw, *th) == (w, h) => *t,
+            old => {
+                if let Some((t, _, _)) = old {
+                    gfx.destroy_texture(*t);
+                }
+                let t = gfx.create_render_target(&RenderTargetDesc { width: w, height: h, depth: true }).ok()?;
+                self.image_effects.insert(camera, (t, w, h));
+                t
+            }
+        };
+        if !self.image_effects_wanted.contains(&camera) {
+            self.image_effects_wanted.push(camera);
+        }
+        Some(t)
     }
 
     // ------------------------------------------------------------------ GL
@@ -285,7 +344,11 @@ impl GraphicsQueue {
     /// The material drawing `source` over a view: the user's material (its look, `source` as
     /// its texture) or a plain copy.
     fn blit_material(&mut self, gfx: &mut dyn GraphicsBackend, material: Option<MaterialId>, source: TextureId) -> Option<MaterialId> {
-        if let Some(m) = self.blit_materials.get(&(material, source)) {
+        self.blit_material_with(gfx, material, source, false)
+    }
+
+    fn blit_material_with(&mut self, gfx: &mut dyn GraphicsBackend, material: Option<MaterialId>, source: TextureId, alpha: bool) -> Option<MaterialId> {
+        if let Some(m) = self.blit_materials.get(&(material, source, alpha)) {
             return Some(*m);
         }
         let base = material.and_then(|m| gfx.material_desc(m)).unwrap_or(MaterialDesc { lighting: LightingModel::Unlit, ..Default::default() });
@@ -295,9 +358,10 @@ impl GraphicsQueue {
             Some(old) => slots.iter_mut().filter(|s| **s == Some(old)).for_each(|s| *s = Some(source)),
             None => slots[0] = Some(source),
         }
-        let desc = MaterialDesc { texture: Some(source), shader_textures: slots, cull: CullMode::None, depth_test: false, depth_write: false, fog: false, next_pass: None, ..base };
+        let blend = if alpha { BlendMode::Alpha } else { base.blend };
+        let desc = MaterialDesc { texture: Some(source), shader_textures: slots, cull: CullMode::None, depth_test: false, depth_write: false, fog: false, next_pass: None, blend, ..base };
         let id = gfx.create_material(&desc).ok()?;
-        self.blit_materials.insert((material, source), id);
+        self.blit_materials.insert((material, source, alpha), id);
         Some(id)
     }
 }
@@ -346,9 +410,27 @@ fn overlay_view(display: Display, aspect: f32, depth: i32, items: Vec<DrawItem>,
 
 /// A view drawing `material` over a whole destination (blits, post effects).
 fn blit_view(display: Display, viewport: Viewport, target: Option<TextureId>, aspect: f32, depth: i32, quad: MeshId, material: MaterialId) -> RenderView {
+    blit_view_tinted(display, viewport, target, aspect, depth, quad, material, Color::WHITE)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blit_view_tinted(display: Display, viewport: Viewport, target: Option<TextureId>, aspect: f32, depth: i32, quad: MeshId, material: MaterialId, color: Color) -> RenderView {
     // the quad (1 × 1) scaled to cover the orthographic view (height 1, width = aspect)
     let model = Mat4::from_translation(Vec3::new(0.0, 0.0, -1.0)) * Mat4::from_scale(Vec3::new(aspect, 1.0, 1.0));
-    RenderView { viewport, ..overlay_view(display, aspect, depth, vec![DrawItem::new(quad, material, model)], target) }
+    let item = DrawItem { color, ..DrawItem::new(quad, material, model) };
+    RenderView { viewport, clear_depth: false, ..overlay_view(display, aspect, depth, vec![item], target) }
+}
+
+/// A pixel rectangle (top-left origin) of a `w × h` destination as a viewport inside `base`.
+fn sub_viewport(base: Viewport, rect: Option<[f32; 4]>, w: f32, h: f32) -> (Viewport, f32) {
+    match rect {
+        Some([x, y, rw, rh]) => {
+            let (w, h) = (w.max(1.0), h.max(1.0));
+            let vp = Viewport { x: base.x + x / w * base.width, y: base.y + y / h * base.height, width: rw / w * base.width, height: rh / h * base.height };
+            (vp, rw.abs().max(1e-3) / rh.abs().max(1e-3))
+        }
+        None => (base, w / h.max(1.0)),
+    }
 }
 
 /// Adds the frame's queue to the extracted views (`cameras[i]` drew `views[i]`): queued meshes,
@@ -462,25 +544,53 @@ pub fn apply(world: &World, resources: &mut Resources, gfx: &mut dyn GraphicsBac
             }
         }
     }
-    // after their camera (render targets draw before the displays anyway)
+    // 4. onRenderImage: the camera draws into its source texture; the script's blits into
+    //    `dst` (BlitDest::Camera) draw to where the camera would have drawn
+    let mut camera_dest: HashMap<Entity, (usize, Display, Viewport, Option<TextureId>, i32, f32, f32)> = HashMap::new();
+    for cam in q.image_effects_wanted.clone() {
+        let Some(i) = cameras.iter().position(|c| *c == cam) else { continue };
+        let Some(&(rt, _, _)) = q.image_effects.get(&cam) else { continue };
+        let v = &mut views[i];
+        let (w, h) = size_of(v, gfx);
+        camera_dest.insert(cam, (i, v.display, v.viewport, v.target, v.depth, w, h));
+        v.target = Some(rt);
+        v.viewport = Viewport::FULL;
+    }
+    let blits = std::mem::take(&mut q.blits);
+    let mut tail: Vec<(RenderView, Entity)> = Vec::new();
+    for b in &blits {
+        let Some(quad) = q.quad(gfx) else { break };
+        let Some(mat) = q.blit_material_with(gfx, b.material, b.source, b.alpha) else { continue };
+        match b.dest {
+            BlitDest::Camera(cam) => {
+                let Some(&(i, display, viewport, target, depth, w, h)) = camera_dest.get(&cam) else { continue };
+                let (vp, aspect) = sub_viewport(viewport, b.rect, w, h);
+                inserts.push((i, blit_view_tinted(display, vp, target, aspect, depth, quad, mat, b.color)));
+            }
+            BlitDest::Texture(t) => {
+                let (w, h) = gfx.texture_size(t).map(|(w, h)| (w as f32, h as f32)).unwrap_or((1.0, 1.0));
+                let (vp, aspect) = sub_viewport(Viewport::FULL, b.rect, w, h);
+                tail.push((blit_view_tinted(Display::Main, vp, Some(t), aspect, i32::MAX - 1, quad, mat, b.color), Entity::DANGLING));
+            }
+            BlitDest::Screen if game_screen => {
+                let (w, h) = displays.iter().find(|d| d.display == Display::Main).map(|d| (d.width as f32, d.height as f32)).unwrap_or((1.0, 1.0));
+                let (vp, aspect) = sub_viewport(Viewport::FULL, b.rect, w, h);
+                tail.push((blit_view_tinted(Display::Main, vp, None, aspect, i32::MAX - 1, quad, mat, b.color), Entity::DANGLING));
+            }
+            BlitDest::Screen => {}
+        }
+    }
+    q.blits = blits;
+    // after their camera, in submission order (render targets draw before the displays anyway)
+    inserts.sort_by_key(|(i, _)| *i);
     for (i, view) in inserts.into_iter().rev() {
         views.insert(i + 1, view);
         cameras.insert(i + 1, Entity::DANGLING);
     }
-
-    // 4. Graphics.Blit
-    let blits = std::mem::take(&mut q.blits);
-    for (src, dst, material) in blits.iter().filter(|b| game_screen || b.1.is_some()) {
-        let (Some(quad), Some(mat)) = (q.quad(gfx), q.blit_material(gfx, *material, *src)) else { continue };
-        let (w, h) = match dst {
-            Some(t) => gfx.texture_size(*t).map(|(w, h)| (w as f32, h as f32)).unwrap_or((1.0, 1.0)),
-            None => displays.iter().find(|d| d.display == Display::Main).map(|d| (d.width as f32, d.height as f32)).unwrap_or((1.0, 1.0)),
-        };
-        views.push(blit_view(Display::Main, Viewport::FULL, *dst, w / h.max(1.0), i32::MAX - 1, quad, mat));
-        cameras.push(Entity::DANGLING);
+    for (v, c) in tail {
+        views.push(v);
+        cameras.push(c);
     }
-    q.blits = blits;
-
     // 5. GL in screen space: one overlay view per display, over everything
     let screen: Vec<usize> = q.prims.iter().enumerate().filter(|(_, p)| p.space != GlSpace::World).map(|(i, _)| i).collect();
     if !screen.is_empty() && game_screen {

@@ -446,6 +446,16 @@ function ViewGizmo({ view2d }: { view2d: boolean }) {
   );
 }
 
+/// Pointer over the Game view → the running game (0..1 over the canvas; the engine maps it to display pixels).
+function sendGamePointer(ev: React.PointerEvent) {
+  const e = getEngine();
+  const c = (ev.currentTarget as HTMLElement).querySelector('canvas');
+  if (!e || !c || !e.is_playing()) return;
+  const r = c.getBoundingClientRect();
+  const nx = (ev.clientX - r.left) / r.width, ny = (ev.clientY - r.top) / r.height;
+  e.game_pointer(nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1 ? nx : -1, ny, ev.buttons);
+}
+
 export function GameView({ api }: { api: DockviewPanelApi }) {
   const { host, owner } = useCanvasHost(api, 'game');
   const playing = useStore((s) => s.playing);
@@ -514,7 +524,18 @@ export function GameView({ api }: { api: DockviewPanelApi }) {
           </button>
         )}
       </div>
-      <div ref={host} className={`g-viewport g-gameview${playing ? ' playing' : ''}`} tabIndex={0}>
+      <div
+        ref={host}
+        className={`g-viewport g-gameview${playing ? ' playing' : ''}`}
+        tabIndex={0}
+        // the game's mouse / touch (Input.mousePosition, getMouseButton, onMouse*, UI clicks)
+        onPointerMove={(ev) => sendGamePointer(ev)}
+        onPointerDown={(ev) => { (ev.currentTarget as HTMLElement).setPointerCapture?.(ev.pointerId); sendGamePointer(ev); }}
+        onPointerUp={(ev) => sendGamePointer(ev)}
+        onPointerLeave={() => getEngine()?.game_pointer(-1, -1, 0)}
+        onWheel={(ev) => getEngine()?.game_scroll(-ev.deltaX / 100, -ev.deltaY / 100)}
+        onContextMenu={(ev) => playing && ev.preventDefault()}
+      >
 
         {owner && showStats && <div className="g-stats">{stats.replace(/ · /g, '\n')}</div>}
       </div>

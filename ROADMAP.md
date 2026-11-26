@@ -136,14 +136,14 @@ Duyệt bảng "Đối chiếu với Unity" và từng phần README / API của
 **A. API lõi cho script (JS / TS / C#)**
 - ✅ GameObject / Component / Transform, vòng đời MonoBehaviour, field tự hiện trong Inspector, ScriptableObject, Instantiate / Destroy, coroutine, Awaitable, Invoke / InvokeRepeating, PlayerPrefs, Time / Input / Debug / Mathf, SceneManager.loadScene, Camera.main / ScreenPointToRay / ScreenToWorldPoint, physics 3D / 2D + callback, OnMouse*, AudioSource, NavMesh, Animator, Tween, Resources.load
 - ✅ Đồ hoạ cấp thấp (desktop, editor, 3DS): `RenderTexture` (asset + `new`) + `Camera.targetTexture`, `Texture2D` (setPixel / getPixel / apply / loadImage / encodeToPNG / readPixels), `Graphics.drawMesh` / `drawMeshInstanced` + `MaterialPropertyBlock` (màu), `Graphics.blit` + component Post Effect, `GL`, `Debug.drawLine` / `drawRay`
-- ⬜ Còn lại của đồ hoạ cấp thấp: RawImage hiện render texture, `Sprite.create`, `Graphics.drawTexture`, `onRenderImage` trong script, `readPixels` trên web / 3DS, GPU instancing thật (desktop), Inspector của asset Render Texture
+- ⬜ Còn lại của đồ hoạ cấp thấp: `readPixels` trên web / 3DS, GPU instancing thật (desktop), Inspector của asset Render Texture
 - ✅ `Gizmos.*` / `Handles.*` + `onDrawGizmos` / `onDrawGizmosSelected` của script (Edit mode và Play)
 - ✅ Nhiều scene: `LoadSceneMode.Additive`, `loadSceneAsync` → AsyncOperation, `unloadSceneAsync`, `dontDestroyOnLoad`, `setActiveScene`, `gameObject.scene`, sự kiện sceneLoaded / sceneUnloaded, Hierarchy nhiều scene khi Play
 - ✅ `TextAsset` / `JsonAsset` / `BufferAsset`, `Resources.load` / `loadPrefab` / `loadAll` / `find` (thư mục `Resources/`)
 - ✅ Decorator field: `@field(Type)` / `[Type]`, `@hideInInspector`, `@nonSerialized`, `@header`, `@tooltip`, `@range`, `@readOnly`, `@showIf` / `@hideIf`, `@button`, `@contextMenu`
-- ⬜ Còn lại: struct `@serializable` lồng nhau trong Inspector, `@createAssetMenu`, nhóm kiểu Odin (`@boxGroup`, `@foldoutGroup`...)
-- ⬜ API script cho LineRenderer / TrailRenderer / ParticleSystem / Light / Camera (field + hàm), EventSystem kéo thả (`onBeginDrag` / `onDrag` / `onDrop` / `onScroll`)
-- ⬜ `RenderStats`, `ProfilerMarker` / `Profiler.beginSample` / `ProfilerRecorder`, `Screen.safeArea` / `dpi` / `orientation`
+- ✅ `@serializable` (struct / danh sách struct trong Inspector), `@createAssetMenu`, nhóm kiểu Odin (`@boxGroup` / `@foldoutGroup` / `@horizontalGroup`), `@space`, `@textArea`, `@infoBox`
+- ✅ Lớp component kiểu Unity cho mọi component (getComponent(Type), addComponent, InChildren / InParent, FindObjectsByType), Instantiate(object), SendMessage, CreatePrimitive; vòng đời Awake / OnEnable / OnDisable + `enabled`; Input kiểu Unity (KeyCode, getAxis, chuột, touch; Game view của editor nhận chuột / phím); EventSystem kéo thả
+- ✅ `RenderStats`, `ProfilerMarker` / `Profiler.beginSample` / `ProfilerRecorder`, `Screen.safeArea` / `dpi`, Application / Time bổ sung, `Sprite.create`, `Graphics.drawTexture`, `onRenderImage`
 - ⬜ GPU Instancing (material `enableInstancing`; desktop), Baked Animation (GPU) cho đám đông, GPU skinning
 - ⬜ Model FBX / OBJ (hiện chỉ glTF / GLB), ModelImporter đủ tab (Rig / Animation / Materials, Optimize Game Objects)
 

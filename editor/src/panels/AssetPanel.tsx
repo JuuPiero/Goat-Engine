@@ -202,7 +202,8 @@ export function AssetPanel() {
   };
   /// Create ▸ ScriptableObject ▸ <type>: an asset of that script (Unity's CreateAssetMenu).
   const createScriptable = async (script: string) => {
-    const key = await freeName(`New ${nameOf(script).replace(/\.(ts|js|mjs|cs)$/i, '')}`, '.asset.json');
+    const menu = scriptInfo(script)?.meta?.createAssetMenu;
+    const key = await freeName(menu?.fileName ?? `New ${nameOf(script).replace(/\.(ts|js|mjs|cs)$/i, '')}`, '.asset.json');
     await writeNew(key, JSON.stringify({ version: 1, script, data: {} }, null, 2) + '\n');
   };
   const remove = async (ks: string[]) => {
@@ -329,6 +330,24 @@ export function AssetPanel() {
   // ------------------------------------------------------------------ render
   const crumbs = ['', ...dir.split('/').filter(Boolean).map((_, i, a) => a.slice(0, i + 1).join('/'))];
   const clip = useStore((s) => s.clipboard);
+  // [CreateAssetMenu(menuName = "Data/Enemy")]: Create ▸ Data ▸ Enemy (Unity); others under ScriptableObject
+  const assetMenuItems: MenuItem[] = [];
+  for (const k of soTypes) {
+    const path = scriptInfo(k)?.meta?.createAssetMenu?.menuName as string | undefined;
+    if (!path) continue;
+    const parts = path.split('/').filter(Boolean);
+    let level = assetMenuItems;
+    for (const p of parts.slice(0, -1)) {
+      let sub = level.find((x) => typeof x === 'object' && x.label === p && 'children' in x) as { label: string; children: MenuItem[] } | undefined;
+      if (!sub) {
+        sub = { label: p, children: [] };
+        level.push(sub as MenuItem);
+      }
+      level = sub.children;
+    }
+    level.push({ label: parts[parts.length - 1] ?? nameOf(k), action: () => void createScriptable(k) });
+  }
+  const plainSoTypes = soTypes.filter((k) => !scriptInfo(k)?.meta?.createAssetMenu);
   const createItems: MenuItem[] = [
     { label: 'Folder', action: () => void createFolder() },
     '-',
@@ -355,9 +374,10 @@ export function AssetPanel() {
         { label: 'ScriptableObject Script (C#)', action: () => void createScript('scriptableObject', 'cs') },
       ],
     },
+    ...assetMenuItems,
     {
       label: 'ScriptableObject',
-      children: soTypes.length ? soTypes.map((k) => ({ label: nameOf(k).replace(/\.(ts|js|mjs|cs)$/i, ''), action: () => void createScriptable(k) })) : [{ label: '(no ScriptableObject scripts)', disabled: true, action: () => {} }],
+      children: plainSoTypes.length ? plainSoTypes.map((k) => ({ label: nameOf(k).replace(/\.(ts|js|mjs|cs)$/i, ''), action: () => void createScriptable(k) })) : [{ label: '(no ScriptableObject scripts)', disabled: true, action: () => {} }],
     },
   ];
   /// Unity's Project window context menu (on an asset, or on empty space).

@@ -87,6 +87,10 @@ struct App {
     keys: std::collections::HashSet<KeyCode>,
     mouse: Option<PhysicalPosition<f64>>,
     mouse_down: bool,
+    mouse_right: bool,
+    mouse_middle: bool,
+    /// Wheel movement since the last frame.
+    wheel: Vec2,
     /// Text typed since the last frame.
     typed: String,
     frames: u64,
@@ -108,6 +112,9 @@ pub fn run(game: impl Game, options: DesktopOptions) {
         mouse: None,
         mouse_down: false,
         typed: String::new(),
+        mouse_right: false,
+        mouse_middle: false,
+        wheel: Vec2::ZERO,
         frames: 0,
         title_timer: 0.0,
         fps_frames: 0,
@@ -161,6 +168,10 @@ impl App {
             }
         }
         input.pointer_down = self.mouse_down && input.pointer.is_some();
+        // raw keys / mouse buttons / wheel (Unity's Input.GetKey, GetMouseButton, mouseScrollDelta)
+        input.keys = self.keys.iter().map(|c| format!("{c:?}")).collect();
+        input.mouse_buttons = [self.mouse_down, self.mouse_right, self.mouse_middle];
+        input.scroll = std::mem::take(&mut self.wheel);
         if k(KeyCode::Escape) {
             input.quit_requested = true;
         }
@@ -215,6 +226,14 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => self.mouse = Some(position),
             WindowEvent::CursorLeft { .. } => self.mouse = None,
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => self.mouse_down = state == ElementState::Pressed,
+            WindowEvent::MouseInput { state, button: MouseButton::Right, .. } => self.mouse_right = state == ElementState::Pressed,
+            WindowEvent::MouseInput { state, button: MouseButton::Middle, .. } => self.mouse_middle = state == ElementState::Pressed,
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.wheel += match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => Vec2::new(x, y),
+                    winit::event::MouseScrollDelta::PixelDelta(p) => Vec2::new(p.x as f32, p.y as f32) / 40.0,
+                };
+            }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
                 let dt = (now - self.last).as_secs_f32();

@@ -13,6 +13,9 @@
 //! (unlit, alpha or additive), so lines cost one draw per texture on the 3DS too. Lines draw in
 //! Edit Mode; trails record in Play Mode.
 
+#[cfg(feature = "script")]
+pub mod script;
+
 use goat_assets::AssetServer;
 use goat_core::math::{Mat4, Quat, Vec3};
 use goat_core::Color;
@@ -292,13 +295,15 @@ impl Plugin for LinePlugin {
         {
             use goat_scene::{serde_codec, ComponentInfo as I};
             let r = goat_scene::registry(_ctx);
-            r.component(serde_codec::<LineRenderer>("LineRenderer")).component(serde_codec::<TrailRenderer>("TrailRenderer"));
+            r.component(serde_codec::<LineRenderer>("LineRenderer")).component(goat_scene::serde_codec_keep::<TrailRenderer>("TrailRenderer"));
             r.describe("LineRenderer", I::new("Effects/Line Renderer").asset("texture", "texture").options("alignment", &["View", "TransformZ"]).options("texture_mode", &["Stretch", "Tile"]).options("blend", &["Alpha", "Additive"]).kind("layer", "layer"));
             r.describe(
                 "TrailRenderer",
                 I::new("Effects/Trail Renderer").asset("texture", "texture").options("alignment", &["View", "TransformZ"]).options("texture_mode", &["Stretch", "Tile"]).options("blend", &["Alpha", "Additive"]).kind("layer", "layer").tip("time", "Seconds a point lives").tip("min_vertex_distance", "A point is added once the object moved this far"),
             );
         }
+        #[cfg(feature = "script")]
+        script::register(goat_script::extensions(_ctx));
     }
 
     /// Trails record the object's path (Play Mode only: `update` doesn't run while editing).
@@ -466,5 +471,15 @@ mod tests {
         let mut t2 = TrailRenderer { emitting: false, ..Default::default() };
         t2.record(Vec3::ONE, 0.1);
         assert!(t2.points.is_empty());
+    }
+}
+
+/// A trail keeps its recorded path when its settings change while playing.
+#[cfg(feature = "scene")]
+impl goat_scene::KeepRuntimeState for TrailRenderer {
+    fn keep_runtime_state(&mut self, old: Self) {
+        self.points = old.points;
+        self.clock = old.clock;
+        self.still = old.still;
     }
 }

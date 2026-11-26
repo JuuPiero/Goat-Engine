@@ -367,11 +367,20 @@ interface FieldMeta {
   range?: [number, number];
   showIf?: [string, Json];
   hideIf?: [string, Json];
+  /** @serializable struct: what a new value / element starts as. */
+  structDefaults?: Record<string, Json>;
+  /** Its fields in declaration order. */
+  structOrder?: string[];
+  multiline?: number;
+  space?: number;
+  label?: string;
+  info?: string;
+  group?: { kind: 'box' | 'foldout' | 'horizontal'; name: string };
 }
 interface ScriptInfoJson {
   kind?: 'behaviour' | 'scriptableObject';
   fields?: Record<string, Json>;
-  meta?: { fields?: Record<string, FieldMeta>; buttons?: { method: string; label: string; menu?: boolean }[] };
+  meta?: { fields?: Record<string, FieldMeta>; buttons?: { method: string; label: string; menu?: boolean }[]; createAssetMenu?: { menuName: string; fileName: string; order?: number } };
   /** Field names in declaration order. */
   order?: string[];
   error?: string;
@@ -391,6 +400,41 @@ export function scriptInfo(src: string): ScriptInfoJson | null {
 /// Unity's serialized fields of a script (a Behaviour on an object, or a ScriptableObject asset):
 /// the class's fields with their defaults, the saved values over them. Fields holding nothing or a
 /// `.asset.json` are object references (drop a ScriptableObject asset on them).
+/// An object's entries with order first (declaration order of a struct), then the rest.
+function orderedEntries(o: Record<string, Json>, order?: string[]): [string, Json][] {
+  const keys = [...(order ?? []).filter((k) => k in o), ...Object.keys(o).filter((k) => !(order ?? []).includes(k))];
+  return keys.map((k) => [k, o[k]]);
+}
+
+/// Odin's groups (@boxGroup / @foldoutGroup / @horizontalGroup): consecutive fields of one group
+/// drawn together (the elements' keys are the field names).
+function groupFields(nodes: React.ReactNode[], meta: Record<string, FieldMeta>): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let run: { g: NonNullable<FieldMeta['group']>; items: React.ReactNode[] } | null = null;
+  const flush = () => {
+    if (!run) return;
+    const { g, items } = run;
+    const key = `group:${g.kind}:${g.name}:${out.length}`;
+    if (g.kind === 'foldout') out.push(<details key={key} className="g-group-fold" open><summary>{g.name}</summary>{items}</details>);
+    else if (g.kind === 'horizontal') out.push(<div key={key} className="g-group-row">{items}</div>);
+    else out.push(<div key={key} className="g-group-box"><div className="g-group-title">{g.name}</div>{items}</div>);
+    run = null;
+  };
+  for (const n of nodes) {
+    if (n == null) continue;
+    const k = (n as { key?: string | null }).key ?? '';
+    const g = meta[String(k)]?.group;
+    if (g && run && run.g.kind === g.kind && run.g.name === g.name) run.items.push(n);
+    else {
+      flush();
+      if (g) run = { g, items: [n] };
+      else out.push(n);
+    }
+  }
+  flush();
+  return out;
+}
+
 export function ScriptFields({ src, values, onChange, path, onButton }: { src: string; values: Record<string, Json>; onChange: (key: string, value: Json) => void; path: string; onButton?: (method: string) => void }) {
   const rev = useStore((s) => s.revision);
   const info = useMemo(() => scriptInfo(src), [src, rev]);
@@ -405,16 +449,47 @@ export function ScriptFields({ src, values, onChange, path, onButton }: { src: s
   const same = (a: Json, b: Json) => JSON.stringify(a) === JSON.stringify(b);
   return (
     <>
-      {keys.map((k) => {
+      {groupFields(keys.map((k) => {
         const m = meta[k] ?? {};
         if (m.hide) return null;
         if (m.showIf && !(m.showIf[1] === true ? !!valueOf(m.showIf[0]) : same(valueOf(m.showIf[0]), m.showIf[1]))) return null;
         if (m.hideIf && (m.hideIf[1] === true ? !!valueOf(m.hideIf[0]) : same(valueOf(m.hideIf[0]), m.hideIf[1]))) return null;
         const v = valueOf(k);
         const headerRow = m.header ? <div key={`${k}-h`} className="g-field-header">{m.header}</div> : null;
-        const kind = m.type && m.type !== 'gameObject' ? m.type : null;
+        const kind = m.type && m.type !== 'gameObject' && m.type !== 'struct' ? m.type : null;
+        const label = m.label ?? k;
         let body: React.ReactNode;
-        if (kind && m.array) {
+        if (m.type === 'struct' && m.array) {
+          // a list of @serializable structs: one foldout of fields per element, + Add / −
+          const list = (Array.isArray(v) ? v : []) as Json[];
+          body = (
+            <Row name={`${label} (${list.length})`}>
+              <div className="g-asset-list">
+                {list.map((x, i) => (
+                  <div key={i} className="g-struct-row">
+                    <div className="g-struct-head">
+                      <span className="dim">Element {i}</span>
+                      <button className="g-icon-btn" title="Remove" onClick={() => onChange(k, list.filter((_, j) => j !== i))}>−</button>
+                    </div>
+                    {orderedEntries({ ...(m.structDefaults ?? {}), ...((x ?? {}) as Record<string, Json>) }, m.structOrder).map(([fk, fv]) => (
+                      <Field key={fk} path={`${path}.${k}.${i}.${fk}`} name={fk} value={fv} hints={{}} onChange={(nv) => onChange(k, list.map((y, j) => (j === i ? { ...(m.structDefaults ?? {}), ...((y ?? {}) as Record<string, Json>), [fk]: nv } : y)))} />
+                    ))}
+                  </div>
+                ))}
+                <button className="g-btn small" onClick={() => onChange(k, [...list, { ...(m.structDefaults ?? {}) }])}>+ Add</button>
+              </div>
+            </Row>
+          );
+        } else if (m.type === 'struct') {
+          const cur = { ...(m.structDefaults ?? {}), ...((v ?? {}) as Record<string, Json>) };
+          body = <Field path={`${path}.${k}`} name={label} value={cur} hints={{}} onChange={(nv) => onChange(k, nv)} />;
+        } else if (m.multiline && typeof v === 'string') {
+          body = (
+            <Row name={label}>
+              <textarea className="g-input g-textarea" rows={m.multiline} value={v} onChange={(e) => onChange(k, e.target.value)} />
+            </Row>
+          );
+        } else if (kind && m.array) {
           const list = (Array.isArray(v) ? v : []) as (string | null)[];
           body = (
             <Row name={`${k} (${list.length})`}>
@@ -449,12 +524,13 @@ export function ScriptFields({ src, values, onChange, path, onButton }: { src: s
           body = <Field path={`${path}.${k}`} name={k} value={v ?? null} hints={{}} onChange={(nv) => !m.readOnly && onChange(k, nv)} />;
         }
         return (
-          <div key={k} title={m.tooltip} className={m.readOnly ? 'g-readonly' : undefined}>
+          <div key={k} title={m.tooltip} className={m.readOnly ? 'g-readonly' : undefined} style={m.space ? { marginTop: m.space } : undefined} data-group={m.group ? m.group.kind + ':' + m.group.name : undefined}>
             {headerRow}
+            {m.info && <div className="g-info-box">{m.info}</div>}
             {body}
           </div>
         );
-      })}
+      }), meta)}
       {onButton && buttons.map((b) => (
         <div key={b.method} className="g-script-button">
           <button className="g-btn" onClick={() => onButton(b.method)}>{b.label}</button>
@@ -484,7 +560,7 @@ function ScriptBlocks({ list, write, ids }: { list: ScriptRefJson[]; write: (nex
       const r = e.script_button(ids[0], i, method);
       if (r) set(i, { props: JSON.parse(r) as Record<string, Json> });
     } catch (err) {
-      log(`: ${err}`, 'error');
+      log(`${method}: ${err}`, 'error');
     }
   };
   return (

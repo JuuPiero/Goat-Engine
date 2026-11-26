@@ -608,6 +608,11 @@ impl WgpuBackend {
     }
 
     /// The surface `render` draws on.
+    /// The active surface's size in pixels.
+    pub fn surface_size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
     pub fn active_surface(&self) -> usize {
         self.active
     }

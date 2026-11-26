@@ -125,16 +125,52 @@ fn draw_mesh_instanced(api: &mut Api, _: Entity, a: &[Value]) -> Result<Value, S
     Ok(json!(matrices.len()))
 }
 
-/// `[sourceKey, destKey | null, materialKey | null]`
-fn blit(api: &mut Api, _: Entity, a: &[Value]) -> Result<Value, String> {
+/// `[sourceKey, destKey | null | "camera", materialKey | null]` — "camera": the calling camera
+/// entity's own destination (onRenderImage's `dst`).
+fn blit(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
     let src = texture_of(api, a.first())?.ok_or("Graphics.blit(source, dest, material): no source")?;
-    let dst = texture_of(api, a.get(1))?;
     let mat = match a.get(2).and_then(Value::as_str) {
         Some(k) => Some(material_of(api, Some(&Value::String(k.into())))?),
         None => None,
     };
+    if a.get(1).and_then(Value::as_str) == Some("camera") {
+        queue(api).blit_with(goat_runtime::graphics::Blit { source: src, dest: goat_runtime::graphics::BlitDest::Camera(e), material: mat, rect: None, alpha: false, color: Color::WHITE });
+        return Ok(Value::Null);
+    }
+    let dst = texture_of(api, a.get(1))?;
     queue(api).blit(src, dst, mat);
     Ok(Value::Null)
+}
+
+/// `[textureKey, [x, y, w, h] (screen pixels from the top-left), color, materialKey | null]`
+fn draw_texture(api: &mut Api, _: Entity, a: &[Value]) -> Result<Value, String> {
+    let src = texture_of(api, a.first())?.ok_or("Graphics.drawTexture(rect, texture): no texture")?;
+    let r = a.get(1).and_then(Value::as_array).map(|l| [f(l.first(), 0.0), f(l.get(1), 0.0), f(l.get(2), 64.0), f(l.get(3), 64.0)]);
+    let mat = match a.get(3).and_then(Value::as_str) {
+        Some(k) => Some(material_of(api, Some(&Value::String(k.into())))?),
+        None => None,
+    };
+    let c = color(a.get(2));
+    queue(api).blit_with(goat_runtime::graphics::Blit { source: src, dest: goat_runtime::graphics::BlitDest::Screen, material: mat, rect: r, alpha: true, color: c });
+    Ok(Value::Null)
+}
+
+/// (camera entity) → the key of the texture the camera draws into this frame for its scripts'
+/// onRenderImage (sized like what the camera draws).
+fn image_effect_source(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
+    let c = *api.ctx.world.get::<&goat_runtime::Camera>(e).map_err(|_| "no Camera on this object".to_string())?;
+    let (w, h) = match c.target_texture.and_then(|t| api.ctx.gfx.texture_size(t)) {
+        Some((w, h)) => (w as f32, h as f32),
+        None => api.ctx.displays.iter().find(|d| d.display == c.display).map(|d| (d.width as f32, d.height as f32)).unwrap_or((400.0, 240.0)),
+    };
+    let (w, h) = ((w * c.viewport.width).round() as u32, (h * c.viewport.height).round() as u32);
+    let gfx: &mut dyn GraphicsBackend = &mut *api.ctx.gfx;
+    let Some(t) = api.ctx.resources.get_or_default::<GraphicsQueue>().image_effect_source(gfx, e, w, h) else { return Ok(Value::Null) };
+    let key = format!("runtime:camera/{}", e.id());
+    let srv = assets(api)?;
+    srv.register_texture(&key, t);
+    srv.set_texture_size(t, (w.max(1), h.max(1)));
+    Ok(json!(key))
 }
 
 /// `GL.end`: `[mode, space, [x, y, z, r, g, b, a, …]]` (vertices already through the script's matrix).
@@ -365,6 +401,8 @@ pub fn register(x: &mut Extensions) {
     x.add("Graphics.drawMesh", draw_mesh)
         .add("Graphics.drawMeshInstanced", draw_mesh_instanced)
         .add("Graphics.blit", blit)
+        .add("Graphics.drawTexture", draw_texture)
+        .add("Camera.imageEffectSource", image_effect_source)
         .add("GL.draw", gl_draw)
         .add("Debug.drawLine", draw_line)
         .add("Gizmos.lines", gizmo_lines)

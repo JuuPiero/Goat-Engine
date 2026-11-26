@@ -323,6 +323,25 @@ export class EditorEngine {
         wasm.editorengine_frame_selected(this.__wbg_ptr);
     }
     /**
+     * The pointer over the Game view (`nx, ny` 0..1 over its canvas, negative = outside;
+     * `buttons` = bit 0 left, 1 right, 2 middle): display pixels for the game (the touch screen in
+     * the 3DS layout, like the desktop player).
+     * @param {number} nx
+     * @param {number} ny
+     * @param {number} buttons
+     */
+    game_pointer(nx, ny, buttons) {
+        wasm.editorengine_game_pointer(this.__wbg_ptr, nx, ny, buttons);
+    }
+    /**
+     * Mouse wheel over the Game view (lines; y > 0 = away from the user).
+     * @param {number} dx
+     * @param {number} dy
+     */
+    game_scroll(dx, dy) {
+        wasm.editorengine_game_scroll(this.__wbg_ptr, dx, dy);
+    }
+    /**
      * Starts a gizmo drag if (x, y) (0..1 of a w × h view) is on a handle.
      * @param {number} x
      * @param {number} y

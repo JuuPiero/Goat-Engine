@@ -57,6 +57,31 @@ pub fn load_serde<T: hecs::Component + DeserializeOwned>(ctx: &mut LoadContext, 
     ctx.world.insert_one(e, c).map_err(|_| "entity vanished".to_string())
 }
 
+/// Components with run-time state (`#[serde(skip)]` fields: live particles, trail points...) that
+/// must survive their fields being set again (a script changing `startSpeed`, an Inspector edit
+/// while playing): the new value takes the old one's run-time state.
+pub trait KeepRuntimeState {
+    fn keep_runtime_state(&mut self, old: Self);
+}
+
+/// [`load_serde`] that keeps the replaced component's run-time state ([`KeepRuntimeState`]).
+pub fn load_serde_keep<T: hecs::Component + DeserializeOwned + KeepRuntimeState>(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
+    let mut c: T = match serde_json::from_value(v.clone()) {
+        Ok(c) => c,
+        Err(_) if v.as_object().is_some_and(|o| o.is_empty()) => serde_json::from_value(Value::Null).map_err(|e| e.to_string())?,
+        Err(e) => return Err(e.to_string()),
+    };
+    if let Ok(old) = ctx.world.remove_one::<T>(e) {
+        c.keep_runtime_state(old);
+    }
+    ctx.world.insert_one(e, c).map_err(|_| "entity vanished".to_string())
+}
+
+/// [`serde_codec`] for components with run-time state ([`KeepRuntimeState`]).
+pub fn serde_codec_keep<T: hecs::Component + Serialize + DeserializeOwned + KeepRuntimeState>(name: &'static str) -> ComponentCodec {
+    ComponentCodec { name, save: save_serde::<T>, load: load_serde_keep::<T>, remove: remove_typed::<T> }
+}
+
 /// A codec for any serde component: `registry.component(goat_scene::serde_codec::<RigidBody>("RigidBody"))`.
 pub fn serde_codec<T: hecs::Component + Serialize + DeserializeOwned>(name: &'static str) -> ComponentCodec {
     ComponentCodec { name, save: save_serde::<T>, load: load_serde::<T>, remove: remove_typed::<T> }

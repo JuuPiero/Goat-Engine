@@ -313,6 +313,113 @@ mod tests {
         c.stop();
         assert!(!c.paused);
     }
+    /// The typed component classes of the TypeScript API (Unity's getComponent(Light),
+    /// lineRenderer.setPosition, particleSystem.emit...) against the game's real plugins (Play).
+    #[test]
+    fn typed_component_api_in_play_mode() {
+        let (mut c, mut gfx) = core();
+        c.io.put("scripts/ApiTest.ts", r####"import { Behaviour, GameObject, Vector3, Vector2, Color, Light, LineRenderer, ParticleSystem, Rigidbody, BoxCollider, SphereCollider, Collider, TrailRenderer, Text, Image, Slider, Camera, MeshRenderer, MeshFilter, Component, ForceMode, SpriteRenderer, TextMesh } from "goat";
+
+class Helper extends Behaviour {}
+export { Helper };
+
+export default class ApiTest extends Behaviour {
+  log: any[] = [];
+  pinged = 0;
+  ping(n: number) { this.pinged = n; }
+  frames = 0;
+  start() {
+    const L = this.log;
+    const lamp = GameObject.find("Lamp")!;
+    const light = lamp.getComponent(Light)!;
+    L.push(light.type, light.range);
+    light.intensity = 2.5;
+    light.color = new Color(1, 0, 0, 1);
+    L.push(lamp.getComponent(Light)!.intensity, lamp.getComponent(Light)!.color.r);
+
+    const line = GameObject.create("Line").addComponent(LineRenderer)!;
+    line.positionCount = 3;
+    line.setPosition(2, new Vector3(1, 2, 3));
+    line.startWidth = 0.5;
+    L.push(line.positionCount, line.getPosition(2).y, line.startWidth);
+
+    const crate = GameObject.find("Crate")!;
+    L.push(!!crate.getComponent(BoxCollider), !!crate.getComponent(SphereCollider), !!crate.getComponent(Collider));
+    L.push(crate.getComponent(BoxCollider)!.size.x);
+    const rb = crate.getComponent(Rigidbody)!;
+    rb.velocity = new Vector3(0, 3, 0);
+    rb.addForce(new Vector3(0, 1, 0), ForceMode.Impulse);
+    L.push(rb.isKinematic, rb.useGravity);
+    L.push(crate.getComponent(MeshFilter)!.mesh, (crate.getComponent(MeshRenderer) as any).sharedMaterial);
+
+    const parent = GameObject.find("Parent")!;
+    L.push(parent.getComponentInChildren(Light) ? "childLight" : "none");
+    L.push(GameObject.findObjectsByType(Light).length);
+
+    const ps = GameObject.find("Sparks")!.getComponent(ParticleSystem)!;
+    ps.stop(true, "StopEmittingAndClear");
+    L.push(ps.isPlaying, ps.particleCount);
+    ps.emit(7);
+    L.push(ps.particleCount);
+    ps.startSpeed = 4;
+    L.push(ps.startSpeed);
+
+    L.push(lamp.getComponents(Component).map((c: any) => c.constructor.name).sort().join("+"));
+    const extra = lamp.addComponent(TrailRenderer)!;
+    L.push(!!lamp.getComponent(TrailRenderer));
+    GameObject.destroy(extra);
+    L.push(!!lamp.getComponent(TrailRenderer), lamp.exists);
+
+    const helper = this.getComponent(Helper);
+    L.push(helper === null ? "noHelper" : "helper");
+    L.push(this.getComponent(ApiTest) === this);
+    L.push(Camera.main ? "cam" : "nocam", !!GameObject.find("Main Camera")!.getComponent(Camera));
+    const label = GameObject.find("Label")!.getComponent(TextMesh)!;
+    label.text = "changed";
+    L.push(GameObject.find("Label")!.getComponent(TextMesh)!.text);
+    const copy = GameObject.instantiate(crate);
+    L.push(copy.name, copy.getComponent(BoxCollider) ? "box" : "nobox", copy.transform.position.y);
+    const lightCopy = GameObject.instantiate(lamp.getComponent(Light)!) as any;
+    L.push(lightCopy.type);
+    const prim = GameObject.createPrimitive("Sphere");
+    L.push(prim.getComponent(MeshFilter)!.mesh, !!prim.getComponent(SphereCollider));
+    this.gameObject.sendMessage("ping", 5);
+    L.push(this.pinged);
+  }
+  update() {
+    if (++this.frames === 3) {
+      this.log.push(GameObject.find("Sparks")!.getComponent(ParticleSystem)!.particleCount > 0);
+      this.gameObject.name = "RESULT " + JSON.stringify(this.log);
+    }
+  }
+}
+"####.as_bytes().to_vec());
+        c.io.put(
+            "scenes/api_test.scene.json",
+            br##"{ "version": 1, "entities": [
+              { "id": 1, "name": "Main Camera", "components": { "Transform": { "position": [0, 2, 8] }, "Camera": {} } },
+              { "id": 2, "name": "Lamp", "components": { "Transform": {}, "PointLight": { "color": "#ffffff", "intensity": 1, "range": 7 } } },
+              { "id": 3, "name": "Crate", "components": { "Transform": { "position": [0, 1, 0] }, "MeshRenderer": { "mesh": "builtin:cube", "material": "builtin:default" }, "Collider": { "shape": { "box": [0.5, 0.5, 0.5] } }, "RigidBody": {} } },
+              { "id": 4, "name": "Parent", "components": { "Transform": {} } },
+              { "id": 5, "name": "Child", "parent": 4, "components": { "Transform": {}, "SpotLight": { "color": "#ffffff", "intensity": 1, "range": 5, "spot_angle": 30 } } },
+              { "id": 6, "name": "Sparks", "components": { "Transform": {}, "ParticleSystem": { "rate": 30 } } },
+              { "id": 7, "name": "Label", "components": { "Transform": {}, "Text": { "text": "hello", "font": "" } } },
+              { "id": 8, "name": "Tester", "components": { "Transform": {}, "Script": { "src": "scripts/ApiTest.ts" } } }
+            ] }"##
+            .to_vec(),
+        );
+        c.open_scene(&mut gfx, "scenes/api_test.scene.json").unwrap();
+        c.play();
+        for _ in 0..8 {
+            c.frame(&mut gfx, 1.0 / 60.0);
+        }
+        let names: Vec<String> = c.play.as_ref().unwrap().world.query::<&goat_runtime::Name>().iter().map(|(_, n)| n.0.clone()).collect();
+        let result = names.iter().find(|n| n.starts_with("RESULT ")).unwrap_or_else(|| panic!("no result: {names:?}"));
+        assert_eq!(
+            &result[7..],
+            r#"["Point",7,2.5,1,3,2,0.5,true,false,true,1,false,true,"builtin:cube","builtin:default","childLight",2,false,0,7,4,"Light+Transform",true,false,true,"noHelper",true,"cam",true,"changed","Crate(Clone)","box",1,"Point","builtin:sphere",true,5,true]"#
+        );
+    }
     #[test]
     fn every_component_can_be_added_from_its_defaults() {
         let (mut c, mut gfx) = core();

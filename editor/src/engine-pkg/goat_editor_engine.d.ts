@@ -69,6 +69,16 @@ export class EditorEngine {
     frame(dt: number): void;
     frame_selected(): void;
     /**
+     * The pointer over the Game view (`nx, ny` 0..1 over its canvas, negative = outside;
+     * `buttons` = bit 0 left, 1 right, 2 middle): display pixels for the game (the touch screen in
+     * the 3DS layout, like the desktop player).
+     */
+    game_pointer(nx: number, ny: number, buttons: number): void;
+    /**
+     * Mouse wheel over the Game view (lines; y > 0 = away from the user).
+     */
+    game_scroll(dx: number, dy: number): void;
+    /**
      * Starts a gizmo drag if (x, y) (0..1 of a w × h view) is on a handle.
      */
     gizmo_begin(x: number, y: number, w: number, h: number): boolean;
@@ -280,6 +290,8 @@ export interface InitOutput {
     readonly editorengine_duplicate: (a: number) => [number, number, number, number];
     readonly editorengine_frame: (a: number, b: number) => void;
     readonly editorengine_frame_selected: (a: number) => void;
+    readonly editorengine_game_pointer: (a: number, b: number, c: number, d: number) => void;
+    readonly editorengine_game_scroll: (a: number, b: number, c: number) => void;
     readonly editorengine_gizmo_begin: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly editorengine_gizmo_drag: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly editorengine_gizmo_end: (a: number) => void;

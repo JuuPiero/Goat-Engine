@@ -40,6 +40,16 @@ macro_rules! view_world {
 }
 pub(crate) use view_world;
 
+/// The Game view's keyboard and mouse for the running game.
+#[derive(Default, Debug, Clone)]
+pub struct GameInput {
+    pub keys: std::collections::BTreeSet<String>,
+    /// Pointer in the display's pixels (None = outside the game).
+    pub pointer: Option<goat_core::math::Vec2>,
+    pub buttons: [bool; 3],
+    pub scroll: goat_core::math::Vec2,
+}
+
 /// The Game view draws without the editor's drawables (grid, gizmos): hidden for its pass.
 fn hide_editor_drawables(world: &mut hecs::World) -> Vec<Entity> {
     let mut hidden = Vec::new();
@@ -215,6 +225,8 @@ pub struct EditorCore {
     pub view: ViewOptions,
     /// the Scene view's camera inside the play world (Scene view shown while playing)
     play_camera: Option<Entity>,
+    /// Keyboard / mouse of the Game view while playing.
+    pub(crate) game_input: GameInput,
     /// the other world's grid / gizmo entities (play: the edit world's, swapped back on Stop)
     stashed_helpers: (Option<Entity>, Option<Entity>),
     /// the 3D orbit kept while the view is in 2D mode
@@ -264,6 +276,7 @@ impl EditorCore {
             view: ViewOptions::default(),
             play_camera: None,
             stashed_helpers: (None, None),
+            game_input: GameInput::default(),
             orbit3d: None,
             held: [false; 14],
             axes: [0.0; 4],
@@ -581,6 +594,7 @@ impl EditorCore {
         self.axes = [0.0; 4];
     }
     pub fn stop(&mut self) {
+        self.game_input = GameInput::default();
         if self.play.take().is_some() {
             self.swap_scene_helpers();
             self.stashed_helpers = (None, None);
@@ -595,6 +609,12 @@ impl EditorCore {
 
     /// Play-mode input (keyboard mapped like the desktop player).
     pub fn key(&mut self, code: &str, down: bool) {
+        // raw keys too (Input.GetKey)
+        if down {
+            self.game_input.keys.insert(code.to_string());
+        } else {
+            self.game_input.keys.remove(code);
+        }
         let b = match code {
             "KeyK" | "Space" => Some(Button::A),
             "KeyJ" => Some(Button::B),
@@ -730,6 +750,13 @@ impl EditorCore {
             }
             play.input.set_axis(Axis::LeftX, self.axes[0]);
             play.input.set_axis(Axis::LeftY, self.axes[1]);
+            // the Game view's keyboard / mouse (pointer in display pixels)
+            let gi = &mut self.game_input;
+            play.input.keys = gi.keys.clone();
+            play.input.pointer = gi.pointer;
+            play.input.pointer_down = gi.buttons[0] && gi.pointer.is_some();
+            play.input.mouse_buttons = gi.buttons;
+            play.input.scroll = std::mem::take(&mut gi.scroll);
             if draw {
                 play.frame(dt, gfx);
             } else {

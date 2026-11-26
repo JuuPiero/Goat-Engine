@@ -2,6 +2,6 @@
   "version": 1,
   "entities": [
     { "id": 1, "name": "Main Camera", "components": { "Transform": { "position": [0, 2, 6], "euler": [-12, 0, 0] }, "Camera": { "clear": "#1b2030" } } },
-    { "id": 2, "name": "Level Manager", "components": { "Transform": {}, "Script": { "src": "scripts/LevelManager.ts", "props": { "credits": "data/credits.txt", "levels": ["data/levels/level1.json", "data/levels/level2.json"], "startLevel": 0 } } } }
+    { "id": 2, "name": "Level Manager", "components": { "Transform": {}, "Script": { "src": "scripts/LevelManager.ts", "props": { "credits": "data/credits.txt", "levels": ["data/levels/level1.json", "data/levels/level2.json"], "startLevel": 0, "waves": [{ "enemy": "Goblin", "count": 4 }, { "enemy": "Orc", "count": 1, "delay": 3 }] } } } }
   ]
 }

@@ -1080,3 +1080,213 @@ export default class Data extends Behaviour {
         assert_eq!(meta["buttons"][0]["label"], "Reset Speed");
     });
 }
+
+/// Unity's Input: KeyCode keys, legacy names, mouse buttons, wheel, axes, virtual buttons, touches.
+#[test]
+fn unity_input_keys_mouse_axes() {
+    fn kio() -> AssetIo {
+        let io = io();
+        io.put(
+            "scripts/Keys.ts",
+            br#"
+import { Behaviour, Input, KeyCode } from "goat";
+export default class Keys extends Behaviour {
+  log: string[] = [];
+  update() {
+    const l: any[] = [];
+    l.push(Input.getKey(KeyCode.Space), Input.getKeyDown("space"), Input.getKeyUp(KeyCode.A), Input.getKey("a"));
+    l.push(Input.getMouseButton(0), Input.getMouseButtonDown(1), Input.mouseScrollDelta.y);
+    l.push(Input.getAxisRaw("Horizontal"), Input.getButton("Jump"), Input.getButtonDown("Fire1"), Input.anyKeyDown);
+    l.push(Input.mousePosition.x, Input.touchCount, Input.touchCount ? Input.getTouch(0).phase : "-");
+    this.log.push(JSON.stringify(l));
+    this.gameObject.name = this.log.join("|");
+  }
+}
+"#
+            .to_vec(),
+        );
+        io
+    }
+    struct K;
+    impl Game for K {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(kio()));
+            ctx.world.spawn((Name("Keys".into()), Transform::default(), GlobalTransform::default(), Script::one("scripts/Keys.ts")));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(kio())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(K);
+    e.frame(1.0 / 60.0, &mut gfx); // start
+    // frame 1: Space + A down, left mouse down at (40, 20), wheel up, d-pad right
+    e.input.begin_frame();
+    e.input.keys.insert("Space".into());
+    e.input.keys.insert("KeyA".into());
+    e.input.mouse_buttons = [true, false, false];
+    e.input.pointer = Some(goat_core::math::Vec2::new(40.0, 20.0));
+    e.input.pointer_down = true;
+    e.input.scroll = goat_core::math::Vec2::new(0.0, 1.0);
+    e.input.set(Button::Right, true);
+    e.frame(1.0 / 60.0, &mut gfx);
+    // frame 2: A released, right mouse pressed, left still down
+    e.input.begin_frame();
+    e.input.keys.remove("KeyA");
+    e.input.mouse_buttons = [true, true, false];
+    e.input.pointer = Some(goat_core::math::Vec2::new(44.0, 20.0));
+    e.input.pointer_down = true;
+    e.frame(1.0 / 60.0, &mut gfx);
+    let name = e.world.query::<&Name>().iter().map(|(_, n)| n.0.clone()).find(|n| n.contains('[')).unwrap();
+    let frames: Vec<&str> = name.split('|').collect();
+    assert_eq!(frames[frames.len() - 2], r#"[true,true,false,true,true,false,1,1,true,true,true,40,1,"Began"]"#);
+    assert_eq!(frames[frames.len() - 1], r#"[true,false,true,false,true,true,0,1,true,false,true,44,1,"Moved"]"#);
+}
+
+/// Unity's lifecycle (Awake → OnEnable → Start → Update, enabled off = OnDisable and no Update,
+/// on again = OnEnable), onRenderImage on a camera, Graphics.drawTexture, ProfilerMarker.
+#[test]
+fn lifecycle_enabled_and_image_effects() {
+    fn lio() -> AssetIo {
+        let io = io();
+        io.put(
+            "scripts/Life.ts",
+            br#"
+import { Behaviour } from "goat";
+export default class Life extends Behaviour {
+  log: string[] = [];
+  awake() { this.log.push("awake"); }
+  onEnable() { this.log.push("enable"); }
+  start() { this.log.push("start"); }
+  update() { this.log.push("update"); this.gameObject.name = "LIFE " + this.log.join(","); }
+  onDisable() { this.log.push("disable"); this.gameObject.name = "LIFE " + this.log.join(","); }
+}
+"#
+            .to_vec(),
+        );
+        io.put(
+            "scripts/Switch.ts",
+            br#"
+import { Behaviour, GameObject, Graphics, Rect, Color, Texture2D, ProfilerMarker, Sprite } from "goat";
+import Life from "./Life";
+export default class Switch extends Behaviour {
+  n = 0;
+  tex: any = null;
+  marker = new ProfilerMarker("Switch.Work");
+  update() {
+    const life = GameObject.findObjectOfType(Life)!;
+    this.n++;
+    if (this.n === 2) life.enabled = false;
+    if (this.n === 4) life.enabled = true;
+    if (!this.tex) { this.tex = new Texture2D(4, 4); this.tex.apply(); }
+    Graphics.drawTexture(new Rect(10, 10, 32, 32), this.tex, Color.red);
+    this.marker.auto(() => { for (let i = 0; i < 1000; i++); });
+    const s = Sprite.create(this.tex);
+    if (!s._key) throw new Error("sprite key");
+  }
+}
+"#
+            .to_vec(),
+        );
+        io.put(
+            "scripts/Effect.ts",
+            br#"
+import { Behaviour, Graphics } from "goat";
+export default class Effect extends Behaviour {
+  calls = 0;
+  onRenderImage(src: any, dst: any) { this.calls++; Graphics.blit(src, dst); this.gameObject.name = "EFFECT " + this.calls + " " + src.width; }
+}
+"#
+            .to_vec(),
+        );
+        io
+    }
+    struct L;
+    impl Game for L {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(lio()));
+            let w = &mut *ctx.world;
+            w.spawn((Name("Life".into()), Transform::default(), GlobalTransform::default(), Script::one("scripts/Life.ts")));
+            w.spawn((Name("Switch".into()), Transform::default(), GlobalTransform::default(), Script::one("scripts/Switch.ts")));
+            w.spawn((Name("Cam".into()), Transform::default(), GlobalTransform::default(), goat_runtime::Camera::default(), Script::one("scripts/Effect.ts")));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(lio())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(L);
+    for _ in 0..7 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    let names: Vec<String> = e.world.query::<&Name>().iter().map(|(_, n)| n.0.clone()).collect();
+    let life = names.iter().find(|n| n.starts_with("LIFE ")).unwrap();
+    // frames: 1 update, then Switch (after Life in the list) disables it during frame 2 → frames 3
+    // skip, enabled again in frame 4 → OnEnable before frame 5's update
+    assert!(life.starts_with("LIFE awake,enable,start,update,update,disable,enable,update"), "{life}");
+    let effect = names.iter().find(|n| n.starts_with("EFFECT ")).unwrap_or_else(|| panic!("{names:?}"));
+    assert!(effect.ends_with(" 400"), "source sized like the Main display: {effect}");
+    let views = &gfx.last_views;
+    assert!(views.iter().any(|v| v.target.is_some()), "the camera draws into its source texture");
+    let screen: Vec<_> = views.iter().filter(|v| v.target.is_none()).collect();
+    assert!(screen.len() >= 2, "the effect's blit + drawTexture on the screen: {}", screen.len());
+    assert!(screen.iter().any(|v| v.items.iter().any(|i| i.color == goat_core::Color::rgba(1.0, 0.0, 0.0, 1.0))), "drawTexture tinted red");
+    let prof = e.resources.get::<goat_runtime::Profiler>().unwrap();
+    assert!(prof.last.contains_key("Switch.Work"), "{:?}", prof.last.keys().collect::<Vec<_>>());
+}
+
+/// @serializable structs (a value and a list) loaded from props, their defaults for the
+/// Inspector, @createAssetMenu, groups.
+#[test]
+fn serializable_structs_and_asset_menus() {
+    fn sio() -> AssetIo {
+        let io = io();
+        io.put(
+            "scripts/Waves.ts",
+            br#"
+import { Behaviour, ScriptableObject, Vector3, field, serializable, createAssetMenu, boxGroup, textArea } from "goat";
+@serializable
+export class Wave { count = 3; delay = 1.5; spawn = new Vector3(0, 1, 0); }
+export default class Waves extends Behaviour {
+  @field(Wave) first: Wave = new Wave();
+  @field([Wave]) waves: Wave[] = [];
+  @boxGroup("Text") @textArea(4) intro = "";
+  start() {
+    const w = this.waves[1];
+    this.gameObject.name = [this.first instanceof Wave, this.first.count, this.waves.length, w instanceof Wave, w.count, w.delay, w.spawn.y].join(",");
+  }
+}
+@createAssetMenu({ menuName: "Data/Enemy", fileName: "Enemy" })
+export class EnemyData extends ScriptableObject { hp = 10; }
+"#
+            .to_vec(),
+        );
+        io
+    }
+    struct W;
+    impl Game for W {
+        fn start(&mut self, ctx: &mut GameContext) {
+            ctx.resources.insert(goat_assets::AssetServer::new(sio()));
+            let props = serde_json::json!({ "first": { "count": 9 }, "waves": [{ "count": 1 }, { "count": 4, "delay": 0.25, "spawn": [0, 7, 0] }] });
+            ctx.world.spawn((Name("Waves".into()), Transform::default(), GlobalTransform::default(), Script(vec![ScriptRef::new("scripts/Waves.ts").with_props(props)])));
+        }
+        fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+            vec![Box::new(goat_scene::ScenePlugin), Box::new(ScriptPlugin::new().with_host(JsHost::with_io(sio())))]
+        }
+    }
+    let mut gfx = NullBackend::new();
+    let mut e = Engine::new(W);
+    for _ in 0..3 {
+        e.frame(1.0 / 60.0, &mut gfx);
+    }
+    assert!(find(&e, "true,9,2,true,4,0.25,7").is_some(), "{:?}", e.world.query::<&Name>().iter().map(|(_, n)| n.0.clone()).collect::<Vec<_>>());
+    let mut host = JsHost::with_io(sio());
+    e.with_context(&mut gfx, |ctx| {
+        let mut api = crate::api_of(ctx);
+        let meta = host.field_meta(&mut api, "scripts/Waves.ts").unwrap();
+        assert_eq!(meta["fields"]["waves"]["type"], "struct");
+        assert_eq!(meta["fields"]["waves"]["structDefaults"], serde_json::json!({ "count": 3, "delay": 1.5, "spawn": [0, 1, 0] }));
+        assert_eq!(meta["fields"]["intro"]["group"]["name"], "Text");
+        assert_eq!(meta["fields"]["intro"]["multiline"], 4);
+    });
+}

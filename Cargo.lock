@@ -2401,9 +2401,11 @@ dependencies = [
  "goat-gfx",
  "goat-runtime",
  "goat-scene",
+ "goat-script",
  "goat-sprites",
  "hecs",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2432,9 +2434,11 @@ dependencies = [
  "goat-physics",
  "goat-runtime",
  "goat-scene",
+ "goat-script",
  "goat-sprites",
  "hecs",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

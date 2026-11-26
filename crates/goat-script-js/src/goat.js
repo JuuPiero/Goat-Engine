@@ -887,8 +887,16 @@ export class PointerEventData {
     this.button = a.button ?? 0;
     this.clickCount = a.clickCount ?? 1;
     this.pointerCurrentRaycast = { gameObject: a.gameObject ?? null, worldPosition: v3(a.worldPosition ?? [0, 0, 0]), distance: a.distance ?? 0 };
+    this.pressPosition = a.pressPosition ? new Vector2(a.pressPosition[0], a.pressPosition[1]) : this.position;
+    this.delta = a.delta ? new Vector2(a.delta[0], a.delta[1]) : Vector2.zero;
+    /** The object being dragged (onDrag / onEndDrag / onDrop). */
+    this.pointerDrag = a.pointerDrag ?? null;
+    this.dragging = !!a.pointerDrag;
+    this.useDragThreshold = true;
   }
   get pointerPress() { return this.pointerCurrentRaycast.gameObject; }
+  get pointerEnter() { return this.pointerCurrentRaycast.gameObject; }
+  get pointerPressRaycast() { return this.pointerCurrentRaycast; }
 }
 
 export function __message(obj, name, arg) {
@@ -897,12 +905,13 @@ export function __message(obj, name, arg) {
   const a = fromNative(arg);
   if (name.startsWith('onCollision')) f.call(obj, new Collision(a));
   else if (name.startsWith('onTrigger')) f.call(obj, a.other);
-  else if (name.startsWith('onPointer')) f.call(obj, new PointerEventData(a));
+  else if (/^on(Pointer|BeginDrag|Drag$|EndDrag|Drop|InitializePotentialDrag|Scroll)/.test(name)) f.call(obj, new PointerEventData(a));
   else f.call(obj, a);
 }
 
 export function __tick() {
   tickScenes();
+  if (imageEffectScripts.length) tickImageEffects();
   if (uiListeners.length) tickUi();
   if (animListeners.length) tickAnimation();
   if (coroutines.length) tickCoroutines();
@@ -973,6 +982,7 @@ export function __track(obj) {
   const list = __instances.get(obj._h) || [];
   list.push(obj);
   __instances.set(obj._h, list);
+  if (typeof obj.onRenderImage === 'function') imageEffectScripts.push(obj);
 }
 globalThis.console = { log: Debug.log, info: Debug.log, warn: Debug.warn, error: Debug.error, debug: Debug.log };
 
@@ -1808,12 +1818,19 @@ export function field(type, options) {
   if (type && typeof type === 'object' && !Array.isArray(type) && typeof options === 'string') { metaFor(type, options).serialize = true; return undefined; }
   return fieldDecorator((m) => {
     const list = Array.isArray(type);
-    const t = typeName(list ? type[0] : type);
+    const T = list ? type[0] : type;
+    const t = typeName(T);
     if (t) m.type = t;
+    else if (isStructClass(T)) {
+      // a @serializable data class: its instances are saved inside the field
+      m.type = 'struct';
+      Object.defineProperty(m, 'cls', { value: T, enumerable: false, configurable: true });
+    }
     if (list) m.array = true;
     if (options) Object.assign(m, options);
   });
 }
+const isStructClass = (T) => typeof T === 'function' && T !== String && T !== Number && T !== Boolean && !(T.prototype instanceof ScriptableObject) && !(T.prototype instanceof Behaviour) && !(T.prototype instanceof Component);
 /** Serialized but not shown (Unity's [HideInInspector]). */
 export function hideInInspector(target, key) { metaFor(target, key).hide = true; }
 /** Not saved, not shown (Unity's [NonSerialized]). */
@@ -1837,22 +1854,34 @@ export function button(labelOrTarget, key) {
 export function contextMenu(label) { return (target, k) => { metaFor(target).buttons.push({ method: k, label, menu: true }); }; }
 
 /** Host (editor): the Inspector metadata of a script class: fields (types, hidden, ranges...) and buttons. */
-export function __fieldMeta(cls) {
+export function __fieldMeta(cls) { return collectMeta(cls, false); }
+/** The metadata with struct classes attached (cls, used when loading values). */
+function collectMeta(cls, withClasses) {
   const out = { fields: {}, buttons: [] };
   const chain = [];
   for (let p = cls?.prototype; p && p !== Object.prototype; p = Object.getPrototypeOf(p)) chain.unshift(p);
   for (const p of chain) {
     if (!Object.prototype.hasOwnProperty.call(p, '__goatMeta')) continue;
     const m = p.__goatMeta;
-    for (const [k, v] of Object.entries(m.fields)) out.fields[k] = { ...(out.fields[k] ?? {}), ...v };
+    for (const [k, v] of Object.entries(m.fields)) {
+      const merged = { ...(out.fields[k] ?? {}), ...v };
+      if (v.cls) {
+        if (withClasses) Object.defineProperty(merged, 'cls', { value: v.cls, enumerable: false, configurable: true });
+        // what a new element / value starts as (the editor's + Add)
+        try { const f = __fields(new v.cls()); merged.structDefaults = Object.fromEntries(f); merged.structOrder = f.map((p) => p[0]); } catch (e) { merged.structDefaults = {}; merged.structOrder = []; }
+      }
+      out.fields[k] = merged;
+    }
     out.buttons.push(...m.buttons);
   }
+  if (cls?.__createAssetMenu) out.createAssetMenu = cls.__createAssetMenu;
   return out;
 }
 
-const metaOfObj = (obj) => (obj ? __fieldMeta(obj.constructor) : { fields: {}, buttons: [] });
+const metaOfObj = (obj) => (obj ? collectMeta(obj.constructor, true) : { fields: {}, buttons: [] });
 const isAssetKey = (v) => typeof v === 'string' && v.endsWith('.asset.json');
 const assetOrValue = (v, m) => {
+  if (m?.type === 'struct' && m.cls && v && typeof v === 'object' && !Array.isArray(v)) { const o = new m.cls(); __applyProps(o, v); return o; }
   if (m?.type && typeof v === 'string' && ['textAsset', 'jsonAsset', 'bufferAsset', 'texture', 'scriptableObject'].includes(m.type)) return assetFor(v, m.type);
   return isAssetKey(v) ? ScriptableObject.load(v) : v;
 };
@@ -1906,3 +1935,808 @@ export function __fields(obj) {
   }
   return out;
 }
+
+// ------------------------------------------------------------------ typed components (Unity's component classes)
+//
+// `go.getComponent(Rigidbody)`, `this.getComponent(Light).intensity = 2`, `go.addComponent(LineRenderer)`:
+// a class per engine component (Unity's name and camelCase members over the component's scene
+// fields), methods through the engine (`ParticleSystem.play`, `Rigidbody.addForce`...).
+// `getComponent("Name")` with a string still returns the raw scene JSON.
+
+const hex8 = (c) => { const h = (v) => Math.round(Math.min(1, Math.max(0, v ?? 1)) * 255).toString(16).padStart(2, '0'); return '#' + h(c.r) + h(c.g) + h(c.b) + h(c.a ?? 1); };
+const CONV = {
+  raw: [(v) => v, (v) => v],
+  v3: [(v) => (Array.isArray(v) ? new Vector3(v[0], v[1], v[2]) : v), (v) => (v == null ? v : typeof v === 'number' ? [v, v, v] : [v.x, v.y, v.z ?? 0])],
+  v2: [(v) => (Array.isArray(v) ? new Vector2(v[0], v[1]) : v), (v) => (v == null ? v : [v.x, v.y])],
+  color: [(v) => (typeof v === 'string' ? Color.fromHex(v) : Array.isArray(v) ? new Color(v[0], v[1], v[2], v[3] ?? 1) : v), (v) => (v == null ? v : hex8(v))],
+  key: [(v) => v || null, (v, cur) => (v == null ? (typeof cur === 'string' ? '' : null) : typeof v === 'string' ? v : v._key ?? v.path ?? null)],
+  tex: [(v) => (v ? Texture.fromKey(v) : null), (v, cur) => (v == null ? (typeof cur === 'string' ? '' : null) : typeof v === 'string' ? v : v._key ?? null)],
+  rect: [(v) => (Array.isArray(v) ? new Rect(v[0], v[1], v[2], v[3]) : v), (v) => (v == null ? v : [v.x, v.y, v.width, v.height])],
+  v3list: [(v) => (Array.isArray(v) ? v.map((p) => new Vector3(p[0], p[1], p[2])) : []), (v) => (v ?? []).map((p) => [p.x, p.y, p.z ?? 0])],
+};
+/** Accessors `prop` → scene field: `{ prop: 'json_key' | ['json_key', kind] | { get, set } }`. */
+function props(cls, map) {
+  for (const [p, spec] of Object.entries(map)) {
+    if (spec && typeof spec === 'object' && !Array.isArray(spec)) { Object.defineProperty(cls.prototype, p, { ...spec, configurable: true }); continue; }
+    const [key, kind = 'raw'] = Array.isArray(spec) ? spec : [spec];
+    const [from, to] = CONV[kind];
+    Object.defineProperty(cls.prototype, p, {
+      get() { return from(this._read()[key]); },
+      set(v) { const c = this._read(); c[key] = to(v, c[key]); N.setComponent(this._h, this._name, c); },
+      configurable: true,
+    });
+  }
+}
+
+/** Base of the engine's component classes (Unity's Component). */
+export class Component {
+  constructor(h, engineName) { this._h = typeof h === 'number' ? h : handle(h); this._engineName = engineName ?? null; }
+  static _engine = null;
+  get _name() { const e = this._engineName ?? this.constructor._engine; return Array.isArray(e) ? e[0] : e; }
+  _read() { return N.getComponent(this._h, this._name) ?? {}; }
+  _write(patch) { const c = this._read(); Object.assign(c, patch); N.setComponent(this._h, this._name, c); }
+  get gameObject() { return new GameObject(this._h); }
+  get transform() { return new Transform(this._h); }
+  get name() { return N.name(this._h); }
+  get tag() { return N.call('GameObject.tag', this._h, []); }
+  compareTag(t) { return this.tag === t; }
+  getComponent(t) { return __getComponent(this._h, t); }
+  getComponents(t) { return __getComponents(this._h, t); }
+  tryGetComponent(t) { return __getComponent(this._h, t); }
+  getComponentInChildren(t, includeInactive = false) { return __inChildren(this._h, t, includeInactive)[0] ?? null; }
+  getComponentsInChildren(t, includeInactive = false) { return __inChildren(this._h, t, includeInactive); }
+  getComponentInParent(t) { return __inParent(this._h, t); }
+  /** On / off (components with an `enabled` or `visible` field). */
+  get enabled() { const c = this._read(); return c.enabled ?? c.visible ?? true; }
+  set enabled(on) { const c = this._read(); if ('enabled' in c) this._write({ enabled: !!on }); else if ('visible' in c) this._write({ visible: !!on }); }
+  equals(o) { return o != null && o._h === this._h && o._name === this._name; }
+  toString() { return `${this.constructor.name}(${this.name})`; }
+}
+
+const componentNamesOf = (h) => N.call('GameObject.componentNames', h, []) ?? [];
+const enginesOf = (T) => { const e = T?._engine; return e == null ? [] : Array.isArray(e) ? e : [e]; };
+const isScriptClass = (T) => T === Behaviour || (typeof T === 'function' && T.prototype instanceof Behaviour);
+function __getComponent(h, T) {
+  if (h == null || h < 0 || T == null) return null;
+  if (typeof T === 'string') return N.getComponent(h, T);
+  if (isScriptClass(T)) return (__instances.get(h) || []).find((o) => o instanceof T) ?? null;
+  const present = componentNamesOf(h);
+  for (const n of enginesOf(T)) {
+    if (!present.includes(n)) continue;
+    if (T._accepts && !T._accepts(N.getComponent(h, n) ?? {})) continue;
+    return new T(h, n);
+  }
+  return null;
+}
+function __getComponents(h, T) {
+  if (T == null) return [];
+  if (isScriptClass(T)) return (__instances.get(h) || []).filter((o) => o instanceof T);
+  if (T === Component) return componentNamesOf(h).map((n) => { if (n === 'Transform') return new Transform(h); const C = COMPONENT_CLASSES.find((c) => enginesOf(c).includes(n)) ?? Component; return new C(h, n); });
+  const c = __getComponent(h, T);
+  return c ? [c] : [];
+}
+function __inChildren(h, T, includeInactive) {
+  const out = [];
+  const visit = (x) => {
+    if (!includeInactive && !N.call('GameObject.activeInHierarchy', x, [])) return;
+    out.push(...__getComponents(x, T));
+    for (const g of fromNative(N.call('Transform.children', x, []) ?? [])) visit(handle(g));
+  };
+  visit(h);
+  return out;
+}
+function __inParent(h, T) {
+  for (let x = h, i = 0; x != null && x >= 0 && i < 256; i++) {
+    const c = __getComponent(x, T);
+    if (c) return c;
+    const p = new Transform(x).parent;
+    x = p ? p._h : -1;
+  }
+  return null;
+}
+function __addComponent(h, T, value) {
+  if (typeof T === 'string') { N.setComponent(h, T, value ?? {}); return N.getComponent(h, T); }
+  const name = enginesOf(T)[0];
+  if (!name) throw new Error(`addComponent: ${T?.name ?? T} is not an engine component (scripts are added in the scene)`);
+  N.setComponent(h, name, { ...(T._defaults ?? {}), ...(value ?? {}) });
+  return new T(h, name);
+}
+
+// GameObject / Behaviour: typed getComponent next to the JSON one
+for (const C of [GameObject, Behaviour]) {
+  const jsonGet = C.prototype.getComponent;
+  C.prototype.getComponent = function (t) { return typeof t === 'string' ? jsonGet.call(this, t) : __getComponent(this._h, t); };
+  C.prototype.getComponents = function (t) { return __getComponents(this._h, t); };
+  C.prototype.tryGetComponent = function (t) { return __getComponent(this._h, t); };
+  C.prototype.getComponentInChildren = function (t, inactive = false) { return __inChildren(this._h, t, inactive)[0] ?? null; };
+  C.prototype.getComponentsInChildren = function (t, inactive = false) { return __inChildren(this._h, t, inactive); };
+  C.prototype.getComponentInParent = function (t) { return __inParent(this._h, t); };
+  C.prototype.addComponent = function (t, value) { return __addComponent(this._h, t, value); };
+}
+{
+  const destroyObject = GameObject.destroy;
+  /** Destroy(component) removes the component; Destroy(gameObject, t) the object. */
+  GameObject.destroy = function (x, delay = 0) {
+    if (x instanceof Component || (x && x._name && typeof x._read === 'function')) { N.removeComponent(x._h, x._name); return; }
+    return destroyObject.call(this, x, delay);
+  };
+}
+/** Unity's FindObjectsByType / FindObjectOfType: engine components, or the running instances of a script class. */
+GameObject.findObjectsByType = function (T, includeInactive = false) {
+  if (isScriptClass(T)) return [...__instances.values()].flat().filter((o) => o instanceof T && N.exists(o._h));
+  return (N.call('GameObject.findWithComponent', -1, [enginesOf(T), includeInactive]) ?? []).map((g) => __getComponent(handle(fromNative(g)), T)).filter(Boolean);
+};
+GameObject.findObjectOfType = function (T, includeInactive = false) { return GameObject.findObjectsByType(T, includeInactive)[0] ?? null; };
+GameObject.findFirstObjectByType = GameObject.findObjectOfType;
+GameObject.findAnyObjectByType = GameObject.findObjectOfType;
+GameObject.findObjectsOfType = GameObject.findObjectsByType;
+
+// the existing wrappers become components too (getComponent(Camera), addComponent(AudioSource)...)
+for (const [W, engine] of [[Camera, 'Camera'], [Renderer, 'MeshRenderer'], [Animator, 'Animator'], [Animation, 'Animation'], [NavMeshAgent, 'NavMeshAgent'], [SpriteAnimator, 'SpriteAnimator'], [AudioSource, 'AudioSource']]) {
+  W._engine = engine;
+  for (const [k, d] of Object.entries(Object.getOwnPropertyDescriptors(Component.prototype))) {
+    if (k !== 'constructor' && !(k in W.prototype)) Object.defineProperty(W.prototype, k, d);
+  }
+  if (!Object.getOwnPropertyDescriptor(W.prototype, '_name')) Object.defineProperty(W.prototype, '_name', { get() { return engine; }, configurable: true });
+}
+
+export const ForceMode = { Force: 'Force', Acceleration: 'Acceleration', Impulse: 'Impulse', VelocityChange: 'VelocityChange' };
+export const ForceMode2D = { Force: 'Force', Impulse: 'Impulse' };
+export const RigidbodyType2D = { Dynamic: 'Dynamic', Kinematic: 'Kinematic', Static: 'Static' };
+export const LightType = { Directional: 'Directional', Point: 'Point', Spot: 'Spot' };
+
+// ---- physics
+export class Rigidbody extends Component {
+  static _engine = 'RigidBody';
+  /** Unity's AddForce(force, mode): Force / Acceleration over the step, Impulse / VelocityChange at once. */
+  addForce(f, mode = ForceMode.Force) {
+    const v = arr(f);
+    if (mode === ForceMode.Impulse) N.call('Rigidbody.addImpulse', this._h, [v]);
+    else if (mode === ForceMode.VelocityChange) { const m = this.mass; N.call('Rigidbody.addImpulse', this._h, [v.map((x) => x * m)]); }
+    else if (mode === ForceMode.Acceleration) { const m = this.mass; N.call('Rigidbody.addForce', this._h, [v.map((x) => x * m)]); }
+    else N.call('Rigidbody.addForce', this._h, [v]);
+  }
+  addRelativeForce(f, mode) { this.addForce(this.transform.transformDirection(f instanceof Vector3 ? f : v3(arr(f))), mode); }
+  movePosition(p) { this.transform.position = p; }
+  moveRotation(q) { this.transform.rotation = q; }
+  get position() { return this.transform.position; }
+  set position(p) { this.transform.position = p; }
+  get rotation() { return this.transform.rotation; }
+  set rotation(q) { this.transform.rotation = q; }
+  get isKinematic() { return this._read().body_type === 'Kinematic'; }
+  set isKinematic(on) { this._write({ body_type: on ? 'Kinematic' : 'Dynamic' }); }
+  get useGravity() { return (this._read().gravity_scale ?? 1) !== 0; }
+  set useGravity(on) { this._write({ gravity_scale: on ? 1 : 0 }); }
+  get mass() { return this._read().mass ?? 1; }
+  set mass(m) { this._write({ mass: m }); }
+  get collisionDetectionMode() { return this._read().ccd ? 'Continuous' : 'Discrete'; }
+  set collisionDetectionMode(m) { this._write({ ccd: m !== 'Discrete' }); }
+  sleep() {}
+  wakeUp() {}
+}
+props(Rigidbody, { velocity: ['velocity', 'v3'], linearVelocity: ['velocity', 'v3'], angularVelocity: ['angular_velocity', 'v3'], drag: 'linear_damping', linearDamping: 'linear_damping', angularDrag: 'angular_damping', angularDamping: 'angular_damping', gravityScale: 'gravity_scale', freezeRotation: 'lock_rotation', bodyType: 'body_type' });
+
+export class Rigidbody2D extends Component {
+  static _engine = 'Rigidbody2D';
+  addForce(f, mode = ForceMode2D.Force) { N.call(mode === ForceMode2D.Impulse ? 'Rigidbody2D.addImpulse' : 'Rigidbody2D.addForce', this._h, [a2(f)]); }
+  movePosition(p) { const t = this.transform; const z = t.position.z; t.position = new Vector3(p.x, p.y, z); }
+  moveRotation(deg) { this.transform.eulerAngles = new Vector3(0, 0, deg); }
+  get position() { const p = this.transform.position; return new Vector2(p.x, p.y); }
+  set position(p) { this.movePosition(p); }
+  get isKinematic() { return this._read().body_type === 'Kinematic'; }
+  set isKinematic(on) { this._write({ body_type: on ? 'Kinematic' : 'Dynamic' }); }
+  get mass() { return this._read().mass ?? 1; }
+  set mass(m) { this._write({ mass: m }); }
+}
+props(Rigidbody2D, { velocity: ['velocity', 'v2'], linearVelocity: ['velocity', 'v2'], angularVelocity: 'angular_velocity', drag: 'linear_drag', linearDamping: 'linear_drag', angularDrag: 'angular_drag', gravityScale: 'gravity_scale', freezeRotation: 'freeze_rotation', bodyType: 'body_type' });
+
+export class Collider extends Component { static _engine = 'Collider'; }
+props(Collider, { isTrigger: 'is_trigger', center: ['center', 'v3'], friction: 'friction', bounciness: 'restitution', density: 'density', layer: 'layer' });
+const shapeOf = (c) => Object.keys(c.shape ?? {})[0];
+export class BoxCollider extends Collider { static _accepts = (c) => shapeOf(c) === 'box'; static _defaults = { shape: { box: [0.5, 0.5, 0.5] } }; }
+props(BoxCollider, { size: { get() { const h = this._read().shape.box; return new Vector3(h[0] * 2, h[1] * 2, h[2] * 2); }, set(s) { this._write({ shape: { box: [s.x / 2, s.y / 2, s.z / 2] } }); } } });
+export class SphereCollider extends Collider { static _accepts = (c) => shapeOf(c) === 'sphere'; static _defaults = { shape: { sphere: 0.5 } }; }
+props(SphereCollider, { radius: { get() { return this._read().shape.sphere; }, set(r) { this._write({ shape: { sphere: r } }); } } });
+export class CapsuleCollider extends Collider { static _accepts = (c) => shapeOf(c) === 'capsule'; static _defaults = { shape: { capsule: { half_height: 0.5, radius: 0.5 } } }; }
+props(CapsuleCollider, {
+  radius: { get() { return this._read().shape.capsule.radius; }, set(r) { const c = this._read().shape.capsule; this._write({ shape: { capsule: { ...c, radius: r } } }); } },
+  height: { get() { const c = this._read().shape.capsule; return (c.half_height + c.radius) * 2; }, set(h) { const c = this._read().shape.capsule; this._write({ shape: { capsule: { ...c, half_height: Math.max(0, h / 2 - c.radius) } } }); } },
+});
+export class MeshCollider extends Collider { static _accepts = (c) => shapeOf(c) === 'mesh'; }
+
+export class Collider2D extends Component { static _engine = 'Collider2D'; }
+props(Collider2D, { isTrigger: 'is_trigger', offset: ['offset', 'v2'], friction: 'friction', bounciness: 'restitution', density: 'density', layer: 'layer' });
+export class BoxCollider2D extends Collider2D { static _accepts = (c) => shapeOf(c) === 'box'; static _defaults = { shape: { box: [0.5, 0.5] } }; }
+props(BoxCollider2D, { size: { get() { const h = this._read().shape.box; return new Vector2(h[0] * 2, h[1] * 2); }, set(s) { this._write({ shape: { box: [s.x / 2, s.y / 2] } }); } } });
+export class CircleCollider2D extends Collider2D { static _accepts = (c) => shapeOf(c) === 'circle'; static _defaults = { shape: { circle: 0.5 } }; }
+props(CircleCollider2D, { radius: { get() { return this._read().shape.circle; }, set(r) { this._write({ shape: { circle: r } }); } } });
+export class CapsuleCollider2D extends Collider2D { static _accepts = (c) => shapeOf(c) === 'capsule'; }
+export class PolygonCollider2D extends Collider2D { static _accepts = (c) => shapeOf(c) === 'polygon'; }
+export class EdgeCollider2D extends Collider2D { static _accepts = (c) => shapeOf(c) === 'edge'; }
+
+export class CharacterController extends Component {
+  static _engine = 'CharacterController';
+  /** Moves by `motion` (world units) sliding along walls; returns the collision flags. */
+  move(motion) { return N.call('CharacterController.move', this._h, [arr(motion)]); }
+  /** Moves at `speed` (units / second) with gravity (Unity's SimpleMove). */
+  simpleMove(speed) { const dt = Time.deltaTime; this._vy = this.isGrounded ? 0 : (this._vy ?? 0) - 9.81 * dt; this.move(new Vector3(speed.x * dt, this._vy * dt, speed.z * dt)); return this.isGrounded; }
+  get isGrounded() { return !!N.call('CharacterController.isGrounded', this._h, []); }
+}
+props(CharacterController, { center: ['center', 'v3'], height: 'height', radius: 'radius', slopeLimit: 'slope_limit', stepOffset: 'step_offset', skinWidth: 'skin_width' });
+
+export class ConstantForce extends Component { static _engine = 'ConstantForce'; }
+props(ConstantForce, { force: ['force', 'v3'], relativeForce: ['relative_force', 'v3'], torque: ['torque', 'v3'], relativeTorque: ['relative_torque', 'v3'] });
+export class ConstantForce2D extends Component { static _engine = 'ConstantForce2D'; }
+props(ConstantForce2D, { force: ['force', 'v2'], relativeForce: ['relative_force', 'v2'], torque: 'torque' });
+export class Joint extends Component { static _engine = 'Joint'; }
+props(Joint, { anchor: ['anchor', 'v3'], connectedAnchor: ['connected_anchor', 'v3'], enableCollision: 'enable_collision', kind: 'kind' });
+export class Joint2D extends Component { static _engine = 'Joint2D'; }
+props(Joint2D, { anchor: ['anchor', 'v2'], connectedAnchor: ['connected_anchor', 'v2'], enableCollision: 'enable_collision', kind: 'kind' });
+export class TargetJoint2D extends Component { static _engine = 'TargetJoint2D'; }
+props(TargetJoint2D, { target: ['target', 'v2'], maxForce: 'max_force', frequency: 'frequency', dampingRatio: 'damping_ratio' });
+export class AreaEffector2D extends Component { static _engine = 'AreaEffector2D'; }
+props(AreaEffector2D, { forceAngle: 'force_angle', forceMagnitude: 'force_magnitude', forceVariation: 'force_variation', drag: 'drag', angularDrag: 'angular_drag', useGlobalAngle: 'use_global_angle' });
+export class PointEffector2D extends Component { static _engine = 'PointEffector2D'; }
+props(PointEffector2D, { forceMagnitude: 'force_magnitude', forceVariation: 'force_variation', distanceScale: 'distance_scale', drag: 'drag', angularDrag: 'angular_drag', forceMode: 'force_mode' });
+export class BuoyancyEffector2D extends Component { static _engine = 'BuoyancyEffector2D'; }
+props(BuoyancyEffector2D, { surfaceLevel: 'surface_level', density: 'density', linearDrag: 'linear_drag', angularDrag: 'angular_drag', flowAngle: 'flow_angle', flowMagnitude: 'flow_magnitude' });
+export class PlatformEffector2D extends Component { static _engine = 'PlatformEffector2D'; }
+props(PlatformEffector2D, { useOneWay: 'use_one_way', surfaceArc: 'surface_arc', rotationalOffset: 'rotational_offset' });
+export class SurfaceEffector2D extends Component { static _engine = 'SurfaceEffector2D'; }
+props(SurfaceEffector2D, { speed: 'speed', speedVariation: 'speed_variation' });
+
+// ---- rendering
+/** Unity's Light (the engine has one component per type: Directional / Point / Spot Light). */
+export class Light extends Component {
+  static _engine = ['DirectionalLight', 'PointLight', 'SpotLight'];
+  get type() { return this._name.replace('Light', ''); }
+}
+props(Light, { color: ['color', 'color'], intensity: 'intensity', range: 'range', spotAngle: 'spot_angle', innerSpotAngle: 'inner_spot_angle', mode: 'mode' });
+/** Unity's MeshRenderer: `material` (its own copy) from Renderer, `sharedMaterial` = the asset key. */
+export class MeshRenderer extends Renderer {
+  constructor(h) { super(h); }
+  get sharedMaterial() { return N.getComponent(this._h, 'MeshRenderer')?.material ?? null; }
+  set sharedMaterial(m) { const c = N.getComponent(this._h, 'MeshRenderer'); if (c) { c.material = typeof m === 'string' ? m : 'builtin:default'; N.setComponent(this._h, 'MeshRenderer', c); } }
+}
+MeshRenderer._engine = 'MeshRenderer';
+MeshRenderer._defaults = { mesh: 'builtin:cube', material: 'builtin:default' };
+/** Unity's MeshFilter: the mesh of the object's MeshRenderer ('builtin:cube', a model's mesh key). */
+export class MeshFilter extends Component { static _engine = 'MeshRenderer'; static _defaults = { mesh: 'builtin:cube', material: 'builtin:default' }; }
+props(MeshFilter, { mesh: 'mesh', sharedMesh: 'mesh' });
+export class SpriteRenderer extends Component { static _engine = 'SpriteRenderer'; static _defaults = { texture: 'builtin:white' }; }
+props(SpriteRenderer, { color: ['color', 'color'], sprite: ['texture', 'key'], texture: ['texture', 'key'], sortingOrder: 'sorting_order', layer: 'layer', pixelsPerUnit: 'pixels_per_unit', pivot: ['pivot', 'v2'] });
+export class SpriteMask extends Component { static _engine = 'SpriteMask'; }
+props(SpriteMask, { center: ['center', 'v2'], size: ['size', 'v2'] });
+/** Unity's TextMesh (3D / world text). */
+export class TextMesh extends Component { static _engine = 'Text'; static _defaults = { text: '', font: '' }; }
+props(TextMesh, { text: 'text', color: ['color', 'color'], fontSize: 'size', characterSize: 'size', font: ['font', 'key'], alignment: 'align', anchor: 'valign', lineSpacing: 'line_spacing', sortingOrder: 'sorting_order' });
+export class LineRenderer extends Component {
+  static _engine = 'LineRenderer';
+  get positionCount() { return (this._read().positions ?? []).length; }
+  set positionCount(n) { const c = this._read(); const p = c.positions ?? []; while (p.length < n) p.push(p[p.length - 1] ?? [0, 0, 0]); p.length = Math.max(0, n); c.positions = p; N.setComponent(this._h, this._name, c); }
+  setPosition(i, v) { const c = this._read(); const p = c.positions ?? []; if (i >= 0 && i < p.length) { p[i] = [v.x, v.y, v.z ?? 0]; N.setComponent(this._h, this._name, c); } }
+  getPosition(i) { const p = (this._read().positions ?? [])[i]; return p ? new Vector3(p[0], p[1], p[2]) : Vector3.zero; }
+  setPositions(list) { this._write({ positions: list.map((v) => [v.x, v.y, v.z ?? 0]) }); }
+  getPositions() { return (this._read().positions ?? []).map((p) => new Vector3(p[0], p[1], p[2])); }
+}
+props(LineRenderer, { startWidth: 'start_width', endWidth: 'end_width', widthMultiplier: 'width_multiplier', startColor: ['start_color', 'color'], endColor: ['end_color', 'color'], loop: 'loop', useWorldSpace: 'use_world_space', alignment: 'alignment', textureMode: 'texture_mode', sortingOrder: 'sorting_order', texture: ['texture', 'key'] });
+export class TrailRenderer extends Component {
+  static _engine = 'TrailRenderer';
+  clear() { N.call('TrailRenderer.clear', this._h, []); }
+  get positionCount() { return N.call('TrailRenderer.positionCount', this._h, []) ?? 0; }
+}
+props(TrailRenderer, { time: 'time', startWidth: 'start_width', endWidth: 'end_width', widthMultiplier: 'width_multiplier', startColor: ['start_color', 'color'], endColor: ['end_color', 'color'], minVertexDistance: 'min_vertex_distance', emitting: 'emitting', autodestruct: 'autodestruct', alignment: 'alignment', sortingOrder: 'sorting_order', texture: ['texture', 'key'] });
+/** Unity's ParticleSystem: play / stop / pause / clear / emit, the state, and the main settings as
+ *  properties (`ps.main.startSpeed` and `ps.startSpeed` both work). */
+export class ParticleSystem extends Component {
+  static _engine = 'ParticleSystem';
+  play() { N.call('ParticleSystem.play', this._h, [false]); }
+  stop(withChildren = true, behavior = 'StopEmitting') { N.call('ParticleSystem.stop', this._h, [behavior === 'StopEmittingAndClear']); }
+  pause() { N.call('ParticleSystem.stop', this._h, [false]); }
+  clear() { N.call('ParticleSystem.clear', this._h, []); }
+  emit(count = 1) { N.call('ParticleSystem.emit', this._h, [count | 0]); }
+  _state() { return N.call('ParticleSystem.state', this._h, []) ?? { playing: false, count: 0, time: 0 }; }
+  get isPlaying() { return this._state().playing; }
+  get isEmitting() { return this._state().playing; }
+  get isStopped() { const s = this._state(); return !s.playing && s.count === 0; }
+  get isPaused() { return false; }
+  get particleCount() { return this._state().count; }
+  get time() { return this._state().time; }
+  get main() { return this; }
+  get emission() { const ps = this; return { get rateOverTime() { return ps._read().rate; }, set rateOverTime(r) { ps._write({ rate: r }); }, get enabled() { return ps._read().rate > 0; }, set enabled(on) { if (!on) ps._write({ rate: 0 }); } }; }
+}
+const range2 = (key) => ({ get() { const v = this._read()[key]; return Array.isArray(v) ? (v[0] + v[1]) / 2 : v; }, set(x) { this._write({ [key]: Array.isArray(x) ? x : [x, x] }); } });
+props(ParticleSystem, {
+  duration: 'duration', loop: 'looping', looping: 'looping', maxParticles: 'max_particles', gravityModifier: 'gravity', drag: 'drag', simulationSpace: 'space', rateOverTime: 'rate',
+  startColor: ['color_start', 'color'], endColor: ['color_end', 'color'],
+  startLifetime: range2('lifetime'), startSpeed: range2('speed'), startSize: range2('size'), startRotation: range2('rotation'),
+});
+export class PostEffect extends Component { static _engine = 'PostEffect'; }
+props(PostEffect, { materials: 'materials' });
+export class LightProbeGroup extends Component { static _engine = 'LightProbeGroup'; }
+props(LightProbeGroup, { probePositions: ['positions', 'v3list'] });
+export class ReflectionProbe extends Component { static _engine = 'ReflectionProbe'; }
+props(ReflectionProbe, { size: ['size', 'v3'], center: ['center', 'v3'], importance: 'importance', cubemap: 'cubemap' });
+export class LODGroup extends Component { static _engine = 'LodGroup'; static _defaults = { levels: [] }; }
+export class BlobShadow extends Component { static _engine = 'BlobShadow'; }
+props(BlobShadow, { size: 'size', opacity: 'opacity', maxDistance: 'max_distance' });
+
+// ---- audio / navigation
+export class AudioListener extends Component { static _engine = 'AudioListener'; }
+export class NavMeshObstacle extends Component { static _engine = 'NavMeshObstacle'; }
+props(NavMeshObstacle, { carving: 'carve', carveOnlyStationary: 'carve_only_stationary', center: ['center', 'v3'], size: ['size', 'v3'], radius: 'radius', height: 'height', shape: 'shape' });
+export class NavMeshSurface extends Component { static _engine = 'NavMeshSurface'; }
+props(NavMeshSurface, { agentRadius: 'agent_radius', agentHeight: 'agent_height', agentClimb: 'agent_climb', agentSlope: 'agent_slope', size: ['size', 'v3'], center: ['center', 'v3'] });
+export class NavMeshModifier extends Component { static _engine = 'NavMeshModifier'; }
+props(NavMeshModifier, { overrideArea: 'override_area', area: 'area', ignoreFromBuild: 'ignore_from_build' });
+
+// ---- UI (Unity's UnityEngine.UI names)
+export class Canvas extends Component { static _engine = 'Canvas'; }
+props(Canvas, { sortingOrder: 'sorting_order' });
+export class RectTransform extends Component { static _engine = 'RectTransform'; }
+props(RectTransform, { anchorMin: ['anchor_min', 'v2'], anchorMax: ['anchor_max', 'v2'], pivot: ['pivot', 'v2'], anchoredPosition: ['offset', 'v2'], sizeDelta: ['size', 'v2'] });
+/** `button.onClick.addListener(fn)` & co: the UI's per-frame events. */
+const uiEventOf = (kind) => function () {
+  const h = this._h;
+  return {
+    addListener: (fn) => UI[kind](h, fn),
+    removeAllListeners: () => { for (let i = uiListeners.length - 1; i >= 0; i--) if (uiListeners[i].h === h) uiListeners.splice(i, 1); },
+    removeListener: (fn) => { const i = uiListeners.findIndex((l) => l.h === h && l.fn === fn); if (i >= 0) uiListeners.splice(i, 1); },
+  };
+};
+class UIControl extends Component {
+  get interactable() { return this._read().interactable ?? true; }
+  set interactable(on) { N.call('UI.setInteractable', this._h, [!!on]); }
+}
+export class Image extends Component { static _engine = 'UiImage'; }
+props(Image, { color: ['color', 'color'], sprite: ['texture', 'key'], fillAmount: 'fill_amount', fillMethod: 'fill_method', type: 'image_type', fillClockwise: { get() { return !this._read().fill_reverse; }, set(v) { this._write({ fill_reverse: !v }); } } });
+export class RawImage extends Component { static _engine = 'UiRawImage'; }
+props(RawImage, { color: ['color', 'color'], texture: ['texture', 'tex'], uvRect: ['uv_rect', 'rect'] });
+/** UnityEngine.UI.Text (also exported as TextMeshProUGUI). */
+export class Text extends Component {
+  static _engine = 'UiText';
+  get text() { return this._read().text ?? ''; }
+  set text(t) { N.call('UI.setText', this._h, [String(t)]); }
+}
+props(Text, { color: ['color', 'color'], fontSize: 'size', alignment: 'align', supportRichText: 'rich', richText: 'rich', font: ['font', 'key'] });
+export { Text as TextMeshProUGUI };
+export class Button extends UIControl { static _engine = 'UiButton'; }
+props(Button, { onClick: { get: uiEventOf('onClick') } });
+export class Toggle extends UIControl {
+  static _engine = 'UiToggle';
+  get isOn() { return !!N.call('UI.value', this._h, []); }
+  set isOn(v) { N.call('UI.setValue', this._h, [!!v]); }
+  setIsOnWithoutNotify(v) { this.isOn = v; }
+}
+props(Toggle, { onValueChanged: { get: uiEventOf('onValueChanged') } });
+export class Slider extends UIControl {
+  static _engine = 'UiSlider';
+  get value() { return N.call('UI.value', this._h, []) ?? 0; }
+  set value(v) { N.call('UI.setValue', this._h, [v]); }
+  setValueWithoutNotify(v) { this.value = v; }
+}
+props(Slider, { onValueChanged: { get: uiEventOf('onValueChanged') } });
+export class Scrollbar extends UIControl {
+  static _engine = 'UiScrollbar';
+  get value() { return N.call('UI.value', this._h, []) ?? 0; }
+  set value(v) { N.call('UI.setValue', this._h, [v]); }
+}
+props(Scrollbar, { size: 'size', direction: 'direction', onValueChanged: { get: uiEventOf('onValueChanged') } });
+export class InputField extends UIControl {
+  static _engine = 'UiInputField';
+  get text() { return N.call('UI.value', this._h, []) ?? ''; }
+  set text(t) { N.call('UI.setText', this._h, [String(t)]); }
+  setTextWithoutNotify(t) { this.text = t; }
+}
+props(InputField, { characterLimit: 'character_limit', contentType: 'content_type', multiLine: 'multi_line', onValueChanged: { get: uiEventOf('onValueChanged') }, onEndEdit: { get: uiEventOf('onSubmit') }, onSubmit: { get: uiEventOf('onSubmit') } });
+export { InputField as TMP_InputField };
+export class Dropdown extends UIControl {
+  static _engine = 'UiDropdown';
+  get value() { return N.call('UI.value', this._h, []) ?? 0; }
+  set value(v) { N.call('UI.setValue', this._h, [v | 0]); }
+  get options() { return (this._read().options ?? []).map((text) => ({ text })); }
+  set options(list) { N.call('UI.setOptions', this._h, [list.map((o) => (typeof o === 'string' ? o : o.text))]); }
+  addOptions(list) { this.options = [...this.options, ...list]; }
+  clearOptions() { this.options = []; }
+  refreshShownValue() {}
+}
+props(Dropdown, { onValueChanged: { get: uiEventOf('onValueChanged') } });
+export { Dropdown as TMP_Dropdown };
+export class CanvasGroup extends Component { static _engine = 'UiCanvasGroup'; }
+props(CanvasGroup, { alpha: 'alpha', interactable: 'interactable', blocksRaycasts: 'blocks_raycasts', ignoreParentGroups: 'ignore_parent_groups' });
+export class ScrollRect extends Component {
+  static _engine = 'UiScrollRect';
+  get normalizedPosition() { const v = N.call('UI.value', this._h, []); return Array.isArray(v) ? new Vector2(v[0], v[1]) : Vector2.zero; }
+  set normalizedPosition(v) { N.call('UI.setValue', this._h, [[v.x, v.y]]); }
+  get horizontalNormalizedPosition() { return this.normalizedPosition.x; }
+  set horizontalNormalizedPosition(x) { this.normalizedPosition = new Vector2(x, this.normalizedPosition.y); }
+  get verticalNormalizedPosition() { return this.normalizedPosition.y; }
+  set verticalNormalizedPosition(y) { this.normalizedPosition = new Vector2(this.normalizedPosition.x, y); }
+}
+props(ScrollRect, { horizontal: 'horizontal', vertical: 'vertical', inertia: 'inertia', elasticity: 'elasticity', decelerationRate: 'deceleration_rate', scrollSensitivity: 'scroll_speed' });
+export class LayoutElement extends Component { static _engine = 'UiLayoutElement'; }
+props(LayoutElement, {
+  ignoreLayout: 'ignore_layout',
+  preferredWidth: { get() { return this._read().preferred[0]; }, set(v) { const p = this._read().preferred; this._write({ preferred: [v, p[1]] }); } },
+  preferredHeight: { get() { return this._read().preferred[1]; }, set(v) { const p = this._read().preferred; this._write({ preferred: [p[0], v] }); } },
+  flexibleWidth: { get() { return this._read().flexible[0]; }, set(v) { const p = this._read().flexible; this._write({ flexible: [v, p[1]] }); } },
+  flexibleHeight: { get() { return this._read().flexible[1]; }, set(v) { const p = this._read().flexible; this._write({ flexible: [p[0], v] }); } },
+});
+export class LayoutGroup extends Component { static _engine = 'UiLayoutGroup'; }
+props(LayoutGroup, { spacing: { get() { return this._read().spacing[0]; }, set(v) { this._write({ spacing: [v, v] }); } }, cellSize: ['cell_size', 'v2'], childAlignment: ['child_alignment', 'v2'], constraintCount: 'columns', childControlWidth: 'control_width', childControlHeight: 'control_height', childForceExpandWidth: 'expand_width', childForceExpandHeight: 'expand_height' });
+export class HorizontalLayoutGroup extends LayoutGroup { static _accepts = (c) => c.kind === 'Horizontal'; static _defaults = { kind: 'Horizontal' }; }
+export class VerticalLayoutGroup extends LayoutGroup { static _accepts = (c) => c.kind === 'Vertical'; static _defaults = { kind: 'Vertical' }; }
+export class GridLayoutGroup extends LayoutGroup { static _accepts = (c) => c.kind === 'Grid'; static _defaults = { kind: 'Grid' }; }
+export class ContentSizeFitter extends Component { static _engine = 'UiContentSizeFitter'; }
+props(ContentSizeFitter, { horizontalFit: 'horizontal', verticalFit: 'vertical' });
+export class AspectRatioFitter extends Component { static _engine = 'UiAspectRatioFitter'; }
+props(AspectRatioFitter, { aspectRatio: 'aspect_ratio', aspectMode: 'mode' });
+export class Mask extends Component { static _engine = 'UiMask'; }
+props(Mask, { showMaskGraphic: 'show_graphic' });
+export class RectMask2D extends Component { static _engine = 'UiRectMask2D'; }
+export class Outline extends Component { static _engine = 'UiOutline'; }
+props(Outline, { effectColor: ['color', 'color'], effectDistance: ['distance', 'v2'] });
+export class Shadow extends Component { static _engine = 'UiShadow'; }
+props(Shadow, { effectColor: ['color', 'color'], effectDistance: ['distance', 'v2'] });
+export class ToggleGroup extends Component { static _engine = 'UiToggleGroup'; }
+props(ToggleGroup, { allowSwitchOff: 'allow_switch_off' });
+export class EventSystem extends Component {
+  static _engine = 'UiEventSystem';
+  static get current() { return GameObject.findObjectOfType(EventSystem); }
+  setSelectedGameObject(go) { if (go) N.call('UI.select', handle(go), []); }
+}
+export class PhysicsRaycaster extends Component { static _engine = 'PhysicsRaycaster'; }
+export class Physics2DRaycaster extends Component { static _engine = 'Physics2DRaycaster'; }
+
+/** Every component class, for getComponents(Component). */
+const COMPONENT_CLASSES = [Rigidbody, Rigidbody2D, Collider, Collider2D, CharacterController, ConstantForce, ConstantForce2D, Joint, Joint2D, TargetJoint2D, AreaEffector2D, PointEffector2D, BuoyancyEffector2D, PlatformEffector2D, SurfaceEffector2D, Light, MeshRenderer, SpriteRenderer, SpriteMask, TextMesh, LineRenderer, TrailRenderer, ParticleSystem, PostEffect, LightProbeGroup, ReflectionProbe, LODGroup, BlobShadow, AudioListener, NavMeshObstacle, NavMeshSurface, NavMeshModifier, Canvas, RectTransform, Image, RawImage, Text, Button, Toggle, Slider, Scrollbar, InputField, Dropdown, CanvasGroup, ScrollRect, LayoutElement, LayoutGroup, ContentSizeFitter, AspectRatioFitter, Mask, RectMask2D, Outline, Shadow, ToggleGroup, EventSystem, PhysicsRaycaster, Physics2DRaycaster, Camera, Animator, Animation, NavMeshAgent, SpriteAnimator, AudioSource];
+
+// ------------------------------------------------------------------ Unity's Input (keys, mouse, touch, axes)
+
+/** Unity's KeyCode → the platform key name (web `KeyboardEvent.code`). */
+export const KeyCode = (() => {
+  const k = {
+    None: '', Backspace: 'Backspace', Tab: 'Tab', Return: 'Enter', Escape: 'Escape', Space: 'Space', Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+    UpArrow: 'ArrowUp', DownArrow: 'ArrowDown', LeftArrow: 'ArrowLeft', RightArrow: 'ArrowRight',
+    LeftShift: 'ShiftLeft', RightShift: 'ShiftRight', LeftControl: 'ControlLeft', RightControl: 'ControlRight', LeftAlt: 'AltLeft', RightAlt: 'AltRight', LeftCommand: 'MetaLeft', RightCommand: 'MetaRight', CapsLock: 'CapsLock',
+    Minus: 'Minus', Equals: 'Equal', LeftBracket: 'BracketLeft', RightBracket: 'BracketRight', Semicolon: 'Semicolon', Quote: 'Quote', Comma: 'Comma', Period: 'Period', Slash: 'Slash', Backslash: 'Backslash', BackQuote: 'Backquote',
+    KeypadEnter: 'NumpadEnter', KeypadPlus: 'NumpadAdd', KeypadMinus: 'NumpadSubtract', KeypadMultiply: 'NumpadMultiply', KeypadDivide: 'NumpadDivide', KeypadPeriod: 'NumpadDecimal',
+    Mouse0: 'Mouse0', Mouse1: 'Mouse1', Mouse2: 'Mouse2',
+  };
+  for (let c = 65; c <= 90; c++) k[String.fromCharCode(c)] = 'Key' + String.fromCharCode(c);
+  for (let d = 0; d <= 9; d++) { k['Alpha' + d] = 'Digit' + d; k['Keypad' + d] = 'Numpad' + d; }
+  for (let f = 1; f <= 12; f++) k['F' + f] = 'F' + f;
+  return Object.freeze(k);
+})();
+// Unity's old string names: "space", "a", "up", "left shift", "return", "1"...
+const LEGACY_KEYS = { space: 'Space', return: 'Enter', enter: 'Enter', escape: 'Escape', tab: 'Tab', backspace: 'Backspace', delete: 'Delete', up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', 'left shift': 'ShiftLeft', 'right shift': 'ShiftRight', 'left ctrl': 'ControlLeft', 'right ctrl': 'ControlRight', 'left alt': 'AltLeft', 'right alt': 'AltRight' };
+const KEY_VALUES = new Set(Object.values(KeyCode));
+function keyCodeOf(k) {
+  if (typeof k !== 'string') return '';
+  if (KEY_VALUES.has(k)) return k;
+  if (k in KeyCode) return KeyCode[k];
+  const l = k.toLowerCase();
+  if (l in LEGACY_KEYS) return LEGACY_KEYS[l];
+  if (/^[a-z]$/.test(l)) return 'Key' + l.toUpperCase();
+  if (/^[0-9]$/.test(l)) return 'Digit' + l;
+  if (/^f([1-9]|1[0-2])$/.test(l)) return l.toUpperCase();
+  return k;
+}
+let inputCache = { frame: -1, state: null };
+const inputState = () => {
+  const f = N.frameCount();
+  if (inputCache.frame !== f) inputCache = { frame: f, state: N.call('Input.state', -1, []) ?? { mouse: [0, 0, 0], scroll: [0, 0], anyKey: false, anyKeyDown: false, text: '' } };
+  return inputCache.state;
+};
+const keyBits = (k) => {
+  const code = keyCodeOf(k);
+  const m = /^Mouse([0-2])$/.exec(code);
+  if (m) return inputState().mouse[+m[1]] ?? 0;
+  return N.call('Input.key', -1, [code]) ?? 0;
+};
+// the pointer between frames: mousePosition outside the game keeps the last one, "Mouse X/Y" deltas
+const pointerTrack = { frame: -1, pos: null, last: null, delta: [0, 0], downFrame: -1 };
+function trackPointer() {
+  const f = N.frameCount();
+  if (pointerTrack.frame === f) return pointerTrack;
+  const p = N.pointer();
+  const pos = p ? [p[0], p[1]] : pointerTrack.pos;
+  pointerTrack.delta = pos && pointerTrack.pos ? [pos[0] - pointerTrack.pos[0], pos[1] - pointerTrack.pos[1]] : [0, 0];
+  pointerTrack.last = pointerTrack.pos;
+  pointerTrack.pos = pos;
+  pointerTrack.down = !!(p && p[2]);
+  pointerTrack.frame = f;
+  return pointerTrack;
+}
+// Unity's default buttons on the 3DS layout (+ keyboard / mouse on desktop and in the editor)
+const VIRTUAL_BUTTONS = { Fire1: ['A', 'Mouse0', 'ControlLeft'], Fire2: ['B', 'Mouse1', 'AltLeft'], Fire3: ['X', 'Mouse2', 'ShiftLeft'], Jump: ['A', 'Space'], Submit: ['A', 'Enter'], Cancel: ['B', 'Escape'] };
+const PAD_BUTTONS = new Set(['A', 'B', 'X', 'Y', 'L', 'R', 'ZL', 'ZR', 'start', 'select', 'Start', 'Select']);
+function virtualBits(name) {
+  const list = VIRTUAL_BUTTONS[name];
+  if (!list) return null;
+  let bits = 0;
+  for (const b of list) bits |= PAD_BUTTONS.has(b) ? N.button(b) : keyBits(b);
+  return bits;
+}
+{
+  const padButton = Input.getButton, padDown = Input.getButtonDown, padUp = Input.getButtonUp;
+  Object.assign(Input, {
+    /** Unity's virtual buttons too: "Fire1", "Fire2", "Fire3", "Jump", "Submit", "Cancel". */
+    getButton(name) { const v = virtualBits(name); return v == null ? padButton.call(Input, name) : (v & 1) !== 0; },
+    getButtonDown(name) { const v = virtualBits(name); return v == null ? padDown.call(Input, name) : (v & 2) !== 0; },
+    getButtonUp(name) { const v = virtualBits(name); return v == null ? padUp.call(Input, name) : (v & 4) !== 0; },
+    /** KeyCode.Space, "space", "a"...: held / went down / went up this frame (keyboards; mouse = KeyCode.Mouse0..2). */
+    getKey(k) { return (keyBits(k) & 1) !== 0; },
+    getKeyDown(k) { return (keyBits(k) & 2) !== 0; },
+    getKeyUp(k) { return (keyBits(k) & 4) !== 0; },
+    /** "Horizontal" / "Vertical" (stick, else the d-pad / arrow keys), "Mouse X" / "Mouse Y" (pointer
+     *  movement), "Mouse ScrollWheel". getAxis is not smoothed here (= getAxisRaw). */
+    getAxisRaw(name) {
+      const s = N.stick();
+      const dir = (neg, pos) => ((N.button(pos) & 1) !== 0 ? 1 : 0) - ((N.button(neg) & 1) !== 0 ? 1 : 0);
+      switch (name) {
+        case 'Horizontal': return s[0] !== 0 ? s[0] : dir('dpad/left', 'dpad/right');
+        case 'Vertical': return s[1] !== 0 ? s[1] : dir('dpad/down', 'dpad/up');
+        case 'Mouse X': return trackPointer().delta[0] * 0.1;
+        case 'Mouse Y': return -trackPointer().delta[1] * 0.1;
+        case 'Mouse ScrollWheel': return inputState().scroll[1] * 0.1;
+        default: return 0;
+      }
+    },
+    getAxis(name) { return Input.getAxisRaw(name); },
+    /** 0 left, 1 right, 2 middle (a touch is the left button). */
+    getMouseButton(i) { return ((inputState().mouse[i] ?? 0) & 1) !== 0; },
+    getMouseButtonDown(i) { return ((inputState().mouse[i] ?? 0) & 2) !== 0; },
+    getMouseButtonUp(i) { return ((inputState().mouse[i] ?? 0) & 4) !== 0; },
+  });
+  Object.defineProperties(Input, {
+    /** The pointer in pixels of its display, from the top-left (the same as Camera.screenPointToRay takes). */
+    mousePosition: { get() { const p = trackPointer().pos; return p ? new Vector3(p[0], p[1], 0) : Vector3.zero; } },
+    mousePresent: { get() { return Application.platform !== '3DS'; } },
+    mouseScrollDelta: { get() { const s = inputState().scroll; return new Vector2(s[0], s[1]); } },
+    anyKey: { get() { return inputState().anyKey; } },
+    anyKeyDown: { get() { return inputState().anyKeyDown; } },
+    /** Characters typed this frame. */
+    inputString: { get() { return inputState().text ?? ''; } },
+    touchSupported: { get() { return true; } },
+    /** One touch while the pointer is down (the 3DS touch screen, the mouse elsewhere). */
+    touchCount: { get() { const t = trackPointer(); return t.down || (inputState().mouse[0] & 4) ? 1 : 0; } },
+    touches: { get() { return Input.touchCount ? [Input.getTouch(0)] : []; } },
+  });
+  Input.getTouch = function (i = 0) {
+    const t = trackPointer();
+    const m = inputState().mouse[0] ?? 0;
+    const phase = m & 2 ? 'Began' : m & 4 ? 'Ended' : t.delta[0] || t.delta[1] ? 'Moved' : 'Stationary';
+    const p = t.pos ?? [0, 0];
+    return { fingerId: 0, position: new Vector2(p[0], p[1]), deltaPosition: new Vector2(t.delta[0], t.delta[1]), phase, tapCount: 1, deltaTime: Time.deltaTime };
+  };
+}
+export const TouchPhase = { Began: 'Began', Moved: 'Moved', Stationary: 'Stationary', Ended: 'Ended', Canceled: 'Canceled' };
+
+// ------------------------------------------------------------------ MonoBehaviour members, Screen, Application, Time
+
+Object.defineProperties(Behaviour.prototype, {
+  /** Unity's MonoBehaviour.enabled: off = no Update (OnDisable), on again = OnEnable. */
+  enabled: { get() { return this._src ? !!N.call('Script.enabled', this._h, [this._src]) : true; }, set(on) { if (this._src) N.call('Script.enabled', this._h, [this._src, !!on]); }, configurable: true },
+  isActiveAndEnabled: { get() { return this.enabled && !!N.call('GameObject.activeInHierarchy', this._h, []); }, configurable: true },
+  tag: { get() { return N.call('GameObject.tag', this._h, []); }, set(t) { N.call('GameObject.setTag', this._h, [t]); }, configurable: true },
+});
+Object.assign(Behaviour.prototype, {
+  /** Unity's Instantiate (prefab key, then (parent) or (position, rotation[, parent])). */
+  instantiate(key, a, b, c) { return GameObject.instantiate(key, a, b, c); },
+  /** Unity's Destroy(object | component, delay). */
+  destroy(x, delay = 0) { GameObject.destroy(x, delay); },
+  compareTag(t) { return this.tag === t; },
+});
+
+Object.defineProperties(Screen, {
+  /** The area not covered by notches / rounded corners: the whole screen here. */
+  safeArea: { get() { return new Rect(0, 0, Screen.width, Screen.height); } },
+  cutouts: { get() { return []; } },
+  dpi: { get() { return Application.platform === '3DS' ? 132 : 96; } },
+  orientation: { get() { return 'LandscapeLeft'; }, set(_) {} },
+  fullScreen: { get() { return false; }, set(_) {} },
+  currentResolution: { get() { return { width: Screen.width, height: Screen.height, refreshRate: 60, refreshRateRatio: { value: 60 } }; } },
+  resolutions: { get() { return [Screen.currentResolution]; } },
+  sleepTimeout: { get() { return -1; }, set(_) {} },
+  brightness: { get() { return 1; }, set(_) {} },
+});
+Screen.setResolution = () => {};
+export const ScreenOrientation = { Portrait: 'Portrait', PortraitUpsideDown: 'PortraitUpsideDown', LandscapeLeft: 'LandscapeLeft', LandscapeRight: 'LandscapeRight', AutoRotation: 'AutoRotation' };
+export const SleepTimeout = { NeverSleep: -1, SystemSetting: -2 };
+
+let targetFrameRate = -1;
+const appInfo = () => N.call('Application.info', -1, []) ?? {};
+Object.defineProperties(Application, {
+  productName: { get() { return appInfo().productName ?? ''; } },
+  version: { get() { return appInfo().version ?? ''; } },
+  companyName: { get() { return ''; } },
+  identifier: { get() { return appInfo().productName ?? ''; } },
+  /** Kept for scripts that set it; the platform paces frames itself (vsync / the 3DS's 60 Hz). */
+  targetFrameRate: { get() { return targetFrameRate; }, set(v) { targetFrameRate = v; } },
+  runInBackground: { get() { return true; }, set(_) {} },
+  isMobilePlatform: { get() { return false; } },
+  isConsolePlatform: { get() { return Application.platform === '3DS'; } },
+  systemLanguage: { get() { return 'English'; } },
+  internetReachability: { get() { return 'NotReachable'; } },
+  /** Where PlayerPrefs / SaveData write (AppData on desktop, the SD card on the 3DS). */
+  persistentDataPath: { get() { return Application.platform === '3DS' ? 'sdmc:/3ds' : 'save'; } },
+  dataPath: { get() { return Application.platform === '3DS' ? 'romfs:' : 'assets'; } },
+  engineVersion: { get() { return 'GoatEngine'; } },
+});
+Application.openURL = (url) => Debug.log(`openURL: ${url}`);
+export const SystemLanguage = { English: 'English', Vietnamese: 'Vietnamese', Japanese: 'Japanese', French: 'French', German: 'German', Spanish: 'Spanish', Chinese: 'Chinese', Korean: 'Korean' };
+
+let smoothDt = 1 / 60, smoothFrame = -1, sceneStartTime = 0;
+Object.defineProperties(Time, {
+  /** deltaTime smoothed over the last frames. */
+  smoothDeltaTime: { get() { const f = N.frameCount(); if (f !== smoothFrame) { smoothFrame = f; smoothDt += (N.dt() - smoothDt) * 0.2; } return smoothDt; } },
+  fixedTime: { get() { return N.time(); } },
+  fixedUnscaledDeltaTime: { get() { return N.fixedDt(); } },
+  fixedUnscaledTime: { get() { return N.unscaledTime(); } },
+  maximumDeltaTime: { get() { return 0.1; }, set(_) {} },
+  /** Seconds since the last Single scene load. */
+  timeSinceLevelLoad: { get() { return N.time() - sceneStartTime; } },
+  inFixedTimeStep: { get() { return false; } },
+});
+
+// ------------------------------------------------------------------ Profiler, RenderStats
+
+const profStack = [];
+/** Unity's Profiler: samples show up in the editor's Profiler window. */
+export const Profiler = {
+  enabled: true,
+  beginSample(name) { profStack.push([name, N.call('Profiler.now', -1, [])]); },
+  endSample() { const s = profStack.pop(); if (s) N.call('Profiler.sample', -1, [s[0], N.call('Profiler.now', -1, []) - s[1]]); },
+};
+/** Unity's ProfilerMarker: `marker.begin(); ...; marker.end()`, or `using`-like `marker.auto(() => {...})`. */
+export class ProfilerMarker {
+  constructor(categoryOrName, name) { this.name = name ?? categoryOrName; this._t = []; }
+  begin() { this._t.push(N.call('Profiler.now', -1, [])); }
+  end() { const t = this._t.pop(); if (t != null) N.call('Profiler.sample', -1, [this.name, N.call('Profiler.now', -1, []) - t]); }
+  auto(fn) { this.begin(); try { return fn?.(); } finally { this.end(); } }
+}
+export const ProfilerCategory = { Render: 'Render', Scripts: 'Scripts', Physics: 'Physics', Animation: 'Animation', Audio: 'Audio', Memory: 'Memory', Internal: 'Internal', Ai: 'Ai', Gui: 'Gui' };
+/** Unity's ProfilerRecorder: a section's time in the last frame (nanoseconds), or "Draw Calls Count" / "Triangles Count". */
+export class ProfilerRecorder {
+  constructor(category, name) { this.category = category; this.name = name ?? category; this.valid = true; }
+  static startNew(category, name) { return new ProfilerRecorder(category, name); }
+  static StartNew(category, name) { return new ProfilerRecorder(category, name); }
+  get lastValue() {
+    const s = N.call('Profiler.stats', -1, []) ?? {};
+    if (/draw calls/i.test(this.name)) return s.drawCalls ?? 0;
+    if (/triangles/i.test(this.name)) return s.triangles ?? 0;
+    return Math.round(((s.sections ?? {})[this.name] ?? 0) * 1e6);
+  }
+  get currentValue() { return this.lastValue; }
+  get isRunning() { return this.valid; }
+  dispose() { this.valid = false; }
+  Dispose() { this.dispose(); }
+}
+/** Unity's UnityStats / PiaEngine's RenderStats: the last frame's numbers. */
+export const RenderStats = {
+  get drawCalls() { return N.call('Profiler.stats', -1, [])?.drawCalls ?? 0; },
+  get batches() { return RenderStats.drawCalls; },
+  get setPassCalls() { return RenderStats.drawCalls; },
+  get triangles() { return N.call('Profiler.stats', -1, [])?.triangles ?? 0; },
+  get vertices() { return RenderStats.triangles * 3; },
+};
+
+// ------------------------------------------------------------------ Sprite.create, Graphics.drawTexture, onRenderImage
+
+/** Unity's Sprite: a texture (asset, Texture2D, RenderTexture) shown by SpriteRenderer / Image. */
+export class Sprite {
+  constructor(key) { this._key = key; }
+  /** Sprite.create(texture, rect, pivot, pixelsPerUnit): the whole texture is shown here (rect / pivot kept for scripts). */
+  static create(texture, rect = null, pivot = new Vector2(0.5, 0.5), pixelsPerUnit = 100) {
+    const s = new Sprite(textureKey(texture));
+    s.rect = rect ?? new Rect(0, 0, texture?.width ?? 0, texture?.height ?? 0);
+    s.pivot = pivot;
+    s.pixelsPerUnit = pixelsPerUnit;
+    s.texture = texture;
+    return s;
+  }
+  get name() { return (this._key ?? '').split('/').pop(); }
+}
+
+/** onRenderImage's `dst`: where the camera would have drawn. */
+class CameraDestination {
+  constructor(h) { this._h = h; }
+}
+{
+  const blitTo = Graphics.blit;
+  Object.assign(Graphics, {
+    blit(source, dest = null, material = null) {
+      if (dest instanceof CameraDestination) N.call('Graphics.blit', dest._h, [textureKey(source), 'camera', materialKey(material)]);
+      else blitTo.call(Graphics, source, dest, material);
+    },
+    /** A texture in a screen rectangle (pixels from the top-left), alpha blended: drawTexture(rect, texture[, material][, color]). */
+    drawTexture(rect, texture, material = null, color = null) {
+      if (material instanceof Color) { color = material; material = null; }
+      N.call('Graphics.drawTexture', -1, [textureKey(texture), [rect.x, rect.y, rect.width, rect.height], colorArray(color ?? Color.white), materialKey(material)]);
+    },
+  });
+}
+const imageEffectScripts = [];
+/** Scripts on cameras defining onRenderImage(src, dst): the camera draws into `src` this frame,
+ *  the script blits to `dst` (Graphics.blit(src, dst, material)). Called after Update. */
+function tickImageEffects() {
+  for (let i = imageEffectScripts.length - 1; i >= 0; i--) {
+    const o = imageEffectScripts[i];
+    if (!N.exists(o._h)) { imageEffectScripts.splice(i, 1); continue; }
+    if (o._src && !N.call('Script.enabled', o._h, [o._src])) continue;
+    let key = null;
+    try { key = N.call('Camera.imageEffectSource', o._h, []); } catch (e) { continue; }
+    if (!key) continue;
+    try { o.onRenderImage(new RenderTexture(key), new CameraDestination(o._h)); } catch (e) { Debug.error(`onRenderImage: ${e?.stack ?? e}`); }
+  }
+}
+
+// ------------------------------------------------------------------ more decorators: structs, groups, asset menus
+
+/** Unity's [Serializable] class: plain data saved inside a field (`@field(Wave) wave = new Wave()`,
+ *  `@field([Wave]) waves: Wave[] = []`), edited in the Inspector. */
+export function serializable(cls) { Object.defineProperty(cls, '__serializable', { value: true }); return cls; }
+/** Unity's [CreateAssetMenu]: the ScriptableObject in Project ▸ Create (menuName, fileName). */
+export function createAssetMenu(options = {}) {
+  return (cls) => { Object.defineProperty(cls, '__createAssetMenu', { value: { menuName: options.menuName ?? cls.name, fileName: options.fileName ?? `New ${cls.name}`, order: options.order ?? 0 } }); return cls; };
+}
+export function space(px = 8) { return fieldDecorator((m) => { m.space = px; }); }
+/** A multi-line text box (Unity's [TextArea] / [Multiline]). */
+export function textArea(minLines = 3) { return fieldDecorator((m) => { m.multiline = minLines; }); }
+export const multiline = textArea;
+/** Odin's groups: consecutive fields with the same name are drawn together. */
+export function boxGroup(name) { return fieldDecorator((m) => { m.group = { kind: 'box', name }; }); }
+export function foldoutGroup(name) { return fieldDecorator((m) => { m.group = { kind: 'foldout', name }; }); }
+export function horizontalGroup(name) { return fieldDecorator((m) => { m.group = { kind: 'horizontal', name }; }); }
+export function title(text) { return header(text); }
+export function labelText(text) { return fieldDecorator((m) => { m.label = String(text); }); }
+export function infoBox(text) { return fieldDecorator((m) => { m.info = String(text); }); }
+
+// ------------------------------------------------------------------ Instantiate(object), SendMessage, CreatePrimitive
+
+{
+  const instantiateKey = GameObject.instantiate;
+  /** Unity's Instantiate: a prefab / model key, or a copy of a scene object (or of a component's
+   *  object, returning that component of the copy); then (parent) or (position, rotation[, parent]). */
+  GameObject.instantiate = function (original, a, b, c) {
+    if (typeof original === 'string') return instantiateKey.call(GameObject, original, a, b, c);
+    const pos = a instanceof Vector3 ? a : null;
+    const parent = pos ? c : a;
+    const src = original instanceof GameObject ? original : new GameObject(handle(original));
+    const copy = fromNative(N.call('GameObject.clone', src._h, [parent ? new GameObject(handle(parent)) : null]));
+    if (!copy) return null;
+    if (pos) copy.transform.position = pos;
+    else if (!parent) { copy.transform.position = src.transform.position; copy.transform.rotation = src.transform.rotation; }
+    if (b instanceof Quaternion) copy.transform.rotation = b;
+    if (original instanceof GameObject) return copy;
+    return original?.constructor ? copy.getComponent(original.constructor) : copy;
+  };
+}
+
+const deliver = (h, name, arg) => {
+  for (const o of __instances.get(h) || []) {
+    const f = o[name];
+    if (typeof f === 'function') f.call(o, arg);
+  }
+};
+const childrenOf = (h) => fromNative(N.call('Transform.children', h, []) ?? []).map(handle);
+Object.assign(GameObject.prototype, {
+  /** Calls `name(arg)` on every script of this object (Unity's SendMessage). */
+  sendMessage(name, arg) { deliver(this._h, name, arg); },
+  /** …and of its children (BroadcastMessage). */
+  broadcastMessage(name, arg) { const visit = (h) => { deliver(h, name, arg); childrenOf(h).forEach(visit); }; visit(this._h); },
+  /** …and of its parents (SendMessageUpwards). */
+  sendMessageUpwards(name, arg) { for (let t = this.transform, i = 0; t && i < 256; t = t.parent, i++) deliver(t._h, name, arg); },
+});
+for (const k of ['sendMessage', 'broadcastMessage', 'sendMessageUpwards']) Behaviour.prototype[k] = function (name, arg) { this.gameObject[k](name, arg); };
+
+export const PrimitiveType = { Cube: 'Cube', Sphere: 'Sphere', Capsule: 'Capsule', Cylinder: 'Cylinder', Plane: 'Plane', Quad: 'Quad' };
+/** Unity's CreatePrimitive: a mesh with the default material and the matching collider. */
+GameObject.createPrimitive = function (type) {
+  const go = GameObject.create(type);
+  go.setComponent('MeshRenderer', { mesh: `builtin:${String(type).toLowerCase()}`, material: 'builtin:default' });
+  const shape = { Cube: { box: [0.5, 0.5, 0.5] }, Sphere: { sphere: 0.5 }, Capsule: { capsule: { half_height: 0.5, radius: 0.5 } }, Cylinder: { capsule: { half_height: 0.5, radius: 0.5 } }, Plane: { box: [5, 0.01, 5] }, Quad: { box: [0.5, 0.5, 0.01] } }[type];
+  if (shape) { try { go.setComponent('Collider', { shape }); } catch (e) { /* no 3D physics in this game */ } }
+  return go;
+};

@@ -100,6 +100,11 @@ pub enum Method {
     FixedUpdate,
     LateUpdate,
     OnDestroy,
+    /// When the instance is made (its object active), before anything else.
+    Awake,
+    /// The script / its object switched on (after Awake) and off (also before OnDestroy).
+    OnEnable,
+    OnDisable,
 }
 
 impl Method {
@@ -111,6 +116,9 @@ impl Method {
             Method::FixedUpdate => "fixedUpdate",
             Method::LateUpdate => "lateUpdate",
             Method::OnDestroy => "onDestroy",
+            Method::Awake => "awake",
+            Method::OnEnable => "onEnable",
+            Method::OnDisable => "onDisable",
         }
     }
 }
@@ -487,6 +495,10 @@ struct Instance {
     id: u32,
     started: bool,
     failed: bool,
+    /// Awake ran (it waits for the object to be active).
+    awoken: bool,
+    /// Enabled and active in the hierarchy: OnEnable ran, Update runs.
+    active: bool,
 }
 
 /// The editor's script tools while playing (a resource): hot reload requests, console
@@ -533,16 +545,20 @@ impl ScriptPlugin {
         let mut i = 0;
         while i < self.instances.len() {
             let inst = &self.instances[i];
-            let still = ctx.world.get::<&Script>(inst.entity).ok().and_then(|s| s.0.get(inst.slot).map(|r| r.src == inst.src && r.enabled)).unwrap_or(false);
+            // a disabled script keeps its instance (Unity: OnDisable, no Update); a removed one goes
+            let still = ctx.world.get::<&Script>(inst.entity).ok().and_then(|s| s.0.get(inst.slot).map(|r| r.src == inst.src)).unwrap_or(false);
             if still {
                 i += 1;
                 continue;
             }
             let inst = self.instances.swap_remove(i);
-            // also when the entity itself was destroyed (Unity's OnDestroy); engine calls on it
-            // then find nothing
-            if inst.started && !inst.failed {
+            // also when the entity itself was destroyed (Unity's OnDisable + OnDestroy); engine
+            // calls on it then find nothing
+            if inst.awoken && !inst.failed {
                 let mut api = Api::new(ctx);
+                if inst.active {
+                    let _ = self.hosts[inst.host].call(&mut api, inst.id, inst.entity, Method::OnDisable);
+                }
                 let _ = self.hosts[inst.host].call(&mut api, inst.id, inst.entity, Method::OnDestroy);
             }
             self.hosts[inst.host].destroy(inst.id);
@@ -552,22 +568,56 @@ impl ScriptPlugin {
             .world
             .query::<&Script>()
             .iter()
-            .flat_map(|(e, s)| s.0.iter().enumerate().filter(|(_, r)| r.enabled).map(move |(k, r)| (e, k, r.clone())))
+            .flat_map(|(e, s)| s.0.iter().enumerate().map(move |(k, r)| (e, k, r.clone())))
             .filter(|(e, k, _)| !self.instances.iter().any(|i| i.entity == *e && i.slot == *k))
             .collect();
         for (e, slot, r) in wanted {
             let Some(host) = self.hosts.iter().position(|h| h.handles(&r.src)) else {
                 goat_core::warn!("{}: no script host runs this (languages: {})", r.src, self.hosts.iter().map(|h| h.name().to_string()).collect::<Vec<_>>().join(", "));
-                self.instances.push(Instance { entity: e, slot, src: r.src.clone(), host: 0, id: u32::MAX, started: true, failed: true });
+                self.instances.push(Instance { entity: e, slot, src: r.src.clone(), host: 0, id: u32::MAX, started: true, failed: true, awoken: false, active: false });
                 continue;
             };
             let mut api = Api::new(ctx);
             match self.hosts[host].instantiate(&mut api, e, &r.src, &r.props) {
-                Ok(id) => self.instances.push(Instance { entity: e, slot, src: r.src, host, id, started: false, failed: false }),
+                Ok(id) => self.instances.push(Instance { entity: e, slot, src: r.src, host, id, started: false, failed: false, awoken: false, active: false }),
                 Err(err) => {
                     goat_core::error!("{}: {err}", r.src);
                     ScriptDebug::error(ctx, format!("{}: {err}", r.src));
-                    self.instances.push(Instance { entity: e, slot, src: r.src, host, id: u32::MAX, started: true, failed: true });
+                    self.instances.push(Instance { entity: e, slot, src: r.src, host, id: u32::MAX, started: true, failed: true, awoken: false, active: false });
+                }
+            }
+        }
+        self.update_enabled(ctx);
+    }
+
+    /// Awake once the object is active, OnEnable / OnDisable when the script or its object switches
+    /// on / off (Unity's order: Awake, OnEnable, then Start before the first Update).
+    fn update_enabled(&mut self, ctx: &mut Context) {
+        for i in 0..self.instances.len() {
+            let inst = &self.instances[i];
+            if inst.failed {
+                continue;
+            }
+            let (host, id, e) = (inst.host, inst.id, inst.entity);
+            let in_hierarchy = ctx.world.contains(e) && ctx.world.get::<&goat_runtime::InactiveInHierarchy>(e).is_err();
+            let enabled = ctx.world.get::<&Script>(e).ok().and_then(|s| s.0.get(inst.slot).map(|r| r.enabled)).unwrap_or(false);
+            if !inst.awoken && in_hierarchy {
+                self.instances[i].awoken = true;
+                let mut api = Api::new(ctx);
+                if let Err(err) = self.hosts[host].call(&mut api, id, e, Method::Awake) {
+                    goat_core::error!("{} awake: {err}", self.instances[i].src);
+                    ScriptDebug::error(ctx, format!("{} awake: {err}", self.instances[i].src));
+                    self.instances[i].failed = true;
+                    continue;
+                }
+            }
+            let want = self.instances[i].awoken && in_hierarchy && enabled;
+            if want != self.instances[i].active {
+                self.instances[i].active = want;
+                let mut api = Api::new(ctx);
+                let m = if want { Method::OnEnable } else { Method::OnDisable };
+                if let Err(err) = self.hosts[host].call(&mut api, id, e, m) {
+                    goat_core::error!("{} {}: {err}", self.instances[i].src, m.js_name());
                 }
             }
         }
@@ -576,8 +626,8 @@ impl ScriptPlugin {
     fn run(&mut self, ctx: &mut Context, method: Method) {
         for i in 0..self.instances.len() {
             let inst = &self.instances[i];
-            // inactive objects (self or a parent) don't run (and don't Start until activated)
-            if inst.failed || !ctx.world.contains(inst.entity) || ctx.world.get::<&goat_runtime::InactiveInHierarchy>(inst.entity).is_ok() {
+            // disabled scripts / inactive objects don't run (and don't Start until they are on)
+            if inst.failed || !inst.active || !ctx.world.contains(inst.entity) || ctx.world.get::<&goat_runtime::InactiveInHierarchy>(inst.entity).is_ok() {
                 continue;
             }
             let (host, id, e) = (inst.host, inst.id, inst.entity);

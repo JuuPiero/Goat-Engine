@@ -496,6 +496,7 @@ impl ScriptHost for NativeHost {
                 Method::FixedUpdate => c.fixed_update,
                 Method::LateUpdate => c.late_update,
                 Method::OnDestroy => c.on_destroy,
+                Method::Awake | Method::OnEnable | Method::OnDisable => None,
             };
             if let Some(f) = f {
                 f(state, &mut g, handle);

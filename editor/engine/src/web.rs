@@ -449,6 +449,34 @@ impl EditorEngine {
         self.core.key(code, down);
     }
 
+    /// The pointer over the Game view (`nx, ny` 0..1 over its canvas, negative = outside;
+    /// `buttons` = bit 0 left, 1 right, 2 middle): display pixels for the game (the touch screen in
+    /// the 3DS layout, like the desktop player).
+    pub fn game_pointer(&mut self, nx: f32, ny: f32, buttons: u32) {
+        let gi = &mut self.core.game_input;
+        gi.buttons = [buttons & 1 != 0, buttons & 2 != 0, buttons & 4 != 0];
+        gi.pointer = None;
+        let Some(g) = self.game_surface.filter(|_| nx >= 0.0 && ny >= 0.0) else { return };
+        let back = self.gfx.active_surface();
+        self.gfx.use_surface(g);
+        let target = if self.dual { goat_gfx::Display::Secondary } else { goat_gfx::Display::Main };
+        let size = goat_gfx::GraphicsBackend::displays(&self.gfx).iter().find(|d| d.display == target).map(|d| (d.width as f32, d.height as f32));
+        let rect = self.gfx.display_rect(target);
+        let (cw, ch) = self.gfx.surface_size();
+        let (cw, ch) = (cw as f32, ch as f32);
+        self.gfx.use_surface(back);
+        let (Some((x, y, w, h)), Some((dw, dh))) = (rect, size) else { return };
+        let (mx, my) = (nx * cw, ny * ch);
+        if mx >= x && my >= y && mx < x + w && my < y + h {
+            self.core.game_input.pointer = Some(goat_core::math::Vec2::new((mx - x) / w * dw, (my - y) / h * dh));
+        }
+    }
+
+    /// Mouse wheel over the Game view (lines; y > 0 = away from the user).
+    pub fn game_scroll(&mut self, dx: f32, dy: f32) {
+        self.core.game_input.scroll += goat_core::math::Vec2::new(dx, dy);
+    }
+
     /// One frame (`dt` seconds).
     pub fn frame(&mut self, dt: f32) {
         let dt = dt.min(0.1);

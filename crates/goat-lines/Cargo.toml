@@ -14,7 +14,11 @@ goat-assets.workspace = true
 hecs.workspace = true
 serde.workspace = true
 goat-scene = { workspace = true, optional = true }
+goat-script = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [features]
 # LineRenderer / TrailRenderer in scene files
 scene = ["dep:goat-scene"]
+# TrailRenderer.clear / LineRenderer positions for scripts
+script = ["scene", "dep:goat-script", "dep:serde_json"]
