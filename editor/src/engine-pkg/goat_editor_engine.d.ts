@@ -68,6 +68,10 @@ export class EditorEngine {
      */
     edit_delete(x: number, y: number, w: number, h: number, dry: boolean): boolean;
     /**
+     * Extract Textures (`textures_only`) / Materials: `{ files: [{ key, data: base64 }], remap }`.
+     */
+    extract_model_materials(key: string, textures_only: boolean): string;
+    /**
      * One frame (`dt` seconds).
      */
     frame(dt: number): void;
@@ -114,6 +118,10 @@ export class EditorEngine {
     is_paused(): boolean;
     is_playing(): boolean;
     key(code: string, down: boolean): void;
+    /**
+     * What the importer inspector shows about a model (JSON, or `{ error }`).
+     */
+    model_info(key: string): string;
     open_scene(key: string): void;
     orbit(dx: number, dy: number): void;
     pan(dx: number, dy: number): void;
@@ -314,6 +322,7 @@ export interface InitOutput {
     readonly editorengine_delete_entity: (a: number, b: number, c: number) => void;
     readonly editorengine_duplicate: (a: number) => [number, number, number, number];
     readonly editorengine_edit_delete: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly editorengine_extract_model_materials: (a: number, b: number, c: number, d: number) => [number, number];
     readonly editorengine_frame: (a: number, b: number) => void;
     readonly editorengine_frame_selected: (a: number) => void;
     readonly editorengine_game_button: (a: number, b: number, c: number, d: number) => void;
@@ -329,6 +338,7 @@ export interface InitOutput {
     readonly editorengine_is_paused: (a: number) => number;
     readonly editorengine_is_playing: (a: number) => number;
     readonly editorengine_key: (a: number, b: number, c: number, d: number) => void;
+    readonly editorengine_model_info: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_open_scene: (a: number, b: number, c: number) => [number, number];
     readonly editorengine_orbit: (a: number, b: number, c: number) => void;
     readonly editorengine_pan: (a: number, b: number, c: number) => void;

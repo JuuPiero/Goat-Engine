@@ -63,6 +63,41 @@ pub struct ModelAnimation {
     pub name: String,
     pub duration: f32,
     pub channels: Vec<AnimChannel>,
+    /// Loop Time (Unity's clip setting, from the model's import settings; default true).
+    pub looping: bool,
+}
+
+/// A camera of the model file (glTF camera / FBX camera), looking along the node's -Z.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ModelCamera {
+    pub orthographic: bool,
+    /// Vertical field of view (radians).
+    pub fov_y: f32,
+    /// Orthographic half height.
+    pub ortho_size: f32,
+    pub near: f32,
+    pub far: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelLightKind {
+    Directional,
+    Point,
+    Spot,
+}
+
+/// A light of the model file (glTF KHR_lights_punctual / FBX light), along the node's -Z.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ModelLight {
+    pub kind: ModelLightKind,
+    /// The engine's (sRGB-authored) color.
+    pub color: Color,
+    pub intensity: f32,
+    /// 0 = unlimited in the file (the importer picks 10).
+    pub range: f32,
+    /// Full cone angles in degrees (Unity's Spot Angle / Inner Spot Angle).
+    pub spot_angle: f32,
+    pub inner_spot_angle: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -84,10 +119,23 @@ pub struct ModelNode {
     pub mesh: Option<usize>,
     pub skin: Option<usize>,
     pub children: Vec<usize>,
+    pub camera: Option<ModelCamera>,
+    pub light: Option<ModelLight>,
+}
+
+impl Default for ModelNode {
+    fn default() -> Self {
+        ModelNode { name: String::new(), translation: Vec3::ZERO, rotation: Quat::IDENTITY, scale: Vec3::ONE, mesh: None, skin: None, children: Vec::new(), camera: None, light: None }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct ModelData {
+    /// Meters per unit of the source file (FBX; glTF = 1, OBJ = None), for the importer's
+    /// Convert Units label. Stored in converted GLBs (`asset.extras.goat.fileUnit`).
+    pub file_unit: Option<f32>,
+    /// The file's own scale was converted to meters (FBX Convert Units on).
+    pub units_converted: bool,
     /// Per glTF mesh, its primitives (after splitting).
     pub meshes: Vec<Vec<ModelPrimitive>>,
     pub materials: Vec<ModelMaterial>,
@@ -120,10 +168,13 @@ fn uri_bytes(io: &AssetIo, key: &str, uri: &str) -> Result<Vec<u8>, AssetError> 
     io.read(&resolve_relative(key, &decoded))
 }
 
-/// Loads `key` (a .gltf or .glb under the asset root).
+/// Loads `key` (a model under the asset root) shaped by its import settings (`<key>.import.json`,
+/// see [`crate::model_import`]).
 pub fn load_model(io: &AssetIo, key: &str) -> Result<ModelData, AssetError> {
     let bytes = io.read(key)?;
-    parse_model(io, key, &bytes)
+    let mut data = parse_model(io, key, &bytes)?;
+    crate::model_import::apply(&mut data, &crate::model_import::ModelImport::of(io, key));
+    Ok(data)
 }
 
 /// Turns a model file the glTF loader can't read (FBX, OBJ) into GLB bytes: installed by the host
@@ -303,10 +354,18 @@ pub fn parse_model(io: &AssetIo, key: &str, bytes: &[u8]) -> Result<ModelData, A
         meshes.push(prims);
     }
 
+    // what the gltf crate drops without extra features: KHR_lights_punctual, asset extras
+    let raw = raw_json(bytes).unwrap_or(serde_json::Value::Null);
+    let lights: Vec<ModelLight> = raw["extensions"]["KHR_lights_punctual"]["lights"].as_array().map(|l| l.iter().map(light_of).collect()).unwrap_or_default();
     let nodes = doc
         .nodes()
         .map(|n| {
             let (t, r, s) = n.transform().decomposed();
+            let camera = n.camera().map(|c| match c.projection() {
+                gltf::camera::Projection::Perspective(p) => ModelCamera { orthographic: false, fov_y: p.yfov(), ortho_size: 5.0, near: p.znear(), far: p.zfar().unwrap_or(1000.0) },
+                gltf::camera::Projection::Orthographic(o) => ModelCamera { orthographic: true, fov_y: 60f32.to_radians(), ortho_size: o.ymag(), near: o.znear(), far: o.zfar() },
+            });
+            let light = raw["nodes"][n.index()]["extensions"]["KHR_lights_punctual"]["light"].as_u64().and_then(|i| lights.get(i as usize).copied());
             ModelNode {
                 name: n.name().map(str::to_string).unwrap_or_else(|| format!("Node {}", n.index())),
                 translation: Vec3::from(t),
@@ -315,9 +374,14 @@ pub fn parse_model(io: &AssetIo, key: &str, bytes: &[u8]) -> Result<ModelData, A
                 mesh: n.mesh().map(|m| m.index()),
                 skin: n.skin().map(|s| s.index()),
                 children: n.children().map(|c| c.index()).collect(),
+                camera,
+                light,
             }
         })
         .collect();
+    let goat = &raw["asset"]["extras"]["goat"];
+    let file_unit = goat["fileUnit"].as_f64().map(|v| v as f32).or(Some(1.0));
+    let units_converted = goat["unitsConverted"].as_bool().unwrap_or(true);
     let roots = doc
         .default_scene()
         .or_else(|| doc.scenes().next())
@@ -362,10 +426,40 @@ pub fn parse_model(io: &AssetIo, key: &str, bytes: &[u8]) -> Result<ModelData, A
                 channels.push(AnimChannel { node: ch.target().node().index(), path, interpolation, times, values });
             }
             let duration = channels.iter().filter_map(|c| c.times.last().copied()).fold(0.0, f32::max);
-            ModelAnimation { name: a.name().map(str::to_string).unwrap_or_else(|| format!("Animation {}", a.index())), duration, channels }
+            ModelAnimation { name: a.name().map(str::to_string).unwrap_or_else(|| format!("Animation {}", a.index())), duration, channels, looping: true }
         })
         .collect();
-    Ok(ModelData { meshes, materials, images, nodes, roots, skins, animations })
+    Ok(ModelData { file_unit, units_converted, meshes, materials, images, nodes, roots, skins, animations })
+}
+
+/// The JSON of a .gltf / .glb (for the parts the gltf crate doesn't expose).
+fn raw_json(bytes: &[u8]) -> Option<serde_json::Value> {
+    let b = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    if b.starts_with(b"glTF") {
+        let len = u32::from_le_bytes(b.get(12..16)?.try_into().ok()?) as usize;
+        return serde_json::from_slice(b.get(20..20 + len)?).ok();
+    }
+    serde_json::from_slice(b).ok()
+}
+
+/// A KHR_lights_punctual light (linear color → the engine's sRGB-authored color).
+fn light_of(l: &serde_json::Value) -> ModelLight {
+    let c = |i: usize| l["color"][i].as_f64().unwrap_or(1.0) as f32;
+    let kind = match l["type"].as_str() {
+        Some("directional") => ModelLightKind::Directional,
+        Some("spot") => ModelLightKind::Spot,
+        _ => ModelLightKind::Point,
+    };
+    let outer = l["spot"]["outerConeAngle"].as_f64().unwrap_or(std::f64::consts::FRAC_PI_4) as f32;
+    let inner = l["spot"]["innerConeAngle"].as_f64().unwrap_or(0.0) as f32;
+    ModelLight {
+        kind,
+        color: Color::rgb(c(0), c(1), c(2)).from_linear(),
+        intensity: l["intensity"].as_f64().unwrap_or(1.0) as f32,
+        range: l["range"].as_f64().unwrap_or(0.0) as f32,
+        spot_angle: (outer * 2.0).to_degrees(),
+        inner_spot_angle: (inner * 2.0).to_degrees(),
+    }
 }
 
 /// Smooth normals from the triangles (models without normals).

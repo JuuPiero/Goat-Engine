@@ -147,7 +147,7 @@ Duyệt bảng "Đối chiếu với Unity" và từng phần README / API của
 - ⬜ GPU Instancing (material `enableInstancing`; desktop), Baked Animation (GPU) cho đám đông, GPU skinning
 - ✅ Model FBX / OBJ (ufbx → GLB: editor, desktop player, `goat build` cho mọi nền tảng kể cả 3DS; `goat model`; `.import.json` scale_factor / animation_rate)
 - ✅ SkinnedMeshRenderer tách riêng như Unity (mesh + materials + bones + root bone, Update When Offscreen, Quality 1/2/4 xương; không có MeshFilter / MeshRenderer; edit mode hiện pose đã skin)
-- ⬜ ModelImporter đủ tab (Rig / Animation / Materials, Optimize Game Objects)
+- ✅ ModelImporter đủ tab như Unity (Model: Scale Factor, Convert Units, Import Cameras / Lights, Preserve Hierarchy, Sort By Name, Read/Write, Normals + Smoothing Angle · Rig: None / Legacy / Generic, Optimize Game Objects + Extra Transforms to Expose · Animation: cắt clip theo frame, Loop Time, Keyframe Reduction · Materials: Import / None, Embedded / External, Extract Textures / Materials, Remapped Materials), Apply import lại instance trong scene
 
 **B. Editor**
 - ✅ Hub, Scene / Game view độc lập (kể cả khi Play), gizmo, Undo, Prefab Mode, Animation / Animator / Profiler, Build / Project Settings
@@ -163,3 +163,22 @@ Duyệt bảng "Đối chiếu với Unity" và từng phần README / API của
 - ⬜ Tilemap (+ Tile Palette), Spline, Cinemachine, TextMeshPro (font SDF), Spine, UI Toolkit (HTML / CSS — chỉ desktop / web), Injector (DI), Animancer, Netcode (+ Dedicated Server), Entities (ECS), Job System + Burst-lite
 
 **D. Nền tảng** — xem Giai đoạn 6 (web, Playable Ads...).
+
+### Quét lại PiaEngine (2026-11-29): Pia có thêm, Goat chưa có
+Duyệt lại CLAUDE.md / README / API của Pia sau đợt collider, URP, Shader Graph, Visual Scripting. Thứ tự gợi ý: lõi trước (dùng được trên 3DS), rồi editor, rồi package.
+
+**Lõi**
+- ⬜ Physics như Unity: WheelCollider, asset Physics Material / Physics Material 2D (ma sát, độ nảy, cách kết hợp), Rigidbody / Rigidbody2D đủ API (interpolation, collision detection, constraints, sleep, `addForceAtPosition`, `getPointVelocity`, Use Auto Mass…), CompositeCollider2D
+- ⬜ Sorting Layers (Project Settings, `sortingLayerID` cho mọi renderer 2D, thứ tự vẽ = layer × 65536 + order)
+- ⬜ Camera stacking (Base / Overlay, Clear Depth)
+- ⬜ Blend shapes (morph target của glTF / FBX, `setBlendShapeWeight`), Avatar / Humanoid
+- ⬜ GPU instancing thật trên desktop, Baked Animation cho đám đông, GPU skinning (desktop)
+
+**Editor**
+- ⬜ (giữ các mục ở nhóm B phía trên) + cửa sổ AI Assistant (chat với Claude / OpenAI / Gemini qua các tool của editor)
+
+**Package**
+- ⬜ URP-like: Volume + Volume Profile và các override (Bloom, Tonemapping, Color Adjustments, Vignette, DoF, Motion Blur, SSAO…), 2D Renderer (Light2D, ShadowCaster2D, Sprite-Lit) — trên 3DS chỉ phần PICA làm được (pha màu ở TEV, bloom rẻ)
+- ⬜ Shader Graph (đồ thị node → `.shader` của Goat, cũng hạ xuống TEV cho 3DS)
+- ⬜ Visual Scripting (Script Graph / State Graph, biến, chạy trên cùng `Api` của script)
+- ⬜ Các package ở nhóm C phía trên (Tilemap, Spline, Cinemachine, TextMeshPro SDF, Spine, UI Toolkit, Injector, Animancer, Netcode, Entities, Job System)

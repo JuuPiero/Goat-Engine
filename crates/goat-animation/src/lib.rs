@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use goat_assets::{AnimPath, AssetServer, Interpolation, ModelAnimation, ModelNodes};
+use goat_assets::{AnimPath, AssetServer, Interpolation, ModelAnimation, ModelNodes, ModelSkeleton};
 use goat_core::math::{Mat4, Quat, Vec3, Vec4};
 use goat_gfx::{MeshData, Vertex};
 use goat_runtime::{Context, Entity, GlobalTransform, Plugin, SkinnedMeshRenderer, Transform, World};
@@ -227,6 +227,31 @@ struct Acc {
     sw: f32,
 }
 
+/// Where sampled poses go: the node entities' Transforms, or an optimized model's skeleton.
+pub enum PoseTarget<'a> {
+    Entities(&'a World, &'a [Option<Entity>]),
+    Skeleton(&'a mut [Transform]),
+}
+
+impl PoseTarget<'_> {
+    fn with(&mut self, node: usize, f: impl FnOnce(&mut Transform)) {
+        match self {
+            PoseTarget::Entities(w, nodes) => {
+                if let Some(Some(e)) = nodes.get(node) {
+                    if let Ok(mut t) = w.get::<&mut Transform>(*e) {
+                        f(&mut t);
+                    }
+                }
+            }
+            PoseTarget::Skeleton(locals) => {
+                if let Some(t) = locals.get_mut(node) {
+                    f(t);
+                }
+            }
+        }
+    }
+}
+
 /// Samples the states into node transforms (`node index → entity`).
 pub fn apply(world: &mut World, nodes: &[Option<Entity>], clips: &[(&ModelAnimation, f32, f32)]) {
     apply_layer(world, nodes, clips, None, false);
@@ -235,6 +260,11 @@ pub fn apply(world: &mut World, nodes: &[Option<Entity>], clips: &[(&ModelAnimat
 /// Like [`apply`], limited to the `mask` nodes; `additive` adds each clip's change from its
 /// first frame to the current pose instead of replacing it.
 pub fn apply_layer(world: &mut World, nodes: &[Option<Entity>], clips: &[(&ModelAnimation, f32, f32)], mask: Option<&HashSet<usize>>, additive: bool) {
+    apply_pose(&mut PoseTarget::Entities(world, nodes), clips, mask, additive);
+}
+
+/// [`apply_layer`] into any [`PoseTarget`].
+pub fn apply_pose(target: &mut PoseTarget, clips: &[(&ModelAnimation, f32, f32)], mask: Option<&HashSet<usize>>, additive: bool) {
     if additive {
         for (anim, time, weight) in clips {
             if *weight <= 0.0 {
@@ -244,24 +274,23 @@ pub fn apply_layer(world: &mut World, nodes: &[Option<Entity>], clips: &[(&Model
                 if mask.is_some_and(|m| !m.contains(&ch.node)) {
                     continue;
                 }
-                let Some(Some(e)) = nodes.get(ch.node) else { continue };
-                let Ok(mut t) = world.get::<&mut Transform>(*e) else { continue };
                 let rot = ch.path == AnimPath::Rotation;
                 let v = sample(&ch.times, &ch.values, ch.interpolation, rot, *time);
                 let v0 = ch.values[0];
-                match ch.path {
-                    AnimPath::Translation => t.position += (v - v0).truncate() * *weight,
+                let w = *weight;
+                target.with(ch.node, |t| match ch.path {
+                    AnimPath::Translation => t.position += (v - v0).truncate() * w,
                     AnimPath::Rotation => {
                         let q = Quat::from_xyzw(v.x, v.y, v.z, v.w).normalize();
                         let q0 = Quat::from_xyzw(v0.x, v0.y, v0.z, v0.w).normalize();
-                        let delta = Quat::IDENTITY.slerp(q * q0.inverse(), *weight);
+                        let delta = Quat::IDENTITY.slerp(q * q0.inverse(), w);
                         t.rotation = (delta * t.rotation).normalize();
                     }
                     AnimPath::Scale => {
                         let r = v.truncate() / v0.truncate().max(Vec3::splat(1e-6));
-                        t.scale *= Vec3::ONE.lerp(r, *weight);
+                        t.scale *= Vec3::ONE.lerp(r, w);
                     }
-                }
+                });
             }
         }
         return;
@@ -297,22 +326,22 @@ pub fn apply_layer(world: &mut World, nodes: &[Option<Entity>], clips: &[(&Model
         }
     }
     for (node, a) in acc {
-        let Some(Some(e)) = nodes.get(node) else { continue };
-        let Ok(mut t) = world.get::<&mut Transform>(*e) else { continue };
-        // partial weights blend with the current (rest) pose
-        if a.tw > 0.0 {
-            let v = (a.t / a.tw).truncate();
-            t.position = t.position.lerp(v, a.tw.min(1.0));
-        }
-        if a.rw > 0.0 {
-            let q = a.r / a.rw;
-            let q = Quat::from_xyzw(q.x, q.y, q.z, q.w).normalize();
-            t.rotation = t.rotation.slerp(q, a.rw.min(1.0));
-        }
-        if a.sw > 0.0 {
-            let v = (a.s / a.sw).truncate();
-            t.scale = t.scale.lerp(v, a.sw.min(1.0));
-        }
+        target.with(node, |t| {
+            // partial weights blend with the current (rest) pose
+            if a.tw > 0.0 {
+                let v = (a.t / a.tw).truncate();
+                t.position = t.position.lerp(v, a.tw.min(1.0));
+            }
+            if a.rw > 0.0 {
+                let q = a.r / a.rw;
+                let q = Quat::from_xyzw(q.x, q.y, q.z, q.w).normalize();
+                t.rotation = t.rotation.slerp(q, a.rw.min(1.0));
+            }
+            if a.sw > 0.0 {
+                let v = (a.s / a.sw).truncate();
+                t.scale = t.scale.lerp(v, a.sw.min(1.0));
+            }
+        });
     }
 }
 
@@ -343,6 +372,22 @@ pub fn skin(base: &MeshData, joints: &[[u16; 4]], weights: &[[f32; 4]], palette:
     }
 }
 
+/// The model's Rig ▸ Animation Type on a new instance (Unity's ModelImporter): Generic = an
+/// Animator on the root (plays the clips by name, or a controller), Legacy = an Animator playing
+/// the first clip (Unity's legacy Animation component), None = nothing. An Animator already there
+/// (saved in the scene) is kept.
+pub fn rig_model_instance(world: &mut World, root: Entity, import: &goat_assets::ModelImport, data: &goat_assets::ModelData) {
+    if data.animations.is_empty() || world.get::<&Animator>(root).is_ok() {
+        return;
+    }
+    let anim = match import.animation_type {
+        goat_assets::AnimationType::None => return,
+        goat_assets::AnimationType::Generic => Animator::default(),
+        goat_assets::AnimationType::Legacy => Animator::playing(&data.animations[0].name),
+    };
+    let _ = world.insert_one(root, anim);
+}
+
 /// Advances animators, poses node transforms, skins meshes.
 #[derive(Default)]
 pub struct AnimationPlugin {
@@ -351,6 +396,7 @@ pub struct AnimationPlugin {
 
 impl Plugin for AnimationPlugin {
     fn build(&mut self, _ctx: &mut Context) {
+        goat_assets::on_model_spawned(rig_model_instance);
         #[cfg(feature = "scene")]
         {
             goat_scene::registry(_ctx).component(scene::CODEC).component(goat_scene::serde_codec::<Animation>("Animation"));
@@ -389,7 +435,8 @@ impl Plugin for AnimationPlugin {
                         }
                     }
                     let d = clip.duration.max(1e-4);
-                    let t = if s.looping { s.time.rem_euclid(d) } else { s.time.min(d) };
+                    // the model's Loop Time (import settings) can turn looping off
+                    let t = if s.looping && clip.looping { s.time.rem_euclid(d) } else { s.time.min(d) };
                     sampled.push((s.clip.clone(), t, s.weight));
                 }
                 anim.states.retain(|s| !(s.fade < 0.0 && s.weight <= 0.0));
@@ -421,18 +468,29 @@ impl Plugin for AnimationPlugin {
                     anim.masks = Some(d.layers.iter().map(|l| (!l.mask.is_empty()).then(|| mask_nodes(&model.data, &l.mask))).collect());
                 }
             }
+            // Optimize Game Objects: the poses go into the model's skeleton (no bone entities)
+            let w: &World = ctx.world;
+            let mut skeleton = w.get::<&mut ModelSkeleton>(root).ok();
+            let mut target = match skeleton.as_deref_mut() {
+                Some(s) => PoseTarget::Skeleton(&mut s.locals),
+                None => PoseTarget::Entities(w, &nodes),
+            };
             if let Some(layers) = layers {
                 // layer 0 poses the model; the next ones override it (or add to it) by weight
-                let masks = ctx.world.get::<&Animator>(root).ok().and_then(|a| a.masks.clone()).unwrap_or_default();
+                let masks = w.get::<&Animator>(root).ok().and_then(|a| a.masks.clone()).unwrap_or_default();
                 for (li, (weight, clips)) in layers.into_iter().enumerate() {
                     let clips: Vec<(&ModelAnimation, f32, f32)> = clips.iter().filter_map(|(n, t, w)| model.data.animation(n).map(|a| (a, *t, *w * weight))).collect();
                     let additive = data.as_ref().and_then(|d| d.layers.get(li)).is_some_and(|l| l.blending == LayerBlending::Additive);
-                    apply_layer(ctx.world, &nodes, &clips, masks.get(li).and_then(|m| m.as_ref()), additive);
+                    apply_pose(&mut target, &clips, masks.get(li).and_then(|m| m.as_ref()), additive);
                 }
-                continue;
+            } else {
+                let clips: Vec<(&ModelAnimation, f32, f32)> = sampled.iter().filter_map(|(c, t, w)| model.data.animation(c).map(|a| (a, *t, *w))).collect();
+                apply_pose(&mut target, &clips, None, false);
             }
-            let clips: Vec<(&ModelAnimation, f32, f32)> = sampled.iter().filter_map(|(c, t, w)| model.data.animation(c).map(|a| (a, *t, *w))).collect();
-            apply(ctx.world, &nodes, &clips);
+            drop(target);
+            if let Some(s) = skeleton.as_deref_mut() {
+                s.update(w);
+            }
         }
     }
 
@@ -465,7 +523,11 @@ pub fn update_skinned_meshes(world: &World, gfx: &mut dyn goat_gfx::GraphicsBack
         .map(|(e, _)| e)
         .collect();
     for e in skinned {
-        let Ok((skin_data, bones, root_bone, offscreen, quality, shared)) = world.get::<&SkinnedMeshRenderer>(e).map(|r| (r.skin.clone(), r.bones.clone(), r.root_bone, r.update_when_offscreen, r.quality, r.shared.first().copied())) else { continue };
+        let Ok((skin_data, bones, root_bone, offscreen, quality, shared, skeleton)) =
+            world.get::<&SkinnedMeshRenderer>(e).map(|r| (r.skin.clone(), r.bones.clone(), r.root_bone, r.update_when_offscreen, r.quality, r.shared.first().copied(), r.skeleton.clone()))
+        else {
+            continue;
+        };
         let Some(skin_data) = skin_data else { continue };
         let mesh_world = world.get::<&GlobalTransform>(e).map(|g| g.0).unwrap_or(Mat4::IDENTITY);
         // Update When Offscreen off: skip while every camera is looking away / too far (last pose kept)
@@ -482,12 +544,21 @@ pub fn update_skinned_meshes(world: &World, gfx: &mut dyn goat_gfx::GraphicsBack
             }
         }
         let to_mesh = mesh_world.inverse();
+        // Optimize Game Objects: bone poses from the model's skeleton (root world × node pose)
+        let skel = skeleton.as_ref().and_then(|s| {
+            let root_world = world.get::<&GlobalTransform>(s.root).map(|g| g.0).unwrap_or(Mat4::IDENTITY);
+            world.get::<&ModelSkeleton>(s.root).ok().map(|k| s.joints.iter().map(|&j| k.worlds.get(j).map(|m| root_world * *m)).collect::<Vec<_>>())
+        });
         let palette: Vec<Mat4> = skin_data
             .bindposes
             .iter()
             .enumerate()
             .map(|(i, bind)| {
-                let bw = bones.get(i).and_then(|&b| world.get::<&GlobalTransform>(b).ok().map(|g| g.0)).unwrap_or(mesh_world);
+                let bw = match &skel {
+                    Some(list) => list.get(i).copied().flatten(),
+                    None => bones.get(i).and_then(|&b| world.get::<&GlobalTransform>(b).ok().map(|g| g.0)),
+                }
+                .unwrap_or(mesh_world);
                 to_mesh * bw * *bind
             })
             .collect();
@@ -645,6 +716,58 @@ mod tests {
         e2.frame(1.0 / 60.0, &mut gfx);
         let r2 = e2.world.query::<&SkinnedMeshRenderer>().iter().map(|(_, r)| r.clone()).next().unwrap();
         assert!(r2.deformed.iter().any(Option::is_some), "Update When Offscreen: skinned");
+    }
+
+    /// Rig ▸ Optimize Game Objects (Unity): no bone entities, the animation poses an internal
+    /// skeleton the skinning reads; an Extra Transform to Expose follows its bone; Generic gives the
+    /// root an Animator by itself.
+    #[test]
+    fn optimize_game_objects_like_unity() {
+        struct G(&'static str);
+        impl goat_runtime::Game for G {
+            fn start(&mut self, ctx: &mut Context) {
+                let assets = AssetServer::new(AssetIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/hello/assets")));
+                assets.io.put("models/tentacle.glb.import.json", self.0.as_bytes().to_vec());
+                ctx.resources.insert(assets);
+                let mut assets = ctx.resources.take::<AssetServer>().unwrap();
+                let root = assets.spawn_model(ctx.world, ctx.gfx, "models/tentacle.glb", None).unwrap();
+                ctx.resources.put_back(assets);
+                // Generic: the root got an Animator from the import settings
+                ctx.world.get::<&mut Animator>(root).expect("an Animator from the Rig settings").play("Sway");
+                ctx.world.spawn((goat_runtime::Transform::from_position(Vec3::new(0.0, 1.0, 6.0)), GlobalTransform::default(), goat_runtime::Camera::default()));
+            }
+            fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+                vec![Box::new(AnimationPlugin::default())]
+            }
+        }
+        let mut gfx = NullBackend::new();
+        let mut e = goat_runtime::Engine::new(G(r#"{ "optimize_game_objects": true, "extra_exposed_transforms": ["Bone3"] }"#));
+        e.frame(0.0, &mut gfx);
+        let names: Vec<String> = e.world.query::<&goat_runtime::Name>().iter().map(|(_, n)| n.0.clone()).collect();
+        assert!(!names.iter().any(|n| n == "Bone0" || n == "Bone1"), "no bone entities: {names:?}");
+        assert!(names.iter().any(|n| n == "Bone3"), "the exposed bone is an entity: {names:?}");
+        let (smr_e, r) = e.world.query::<&SkinnedMeshRenderer>().iter().map(|(x, r)| (x, r.clone())).next().unwrap();
+        assert!(r.bones.is_empty() && r.skeleton.as_ref().is_some_and(|s| s.joints.len() == 4), "bones from the skeleton");
+        let bone3 = e.world.query::<&goat_runtime::Name>().iter().find(|(_, n)| n.0 == "Bone3").map(|(x, _)| x).unwrap();
+        let start = *e.world.get::<&Transform>(bone3).unwrap();
+        let first = {
+            for _ in 0..30 {
+                e.frame(1.0 / 60.0, &mut gfx);
+            }
+            e.world.get::<&SkinnedMeshRenderer>(smr_e).unwrap().deformed.iter().flatten().next().copied().expect("skinned")
+        };
+        let moved = *e.world.get::<&Transform>(bone3).unwrap();
+        assert!((moved.rotation.dot(start.rotation)).abs() < 0.99999 || (moved.position - start.position).length() > 1e-4, "the exposed bone follows the animation");
+        assert!(e.world.get::<&SkinnedMeshRenderer>(smr_e).unwrap().draws().any(|(m, _)| m == first));
+        // the same pose as without the optimization: compare the bone's world position
+        let mut e2 = goat_runtime::Engine::new(G("{}"));
+        e2.frame(0.0, &mut gfx);
+        for _ in 0..30 {
+            e2.frame(1.0 / 60.0, &mut gfx);
+        }
+        let b2 = e2.world.query::<(&goat_runtime::Name, &GlobalTransform)>().iter().find(|(_, (n, _))| n.0 == "Bone3").map(|(_, (_, g))| g.0.w_axis).unwrap();
+        let b1 = e.world.get::<&GlobalTransform>(bone3).unwrap().0.w_axis;
+        assert!((b1 - b2).length() < 1e-3, "optimized pose = hierarchy pose: {b1:?} vs {b2:?}");
     }
 
     #[test]

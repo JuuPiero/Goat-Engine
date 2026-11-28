@@ -8,6 +8,8 @@ use goat_runtime::{Context, Entity, GlobalTransform, MeshFilter, MeshRenderer, N
 use crate::image::{decode_png, to_power_of_two, TextureImport};
 use crate::material::MaterialFile;
 use crate::model::{load_model, ModelData};
+use crate::model_import::{MaterialImportMode, MaterialLocation, ModelImport};
+use goat_core::math::Mat4;
 use crate::{ext_of, file_of, resolve_relative, AssetError, AssetIo};
 
 /// A model's GPU resources, by glTF mesh / primitive and material index.
@@ -17,6 +19,8 @@ pub struct LoadedModel {
     pub materials: Vec<MaterialId>,
     /// Skin data per (mesh, skin), made when an instance is spawned (shared by every instance).
     pub skins: HashMap<(usize, usize), std::sync::Arc<goat_runtime::SkinData>>,
+    /// The import settings it was loaded with (`<model>.import.json`).
+    pub import: ModelImport,
 }
 
 /// On a model instance's root: the entity of each glTF node (animation targets, skin joints).
@@ -27,6 +31,57 @@ pub struct ModelNodes(pub Vec<Option<Entity>>);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelInstance {
     pub key: String,
+}
+
+/// Optimize Game Objects (Unity's Rig setting), on the instance root: the model's nodes posed
+/// without entities. The animation writes `locals`, [`ModelSkeleton::update`] computes `worlds`
+/// (relative to the instance root) and moves the `driven` entities — mesh nodes, cameras, lights and
+/// Extra Transforms to Expose, placed directly under the root. Skinning reads `worlds`.
+#[derive(Clone, Debug, Default)]
+pub struct ModelSkeleton {
+    /// Parent node of each node (`usize::MAX` = a root node).
+    pub parents: Vec<usize>,
+    pub locals: Vec<Transform>,
+    pub worlds: Vec<Mat4>,
+    /// Nodes, parents before children.
+    pub order: Vec<usize>,
+    pub driven: Vec<(usize, Entity)>,
+}
+
+impl ModelSkeleton {
+    /// Recomputes `worlds` from `locals` and moves the driven entities.
+    pub fn update(&mut self, world: &World) {
+        for &n in &self.order {
+            let l = self.locals[n];
+            let m = Mat4::from_scale_rotation_translation(l.scale, l.rotation, l.position);
+            self.worlds[n] = match self.parents[n] {
+                usize::MAX => m,
+                p => self.worlds[p] * m,
+            };
+        }
+        for &(n, e) in &self.driven {
+            if let Ok(mut t) = world.get::<&mut Transform>(e) {
+                let (s, r, p) = self.worlds[n].to_scale_rotation_translation();
+                t.position = p;
+                t.rotation = r;
+                t.scale = s;
+            }
+        }
+    }
+}
+
+/// Called after a model instance is spawned (with its import settings and data): subsystems add
+/// what the model's Rig asks for (goat-animation: the Animator of Generic / Legacy models).
+pub type ModelSpawnHook = fn(&mut World, Entity, &ModelImport, &ModelData);
+
+static SPAWN_HOOKS: std::sync::Mutex<Vec<ModelSpawnHook>> = std::sync::Mutex::new(Vec::new());
+
+/// Registers a [`ModelSpawnHook`] (once per function).
+pub fn on_model_spawned(hook: ModelSpawnHook) {
+    let mut hooks = SPAWN_HOOKS.lock().unwrap_or_else(|e| e.into_inner());
+    if !hooks.iter().any(|h| *h as usize == hook as usize) {
+        hooks.push(hook);
+    }
 }
 
 /// `.renderTexture.json` (the fields of Unity's Render Texture asset that matter here).
@@ -179,7 +234,8 @@ impl AssetServer {
         };
         let import_key = format!("{key}.import.json");
         let import: TextureImport = match self.io.read_string(&import_key) {
-            Ok(text) => serde_json::from_str(&text).map_err(|e| AssetError::Format(import_key, e.to_string()))?,
+            Ok(text) if !text.trim().is_empty() => serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| AssetError::Format(import_key, e.to_string()))?,
+            Ok(_) => TextureImport::default(),
             Err(_) => TextureImport::default(),
         };
         Ok(import.apply(t))
@@ -635,20 +691,41 @@ impl AssetServer {
                 }
                 meshes.push(ids);
             }
+            let import = ModelImport::of(&self.io, key);
             // insert before materials (they look the model up)
-            self.models.insert(key.to_string(), LoadedModel { data, meshes, materials: Vec::new(), skins: HashMap::new() });
-            let count = self.models[key].data.materials.len();
-            let mut materials = Vec::with_capacity(count);
-            for i in 0..count {
-                materials.push(self.material(gfx, &format!("{key}#material:{i}"))?);
+            self.models.insert(key.to_string(), LoadedModel { data, meshes, materials: Vec::new(), skins: HashMap::new(), import: import.clone() });
+            let names: Vec<String> = self.models[key].data.materials.iter().map(|m| m.name.clone()).collect();
+            let mut materials = Vec::with_capacity(names.len());
+            for (i, name) in names.iter().enumerate() {
+                let embedded = format!("{key}#material:{i}");
+                // Materials tab: None = Default-Material, Remapped Materials, External materials/<name>.mat.json
+                let chosen = match import.material_import_mode {
+                    MaterialImportMode::None => Some("builtin:default".to_string()),
+                    MaterialImportMode::Import => import.remapped_materials.get(name).filter(|k| !k.is_empty()).cloned().or_else(|| {
+                        (import.material_location == MaterialLocation::External).then(|| external_material_key(key, name)).filter(|k| self.io.exists(k))
+                    }),
+                };
+                let id = match chosen {
+                    Some(k) => match self.material(gfx, &k) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            goat_core::warn!("{key}: material '{name}' → {k}: {e} (the embedded one is used)");
+                            self.material(gfx, &embedded)?
+                        }
+                    },
+                    None => self.material(gfx, &embedded)?,
+                };
+                materials.push(id);
             }
             self.models.get_mut(key).unwrap().materials = materials;
             // the meshes' vertex data now lives on the GPU (skinned ones keep their bind pose:
-            // they are deformed on the CPU every frame)
-            for prims in self.models.get_mut(key).unwrap().data.meshes.iter_mut() {
-                for p in prims {
-                    if p.skin_vertices.is_none() {
-                        p.mesh = MeshData::default();
+            // they are deformed on the CPU every frame; Read/Write keeps everything)
+            if !import.read_write {
+                for prims in self.models.get_mut(key).unwrap().data.meshes.iter_mut() {
+                    for p in prims {
+                        if p.skin_vertices.is_none() {
+                            p.mesh = MeshData::default();
+                        }
                     }
                 }
             }
@@ -776,19 +853,68 @@ impl AssetServer {
             }
         }
         let model = &self.models[&file];
+        let import = &model.import;
         let _ = world.insert_one(root, ModelInstance { key: file.clone() });
-        let mut nodes: Vec<Option<Entity>> = vec![None; model.data.nodes.len()];
+        let count = model.data.nodes.len();
+        let mut nodes: Vec<Option<Entity>> = vec![None; count];
         // skinned entities: their bones are set once every node exists
         let mut skinned: Vec<(Entity, usize)> = Vec::new();
-        #[allow(clippy::too_many_arguments)]
-        fn spawn_node(world: &mut World, model: &LoadedModel, fallback: MaterialId, node: usize, parent: Entity, nodes: &mut Vec<Option<Entity>>, skinned: &mut Vec<(Entity, usize)>, depth: u32) {
-            let Some(n) = model.data.nodes.get(node) else { return };
-            if depth > 64 {
-                return;
+        // the tree from the (import-shaped) roots: parents, parent-first order
+        let mut parent_of = vec![usize::MAX; count];
+        let mut order = Vec::with_capacity(count);
+        {
+            let mut stack: Vec<usize> = model.data.roots.iter().rev().copied().collect();
+            let mut seen = vec![false; count];
+            while let Some(n) = stack.pop() {
+                if n >= count || seen[n] {
+                    continue;
+                }
+                seen[n] = true;
+                order.push(n);
+                for &c in model.data.nodes[n].children.iter().rev() {
+                    if c < count && !seen[c] {
+                        parent_of[c] = n;
+                        stack.push(c);
+                    }
+                }
             }
-            let t = Transform { position: n.translation, rotation: n.rotation, scale: n.scale };
-            let e = world.spawn((Name(n.name.clone()), t, GlobalTransform::default(), Parent(parent)));
-            nodes[node] = Some(e);
+        }
+        let optimize = import.optimize_game_objects && import.animation_type == crate::model_import::AnimationType::Generic;
+        let paths = if optimize { crate::model_import::node_paths(&model.data) } else { Vec::new() };
+        let mut skeleton = optimize.then(|| ModelSkeleton {
+            parents: parent_of.clone(),
+            locals: model.data.nodes.iter().map(|n| Transform { position: n.translation, rotation: n.rotation, scale: n.scale }).collect(),
+            worlds: vec![Mat4::IDENTITY; count],
+            order: order.clone(),
+            driven: Vec::new(),
+        });
+        if let Some(s) = &mut skeleton {
+            s.update(world);
+        }
+        for &ni in &order {
+            let n = &model.data.nodes[ni];
+            let entity = match &skeleton {
+                // Optimize Game Objects: only renderers, cameras, lights and exposed transforms get an
+                // entity, directly under the root, at their node's pose
+                Some(s) => {
+                    if n.mesh.is_none() && n.camera.is_none() && n.light.is_none() && !import.exposes(&n.name, &paths[ni]) {
+                        continue;
+                    }
+                    let (sc, r, p) = s.worlds[ni].to_scale_rotation_translation();
+                    world.spawn((Name(n.name.clone()), Transform { position: p, rotation: r, scale: sc }, GlobalTransform::default(), Parent(root)))
+                }
+                None => {
+                    let parent = match parent_of[ni] {
+                        usize::MAX => root,
+                        p => nodes[p].unwrap_or(root),
+                    };
+                    world.spawn((Name(n.name.clone()), Transform { position: n.translation, rotation: n.rotation, scale: n.scale }, GlobalTransform::default(), Parent(parent)))
+                }
+            };
+            nodes[ni] = Some(entity);
+            if let Some(s) = &mut skeleton {
+                s.driven.push((ni, entity));
+            }
             if let Some(mi) = n.mesh {
                 let prims = &model.data.meshes[mi];
                 let materials: Vec<MaterialId> = prims.iter().map(|p| p.material.and_then(|m| model.materials.get(m).copied()).unwrap_or(fallback)).collect();
@@ -797,42 +923,169 @@ impl AssetServer {
                     Some((si, data)) => {
                         let mut r = goat_runtime::SkinnedMeshRenderer::new(model.meshes[mi].clone(), materials);
                         r.skin = Some(data);
-                        let _ = world.insert_one(e, r);
-                        skinned.push((e, si));
+                        let _ = world.insert_one(entity, r);
+                        skinned.push((entity, si));
                     }
                     // Unity: one MeshFilter (the mesh, a submesh per material) + one MeshRenderer (its materials)
                     None => {
-                        let _ = world.insert(e, (MeshFilter::with_submeshes(model.meshes[mi].clone()), MeshRenderer::with_materials(materials)));
+                        let _ = world.insert(entity, (MeshFilter::with_submeshes(model.meshes[mi].clone()), MeshRenderer::with_materials(materials)));
                     }
                 }
             }
-            for &c in &n.children {
-                spawn_node(world, model, fallback, c, e, nodes, skinned, depth + 1);
+            // Import Cameras / Lights
+            if let Some(c) = n.camera {
+                let projection = if c.orthographic {
+                    goat_gfx::Projection::Orthographic { height: (c.ortho_size * 2.0).max(1e-3), near: c.near, far: c.far.max(c.near + 1e-3) }
+                } else {
+                    goat_gfx::Projection::Perspective { fov_y_radians: c.fov_y, near: c.near.max(1e-3), far: c.far.max(c.near + 1e-3) }
+                };
+                let _ = world.insert_one(entity, goat_runtime::Camera { projection, ..Default::default() });
+            }
+            if let Some(l) = n.light {
+                let range = if l.range > 0.0 { l.range } else { 10.0 };
+                let intensity = l.intensity.clamp(0.0, 8.0);
+                let _ = match l.kind {
+                    crate::model::ModelLightKind::Directional => world.insert_one(entity, goat_runtime::DirectionalLight { color: l.color, intensity, ..Default::default() }),
+                    crate::model::ModelLightKind::Point => world.insert_one(entity, goat_runtime::PointLight { color: l.color, intensity, range, ..Default::default() }),
+                    crate::model::ModelLightKind::Spot => world.insert_one(entity, goat_runtime::SpotLight { color: l.color, intensity, range, spot_angle: l.spot_angle, inner_spot_angle: l.inner_spot_angle, ..Default::default() }),
+                };
             }
         }
-        for &r in &model.data.roots {
-            spawn_node(world, model, fallback, r, root, &mut nodes, &mut skinned, 0);
-        }
         // bones = the skin's joints; root bone = the joint whose parent isn't a joint (the skeleton's top)
-        let mut parent_of = vec![usize::MAX; model.data.nodes.len()];
-        for (i, n) in model.data.nodes.iter().enumerate() {
-            for &c in &n.children {
-                if c < parent_of.len() {
-                    parent_of[c] = i;
+        for (e, si) in skinned {
+            let Some(s) = model.data.skins.get(si) else { continue };
+            if let Ok(mut r) = world.get::<&mut goat_runtime::SkinnedMeshRenderer>(e) {
+                if optimize {
+                    r.skeleton = Some(goat_runtime::SkeletonRef { root, joints: s.joints.clone() });
+                    r.bones.clear();
+                    r.root_bone = None;
+                } else {
+                    let top = s.joints.iter().find(|&&j| !s.joints.contains(&parent_of.get(j).copied().unwrap_or(usize::MAX))).copied();
+                    r.root_bone = top.and_then(|j| nodes.get(j).copied().flatten());
+                    r.bones = s.joints.iter().map(|&j| nodes.get(j).copied().flatten().unwrap_or(root)).collect();
                 }
             }
         }
-        for (e, si) in skinned {
-            let Some(s) = model.data.skins.get(si) else { continue };
-            let bones: Vec<Entity> = s.joints.iter().map(|&j| nodes.get(j).copied().flatten().unwrap_or(root)).collect();
-            let top = s.joints.iter().find(|&&j| !s.joints.contains(&parent_of.get(j).copied().unwrap_or(usize::MAX))).copied();
-            if let Ok(mut r) = world.get::<&mut goat_runtime::SkinnedMeshRenderer>(e) {
-                r.root_bone = top.and_then(|j| nodes.get(j).copied().flatten());
-                r.bones = bones;
+        let _ = world.insert_one(root, ModelNodes(nodes));
+        if let Some(s) = skeleton {
+            let _ = world.insert_one(root, s);
+        }
+        let hooks: Vec<ModelSpawnHook> = SPAWN_HOOKS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        for h in hooks {
+            h(world, root, import, &model.data);
+        }
+        Ok(())
+    }
+
+    /// Drops a loaded model (its import settings or file changed): the next spawn loads it again.
+    pub fn forget_model(&mut self, key: &str) {
+        let key = self.io.canonical(key);
+        let file = file_of(&key).to_string();
+        self.models.remove(&file);
+        let prefix = format!("{file}#");
+        self.meshes.retain(|k, _| !k.starts_with(&prefix));
+        self.materials.retain(|k, _| !k.starts_with(&prefix));
+    }
+
+    /// What the Model Import Settings inspector shows about a model (JSON): nodes (name, parent,
+    /// mesh, skinned, camera, light, path), meshes (triangles, skinned), materials (name, embedded
+    /// texture), takes of the file (name, duration), file unit, size.
+    pub fn model_info(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<serde_json::Value, AssetError> {
+        let key = self.io.canonical(key);
+        let file = file_of(&key).to_string();
+        // the takes before clips cut them: the raw file (no clips, no reduction)
+        let raw = {
+            let bytes = self.io.read(&file)?;
+            crate::model::parse_model(&self.io, &file, &bytes)?
+        };
+        self.model(gfx, &file)?;
+        let m = &self.models[&file];
+        let d = &m.data;
+        let paths = crate::model_import::node_paths(d);
+        let mut parent = vec![-1i64; d.nodes.len()];
+        for (i, n) in d.nodes.iter().enumerate() {
+            for &c in &n.children {
+                if c < parent.len() {
+                    parent[c] = i as i64;
+                }
             }
         }
-        let _ = world.insert_one(root, ModelNodes(nodes));
-        Ok(())
+        let joints: std::collections::HashSet<usize> = d.skins.iter().flat_map(|s| s.joints.iter().copied()).collect();
+        // bounds of the model in its own space (rest pose)
+        let (mut mn, mut mx) = (goat_core::math::Vec3::splat(f32::MAX), goat_core::math::Vec3::splat(f32::MIN));
+        if let Ok((points, _)) = self.mesh_geometry(&file) {
+            for p in points {
+                mn = mn.min(p);
+                mx = mx.max(p);
+            }
+        }
+        let size = (mx.x >= mn.x).then(|| (mx - mn).to_array());
+        let m = &self.models[&file];
+        let d = &m.data;
+        let ext = file.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        Ok(serde_json::json!({
+            "format": ext,
+            "fileUnit": if ext == "obj" { None } else { raw.file_unit },
+            "nodes": d.nodes.iter().enumerate().map(|(i, n)| serde_json::json!({
+                "name": n.name, "parent": parent[i], "path": paths[i], "mesh": n.mesh.is_some(),
+                "skinned": n.skin.is_some(), "bone": joints.contains(&i), "camera": n.camera.is_some(), "light": n.light.is_some(),
+            })).collect::<Vec<_>>(),
+            "roots": d.roots,
+            "meshes": d.meshes.iter().enumerate().map(|(i, prims)| serde_json::json!({
+                "index": i,
+                "triangles": raw.meshes.get(i).map(|p| p.iter().map(|p| p.mesh.indices.len() / 3).sum::<usize>()).unwrap_or(0),
+                "submeshes": prims.len(),
+                "skinned": prims.iter().any(|p| p.skin_vertices.is_some()),
+            })).collect::<Vec<_>>(),
+            "materials": raw.materials.iter().enumerate().map(|(i, mat)| serde_json::json!({
+                "index": i, "name": mat.name, "embeddedTexture": mat.image.is_some_and(|im| raw.images.get(im).is_some_and(|x| x.is_some())),
+            })).collect::<Vec<_>>(),
+            "takes": raw.animations.iter().map(|a| serde_json::json!({ "name": a.name, "duration": a.duration })).collect::<Vec<_>>(),
+            "clips": d.animations.iter().map(|a| serde_json::json!({ "name": a.name, "duration": a.duration, "loop": a.looping })).collect::<Vec<_>>(),
+            "skins": d.skins.len(),
+            "bones": joints.len(),
+            "size": size,
+        }))
+    }
+
+    /// Extract Materials (Unity): writes `materials/<name>.mat.json` next to the model for every
+    /// material (their colors / settings; embedded textures written as `textures/<name>.png`) and
+    /// returns the files written (key → bytes) plus the remap (material name → new key). The caller
+    /// writes the files (the editor, through its file system) and saves the remap in the import
+    /// settings.
+    pub fn extract_model_materials(&self, key: &str, textures_only: bool) -> Result<(Vec<(String, Vec<u8>)>, std::collections::BTreeMap<String, String>), AssetError> {
+        let key = self.io.canonical(key);
+        let file = file_of(&key).to_string();
+        let bytes = self.io.read(&file)?;
+        let raw = crate::model::parse_model(&self.io, &file, &bytes)?;
+        let dir = file.rfind('/').map_or(String::new(), |i| file[..=i].to_string());
+        let mut out = Vec::new();
+        let mut texture_keys: HashMap<usize, String> = HashMap::new();
+        for (i, img) in raw.images.iter().enumerate() {
+            let Some(t) = img else { continue };
+            // a texture used by a material is named after it
+            let name = raw.materials.iter().find(|m| m.image == Some(i)).map(|m| m.name.clone()).unwrap_or_else(|| format!("texture_{i}"));
+            let k = format!("{dir}textures/{}.png", safe_file_name(&name));
+            if let Ok(png) = crate::image::encode_png(t.width, t.height, &t.rgba) {
+                out.push((k.clone(), png));
+                texture_keys.insert(i, k);
+            }
+        }
+        let mut remap = std::collections::BTreeMap::new();
+        if !textures_only {
+            for m in &raw.materials {
+                let k = external_material_key(&file, &m.name);
+                let mut f = MaterialFile::from_desc(&m.desc);
+                if let Some(t) = m.image.and_then(|i| texture_keys.get(&i)) {
+                    // material files reference textures relative to themselves
+                    f.texture = Some(format!("../textures/{}", t.rsplit('/').next().unwrap_or(t)));
+                }
+                let json = serde_json::to_vec_pretty(&f).map_err(|e| AssetError::Format(k.clone(), e.to_string()))?;
+                out.push((k.clone(), json));
+                remap.insert(m.name.clone(), k);
+            }
+        }
+        Ok((out, remap))
     }
 }
 
@@ -936,4 +1189,17 @@ fn variant_key(key: &str, keywords: &[String]) -> String {
     k.sort();
     k.dedup();
     format!("{key}|{}", k.join(" "))
+}
+/// A file name made of a model's material / texture name (characters file systems refuse → `_`).
+pub fn safe_file_name(name: &str) -> String {
+    let s: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '#') || c.is_control() { '_' } else { c }).collect();
+    let s = s.trim().to_string();
+    if s.is_empty() { "Unnamed".into() } else { s }
+}
+
+/// Where Extract Materials writes a model material and where Location ▸ External looks for it:
+/// `materials/<name>.mat.json` next to the model.
+pub fn external_material_key(model_key: &str, material: &str) -> String {
+    let dir = model_key.rfind('/').map_or("", |i| &model_key[..=i]);
+    format!("{dir}materials/{}.mat.json", safe_file_name(material))
 }

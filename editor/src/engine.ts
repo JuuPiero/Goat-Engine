@@ -29,6 +29,14 @@ export async function syncFiles(e: EditorEngine, only?: (key: string) => boolean
   }
   await Promise.all(
     files.map(async (f) => {
+      // import settings (hidden sidecars: <file>.import.json) of models and textures, before the file
+      if (/\.(fbx|obj|glb|gltf|png|jpe?g)$/i.test(f.key)) {
+        try {
+          e.put_file(`${f.key}.import.json`, new TextEncoder().encode(await api.readText(`${f.key}.import.json`)));
+        } catch {
+          e.put_file(`${f.key}.import.json`, new Uint8Array(0)); // none (an empty file = defaults)
+        }
+      }
       // FBX / OBJ: converted to GLB by the editor host (the engine reads glTF)
       if (/\.(fbx|obj)$/i.test(f.key)) {
         try {

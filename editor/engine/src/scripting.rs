@@ -170,6 +170,11 @@ impl EditorCore {
         if is_script(key) || key.ends_with(".cs.js") {
             self.hot_reload(key);
         }
+        // a model or its import settings: re-import its instances (edit mode)
+        if let Some(model) = crate::models::model_of_changed_file(key) {
+            let model = model.to_string();
+            self.reload_model(gfx, &model);
+        }
         if key.ends_with(".mat.json") || key.ends_with(".shader") {
             if let Some(mut assets) = self.edit.resources.take::<goat_assets::AssetServer>() {
                 if key.ends_with(".shader") {

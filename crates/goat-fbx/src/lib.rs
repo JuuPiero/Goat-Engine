@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use goat_assets::glb::{write_glb, ImageSource};
-use goat_assets::{AnimChannel, AnimPath, Interpolation, ModelAnimation, ModelData, ModelMaterial, ModelNode, ModelPrimitive, ModelSkin, SkinVertices};
+use goat_assets::{AnimChannel, AnimPath, Interpolation, ModelAnimation, ModelCamera, ModelData, ModelLight, ModelLightKind, ModelMaterial, ModelNode, ModelPrimitive, ModelSkin, SkinVertices};
 use goat_core::math::{Mat4, Quat, Vec3, Vec4};
 use goat_core::Color;
 use goat_gfx::{BlendMode, Filter, MaterialDesc, Vertex, Wrap};
@@ -34,15 +34,18 @@ pub enum Target {
 #[derive(Clone, Debug)]
 pub struct ConvertOptions {
     pub target: Target,
-    /// Multiplies the model after the unit conversion (Unity's Scale Factor).
+    /// Multiplies the converted file itself (the `fbx2glb` tool's `--scale`). The importer's Scale
+    /// Factor is NOT applied here: goat-assets applies it when loading, for every format.
     pub scale: f32,
+    /// Unity's Convert Units: the file's unit → meters. Off: one file unit = one meter.
+    pub convert_units: bool,
     /// Animation keys per second when baking takes.
     pub animation_rate: f64,
 }
 
 impl Default for ConvertOptions {
     fn default() -> Self {
-        ConvertOptions { target: Target::Desktop, scale: 1.0, animation_rate: 30.0 }
+        ConvertOptions { target: Target::Desktop, scale: 1.0, convert_units: true, animation_rate: 30.0 }
     }
 }
 
@@ -60,23 +63,11 @@ pub fn install() {
     });
 }
 
-/// The conversion options of a model: `<model>.import.json` next to it (Unity's Model Import
-/// Settings: `{ "scale_factor": 1, "animation_rate": 30 }`) for `target`.
+/// The conversion options of a model from `<model>.import.json` (goat-assets `ModelImport`: the
+/// converter uses `convert_units` and `animation_rate`; the rest applies when the GLB is loaded).
 pub fn options_for(key: &str, read: &dyn Fn(&str) -> Option<Vec<u8>>, target: Target) -> ConvertOptions {
-    let mut o = ConvertOptions { target, ..Default::default() };
-    let settings = read(&format!("{key}.import.json")).and_then(|b| {
-        let t = String::from_utf8_lossy(&b).trim_start_matches('\u{feff}').to_string();
-        serde_json::from_str::<serde_json::Value>(&t).ok()
-    });
-    if let Some(s) = settings {
-        if let Some(v) = s.get("scale_factor").or_else(|| s.get("scale")).and_then(|v| v.as_f64()) {
-            o.scale = v as f32;
-        }
-        if let Some(v) = s.get("animation_rate").and_then(|v| v.as_f64()) {
-            o.animation_rate = v.clamp(1.0, 240.0);
-        }
-    }
-    o
+    let s = read(&format!("{key}.import.json")).and_then(|b| goat_assets::ModelImport::parse(&String::from_utf8_lossy(&b)).ok()).unwrap_or_default();
+    ConvertOptions { target, scale: 1.0, convert_units: s.convert_units, animation_rate: (s.animation_rate as f64).clamp(1.0, 240.0) }
 }
 
 /// FBX / OBJ bytes → GLB bytes. `key` is the model's asset key (format detection, texture
@@ -142,7 +133,11 @@ pub fn import(bytes: &[u8], key: &str, read: &dyn Fn(&str) -> Option<Vec<u8>>, o
         bytes,
         ufbx::LoadOpts {
             target_axes: ufbx::CoordinateAxes::right_handed_y_up(),
-            target_unit_meters: (1.0 / opts.scale.max(1e-6)) as ufbx::Real,
+            // Convert Units off: no unit conversion (0), the file's numbers are meters
+            target_unit_meters: if opts.convert_units { (1.0 / opts.scale.max(1e-6)) as ufbx::Real } else { 0.0 },
+            // cameras and lights look along -Z with +Y up, like glTF and the engine
+            target_camera_axes: ufbx::CoordinateAxes::right_handed_y_up(),
+            target_light_axes: ufbx::CoordinateAxes::right_handed_y_up(),
             space_conversion: ufbx::SpaceConversion::ModifyGeometry,
             geometry_transform_handling: ufbx::GeometryTransformHandling::HelperNodes,
             generate_missing_normals: true,
@@ -299,6 +294,31 @@ pub fn import(bytes: &[u8], key: &str, read: &dyn Fn(&str) -> Option<Vec<u8>>, o
             let mesh = n.mesh.as_ref().map(|m| m.element.typed_id as usize);
             let skin = n.mesh.as_ref().and_then(|m| m.skin_deformers.iter().next()).and_then(|d| skin_by_deformer.get(&d.element.typed_id).copied());
             let name = n.element.name.to_string();
+            let camera = n.camera.as_ref().map(|c| {
+                let near = c.near_plane as f32;
+                let far = c.far_plane as f32;
+                if c.projection_mode == ufbx::ProjectionMode::Orthographic {
+                    ModelCamera { orthographic: true, fov_y: 60f32.to_radians(), ortho_size: (c.orthographic_size.y as f32 * 0.5).max(1e-3), near, far }
+                } else {
+                    ModelCamera { orthographic: false, fov_y: (c.field_of_view_deg.y as f32).to_radians(), ortho_size: 5.0, near, far }
+                }
+            });
+            let light = n.light.as_ref().and_then(|l| {
+                let kind = match l.type_ {
+                    ufbx::LightType::Directional => ModelLightKind::Directional,
+                    ufbx::LightType::Spot => ModelLightKind::Spot,
+                    ufbx::LightType::Point => ModelLightKind::Point,
+                    _ => return None, // area / volume lights: Unity skips them too
+                };
+                Some(ModelLight {
+                    kind,
+                    color: Color::rgb(l.color.x as f32, l.color.y as f32, l.color.z as f32),
+                    intensity: l.intensity as f32,
+                    range: 0.0,
+                    spot_angle: l.outer_angle as f32,
+                    inner_spot_angle: l.inner_angle as f32,
+                })
+            });
             ModelNode {
                 name: if name.is_empty() { format!("Node {i}") } else { name },
                 translation: v3(t.translation),
@@ -307,6 +327,8 @@ pub fn import(bytes: &[u8], key: &str, read: &dyn Fn(&str) -> Option<Vec<u8>>, o
                 mesh,
                 skin,
                 children: n.children.iter().filter_map(|c| mapped(c)).collect(),
+                camera,
+                light,
             }
         })
         .collect();
@@ -339,11 +361,13 @@ pub fn import(bytes: &[u8], key: &str, read: &dyn Fn(&str) -> Option<Vec<u8>>, o
         }
         let duration = channels.iter().filter_map(|c| c.times.last().copied()).fold(0.0, f32::max);
         let name = stack.element.name.to_string();
-        animations.push(ModelAnimation { name: if name.is_empty() { format!("Take {}", animations.len()) } else { name }, duration, channels });
+        animations.push(ModelAnimation { name: if name.is_empty() { format!("Take {}", animations.len()) } else { name }, duration, channels, looping: true });
     }
 
     let images = vec![None; image_sources.len()];
-    Ok((ModelData { meshes, materials, images, nodes, roots, skins, animations }, image_sources))
+    let is_obj = key.to_ascii_lowercase().ends_with(".obj");
+    let file_unit = (!is_obj).then_some(scene.settings.unit_meters as f32).filter(|u| *u > 0.0);
+    Ok((ModelData { file_unit, units_converted: opts.convert_units, meshes, materials, images, nodes, roots, skins, animations }, image_sources))
 }
 
 /// The 4 strongest weights of a control point (ufbx sorts them), normalized.

@@ -239,6 +239,17 @@ fn write_text(s: State<AppState>, key: String, text: String) -> Res<()> {
         std::fs::write(path, text).map_err(|e| e.to_string())
     })
 }
+/// Writes a binary project file (extracted textures, encoded images).
+#[tauri::command]
+fn write_bytes(s: State<AppState>, key: String, data: Vec<u8>) -> Res<()> {
+    with(&s, |p| {
+        let path = p.abs(&key);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(path, data).map_err(|e| e.to_string())
+    })
+}
 /// Shows the item in the OS file manager.
 #[tauri::command]
 fn reveal(s: State<AppState>, key: String) -> Res<()> {
@@ -496,6 +507,7 @@ fn main() {
             create_asset,
             read_text,
             write_text,
+            write_bytes,
             reveal,
             drag_icon
         ])

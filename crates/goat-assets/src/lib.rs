@@ -25,12 +25,14 @@ pub mod image;
 pub mod batch;
 pub mod material;
 pub mod model;
+pub mod model_import;
 pub mod server;
 
 pub use batch::StaticBatchPlugin;
 pub use material::MaterialFile;
-pub use model::{set_model_converter, AnimChannel, AnimPath, Interpolation, ModelAnimation, ModelConverter, ModelData, ModelMaterial, ModelNode, ModelPrimitive, ModelSkin, SkinVertices};
-pub use server::{material, mesh, spawn_model, texture, AssetServer, AssetsPlugin, LoadedModel, ModelInstance, ModelNodes};
+pub use model::{set_model_converter, AnimChannel, AnimPath, Interpolation, ModelAnimation, ModelCamera, ModelConverter, ModelData, ModelLight, ModelLightKind, ModelMaterial, ModelNode, ModelPrimitive, ModelSkin, SkinVertices};
+pub use model_import::{AnimationType, ModelClip, ModelImport};
+pub use server::{material, mesh, on_model_spawned, spawn_model, texture, AssetServer, AssetsPlugin, LoadedModel, ModelInstance, ModelNodes, ModelSkeleton};
 
 use std::path::{Path, PathBuf};
 

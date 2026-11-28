@@ -8,7 +8,8 @@
 //! Every field is optional. `texture` is relative to the material file (or a root key with a
 //! leading `/`). Colors are `#rrggbb` / `#rrggbbaa` (sRGB) or `[r, g, b, a]` floats.
 //! Also: `"emissive_texture"` (× emissive), `"env_map"` (a `.cubemap.json` or `builtin:sky`) +
-//! `"reflectivity"` 0..1, `"alpha_cutoff"` 0..1 (alpha test) + `"alpha_dither"`, toon: `"toon_steps"`, `"rim_color"` +`n//! `"rim_power"`, `"outline_width"` + `"outline_color"`.
+//! `"reflectivity"` 0..1, `"alpha_cutoff"` 0..1 (alpha test) + `"alpha_dither"`, toon: `"toon_steps"`, `"rim_color"` +
+//! `"rim_power"`, `"outline_width"` + `"outline_color"`.
 
 use goat_core::Color;
 use goat_gfx::{BlendMode, CullMode, LightingModel, MaterialDesc};
@@ -149,6 +150,38 @@ impl MaterialFile {
             fog: self.fog.unwrap_or(true),
             depth_test: true,
             ..d
+        }
+    }
+
+    /// A material file with a description's values (Extract Materials of a model; the texture is
+    /// set by the caller).
+    pub fn from_desc(d: &MaterialDesc) -> MaterialFile {
+        let def = MaterialDesc::default();
+        // 8-bit colors (written as readable #rrggbb), like a material made in the editor
+        let q = |c: Color| {
+            let [r, g, b, a] = c.to_rgba8();
+            FileColor(Color::rgba(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0))
+        };
+        MaterialFile {
+            base_color: Some(q(d.base_color)),
+            lighting: (d.lighting == LightingModel::Unlit).then(|| "unlit".to_string()),
+            specular: Some(q(d.specular)),
+            shininess: Some((d.shininess * 10.0).round() / 10.0),
+            emissive: (d.emissive != def.emissive).then(|| q(d.emissive)),
+            blend: match d.blend {
+                BlendMode::Opaque => None,
+                BlendMode::Alpha => Some("alpha".into()),
+                BlendMode::Additive => Some("additive".into()),
+                #[allow(unreachable_patterns)]
+                _ => None,
+            },
+            cull: match d.cull {
+                CullMode::None => Some("none".into()),
+                CullMode::Front => Some("front".into()),
+                _ => None,
+            },
+            alpha_cutoff: (d.alpha_cutoff > 0.0).then_some(d.alpha_cutoff),
+            ..Default::default()
         }
     }
 }

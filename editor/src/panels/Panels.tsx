@@ -7,6 +7,7 @@ import { CircleAlert, Info, Search, TriangleAlert } from 'lucide-react';
 import { AssetIcon } from './icons';
 import { EntityInspector, ScriptableObjectInspector } from './ComponentEditor';
 import { MaterialInspector, ShaderInspector } from './MaterialInspector';
+import { ModelImporterInspector } from './ModelImporterInspector';
 import { SceneHierarchy } from './SceneHierarchy';
 
 interface SceneEntity {
@@ -82,6 +83,7 @@ function AssetInspector() {
   const isAsset = !!active && /\.asset\.json$/i.test(active);
   const isMaterial = !!active && /\.mat\.json$/i.test(active);
   const isShader = !!active && /\.shader$/i.test(active);
+  const isModel = !!active && /\.(glb|gltf|fbx|obj)$/i.test(active);
   const isText = !!active && !isAsset && !isMaterial && /\.(json|txt|md|shader)$/i.test(active);
   const isImage = !!active && /\.(png|jpe?g)$/i.test(active);
   useEffect(() => {
@@ -98,6 +100,7 @@ function AssetInspector() {
       {isAsset && <ScriptableObjectInspector assetKey={active} />}
       {isMaterial && <MaterialInspector assetKey={active} />}
       {isShader && <ShaderInspector assetKey={active} />}
+      {isModel && <ModelImporterInspector assetKey={active} />}
       {isImage && project && (
         <div className="preview">
           <img src={fileUrl(project.assets, active, revision)} onLoad={(e) => setImgSize(`${e.currentTarget.naturalWidth} × ${e.currentTarget.naturalHeight}`)} />

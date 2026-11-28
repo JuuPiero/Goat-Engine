@@ -20,6 +20,7 @@ export const editorengine_create_entity: (a: number, b: number, c: number, d: nu
 export const editorengine_delete_entity: (a: number, b: number, c: number) => void;
 export const editorengine_duplicate: (a: number) => [number, number, number, number];
 export const editorengine_edit_delete: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+export const editorengine_extract_model_materials: (a: number, b: number, c: number, d: number) => [number, number];
 export const editorengine_frame: (a: number, b: number) => void;
 export const editorengine_frame_selected: (a: number) => void;
 export const editorengine_game_button: (a: number, b: number, c: number, d: number) => void;
@@ -35,6 +36,7 @@ export const editorengine_instantiate: (a: number, b: number, c: number, d: numb
 export const editorengine_is_paused: (a: number) => number;
 export const editorengine_is_playing: (a: number) => number;
 export const editorengine_key: (a: number, b: number, c: number, d: number) => void;
+export const editorengine_model_info: (a: number, b: number, c: number) => [number, number];
 export const editorengine_open_scene: (a: number, b: number, c: number) => [number, number];
 export const editorengine_orbit: (a: number, b: number, c: number) => void;
 export const editorengine_pan: (a: number, b: number, c: number) => void;

@@ -170,7 +170,9 @@ pub fn write_glb(model: &ModelData, images: &[Option<ImageSource>]) -> Vec<u8> {
         })
         .collect();
 
-    // ---- nodes, skins
+    // ---- nodes (+ cameras, KHR_lights_punctual lights), skins
+    let mut cameras = Vec::new();
+    let mut lights = Vec::new();
     let nodes: Vec<Value> = model
         .nodes
         .iter()
@@ -178,6 +180,26 @@ pub fn write_glb(model: &ModelData, images: &[Option<ImageSource>]) -> Vec<u8> {
             let mut v = json!({ "name": n.name, "translation": n.translation.to_array(), "rotation": n.rotation.normalize().to_array(), "scale": n.scale.to_array() });
             if let Some(m) = n.mesh {
                 v["mesh"] = json!(m);
+            }
+            if let Some(c) = n.camera {
+                cameras.push(if c.orthographic {
+                    json!({ "type": "orthographic", "orthographic": { "xmag": c.ortho_size, "ymag": c.ortho_size, "znear": c.near, "zfar": c.far } })
+                } else {
+                    json!({ "type": "perspective", "perspective": { "yfov": c.fov_y, "znear": c.near, "zfar": c.far } })
+                });
+                v["camera"] = json!(cameras.len() - 1);
+            }
+            if let Some(l) = n.light {
+                let col = l.color.to_linear();
+                let mut lj = json!({ "type": match l.kind { crate::model::ModelLightKind::Directional => "directional", crate::model::ModelLightKind::Point => "point", crate::model::ModelLightKind::Spot => "spot" }, "color": [col.r, col.g, col.b], "intensity": l.intensity });
+                if l.range > 0.0 {
+                    lj["range"] = json!(l.range);
+                }
+                if l.kind == crate::model::ModelLightKind::Spot {
+                    lj["spot"] = json!({ "innerConeAngle": (l.inner_spot_angle * 0.5).to_radians(), "outerConeAngle": (l.spot_angle * 0.5).to_radians() });
+                }
+                lights.push(lj);
+                v["extensions"] = json!({ "KHR_lights_punctual": { "light": lights.len() - 1 } });
             }
             if let Some(s) = n.skin {
                 v["skin"] = json!(s);
@@ -224,8 +246,12 @@ pub fn write_glb(model: &ModelData, images: &[Option<ImageSource>]) -> Vec<u8> {
         })
         .collect();
 
+    let mut asset = json!({ "version": "2.0", "generator": "GoatEngine model converter" });
+    if let Some(u) = model.file_unit {
+        asset["extras"] = json!({ "goat": { "fileUnit": u, "unitsConverted": model.units_converted } });
+    }
     let mut doc = json!({
-        "asset": { "version": "2.0", "generator": "GoatEngine model converter" },
+        "asset": asset,
         "scene": 0,
         "scenes": [{ "nodes": model.roots }],
         "nodes": nodes,
@@ -243,8 +269,13 @@ pub fn write_glb(model: &ModelData, images: &[Option<ImageSource>]) -> Vec<u8> {
     put("samplers", samplers);
     put("skins", skins);
     put("animations", animations);
+    put("cameras", cameras);
     put("bufferViews", std::mem::take(&mut bin.views));
     put("accessors", std::mem::take(&mut bin.accessors));
+    if !lights.is_empty() {
+        doc["extensions"] = json!({ "KHR_lights_punctual": { "lights": lights } });
+        doc["extensionsUsed"] = json!(["KHR_lights_punctual"]);
+    }
 
     // ---- GLB container: header, JSON chunk (space padded), BIN chunk (zero padded)
     let mut json_bytes = serde_json::to_vec(&doc).unwrap_or_default();
@@ -297,10 +328,19 @@ mod tests {
                 ModelMaterial { name: "Blue".into(), desc: blue, image: None, filter: Filter::Linear, wrap: Wrap::Repeat },
             ],
             images: vec![Some(goat_gfx::TextureData::rgba8(2, 2, vec![255; 16]))],
-            nodes: vec![ModelNode { name: "Quad".into(), translation: Vec3::new(1.0, 2.0, 3.0), rotation: Quat::IDENTITY, scale: Vec3::ONE, mesh: Some(0), skin: None, children: vec![] }],
+            nodes: vec![
+                ModelNode { name: "Quad".into(), translation: Vec3::new(1.0, 2.0, 3.0), rotation: Quat::IDENTITY, scale: Vec3::ONE, mesh: Some(0), children: vec![1, 2], ..Default::default() },
+                ModelNode { name: "Cam".into(), camera: Some(crate::model::ModelCamera { orthographic: false, fov_y: 0.8, ortho_size: 5.0, near: 0.3, far: 50.0 }), ..Default::default() },
+                ModelNode {
+                    name: "Lamp".into(),
+                    light: Some(crate::model::ModelLight { kind: crate::model::ModelLightKind::Spot, color: Color::rgb(1.0, 0.5, 0.25), intensity: 2.0, range: 7.0, spot_angle: 40.0, inner_spot_angle: 20.0 }),
+                    ..Default::default()
+                },
+            ],
             roots: vec![0],
-            skins: vec![],
-            animations: vec![],
+            file_unit: Some(0.01),
+            units_converted: true,
+            ..Default::default()
         };
         let glb = write_glb(&model, &[]);
         let back = parse_model(&AssetIo::new("."), "q.glb", &glb).unwrap();
@@ -313,5 +353,11 @@ mod tests {
         assert_eq!(back.materials[1].desc.cull, CullMode::None);
         assert!(back.images[0].is_some(), "the texture embedded as PNG");
         assert_eq!(back.nodes[0].translation, Vec3::new(1.0, 2.0, 3.0));
+        let cam = back.nodes[1].camera.expect("camera survives");
+        assert!((cam.fov_y - 0.8).abs() < 1e-5 && (cam.far - 50.0).abs() < 1e-4);
+        let lamp = back.nodes[2].light.expect("light survives");
+        assert_eq!(lamp.kind, crate::model::ModelLightKind::Spot);
+        assert!((lamp.spot_angle - 40.0).abs() < 1e-3 && (lamp.range - 7.0).abs() < 1e-5 && (lamp.color.g - 0.5).abs() < 1e-3);
+        assert_eq!(back.file_unit, Some(0.01), "file unit in the GLB extras");
     }
 }

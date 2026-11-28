@@ -250,11 +250,22 @@ pub struct SkinnedMeshRenderer {
     pub sorting_order: i32,
     /// This object's own deformed copy of each skinned submesh (made by the first skinning).
     pub deformed: Vec<Option<MeshId>>,
+    /// Optimize Game Objects (the model's Rig setting): the bones have no objects; their poses are the
+    /// skeleton nodes `joints` of the model instance `root` (its `ModelSkeleton`). `bones` is empty then.
+    pub skeleton: Option<SkeletonRef>,
+}
+
+/// Where an optimized skinned mesh finds its bones (see [`SkinnedMeshRenderer::skeleton`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkeletonRef {
+    pub root: Entity,
+    /// Model node index of each bindpose.
+    pub joints: Vec<usize>,
 }
 
 impl SkinnedMeshRenderer {
     pub fn new(shared: Vec<MeshId>, materials: Vec<MaterialId>) -> Self {
-        SkinnedMeshRenderer { shared, materials, bones: Vec::new(), root_bone: None, skin: None, update_when_offscreen: false, quality: SkinQuality::Auto, visible: true, layer: 0, sorting_order: 0, deformed: Vec::new() }
+        SkinnedMeshRenderer { shared, materials, bones: Vec::new(), root_bone: None, skin: None, update_when_offscreen: false, quality: SkinQuality::Auto, visible: true, layer: 0, sorting_order: 0, deformed: Vec::new(), skeleton: None }
     }
     /// The first material (Unity's sharedMaterial).
     pub fn material(&self) -> Option<MaterialId> {

@@ -281,6 +281,16 @@ impl EditorEngine {
         self.core.shader_info(key).to_string()
     }
 
+    // ------------------------------------------------------------ models (Model Import Settings)
+    /// What the importer inspector shows about a model (JSON, or `{ error }`).
+    pub fn model_info(&mut self, key: &str) -> String {
+        self.core.model_info(&mut self.gfx, key).to_string()
+    }
+    /// Extract Textures (`textures_only`) / Materials: `{ files: [{ key, data: base64 }], remap }`.
+    pub fn extract_model_materials(&mut self, key: &str, textures_only: bool) -> String {
+        self.core.extract_model_materials(key, textures_only).to_string()
+    }
+
     // ------------------------------------------------------------ scripts
     /// `{ kind: "behaviour" | "scriptableObject", fields: {...} }` or `{ error }` of a script.
     pub fn script_info(&mut self, src: &str) -> String {

@@ -8,6 +8,7 @@ pub mod editing;
 pub mod editshape;
 pub mod gizmos;
 pub mod handles;
+pub mod models;
 pub mod scripting;
 pub mod navpreview;
 pub mod prefabs;

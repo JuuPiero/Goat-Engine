@@ -36,6 +36,7 @@ export const api = {
   createAsset: (dir: string, kind: string) => invoke<string>('create_asset', { dir, kind }),
   readText: (key: string) => invoke<string>('read_text', { key }),
   writeText: (key: string, text: string) => invoke<void>('write_text', { key, text }),
+  writeBytes: (key: string, data: Uint8Array) => invoke<void>('write_bytes', { key, data: Array.from(data) }),
   reveal: (key: string) => invoke<void>('reveal', { key }),
   buildGame: (platform: string, startScene: string | null, debug: boolean) => invoke<void>('build_game', { platform, startScene, debug }),
   dragIcon: () => invoke<string>('drag_icon'),

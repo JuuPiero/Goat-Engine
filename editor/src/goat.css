@@ -167,3 +167,22 @@
 .g-sim-small { font: 600 8.5px sans-serif; fill: #9aa0ad; text-anchor: middle; letter-spacing: 0.5px; pointer-events: none; }
 .g-sim-3d { width: 70px; }
 .g-gameview .g-stats { z-index: 3; }
+
+/* Model Import Settings (Unity's ModelImporter inspector) */
+.model-import .model-tabs { display: flex; gap: 2px; margin: 2px 4px 6px; }
+.model-import .model-tabs button { flex: 1; height: 22px; border-radius: 0; background: #3a3a3a; border: 1px solid #2a2a2a; color: var(--text); }
+.model-import .model-tabs button.on { background: #4d4d4d; color: var(--text-bright); border-bottom: 2px solid #3a79d8; }
+.model-import .model-header { margin: 8px 4px 2px; font-weight: 600; color: var(--text-bright); }
+.model-import .model-note { margin: 4px 4px; padding: 4px 6px; color: var(--text-dim); background: #2e2e2e; border-radius: 2px; line-height: 1.4; }
+.model-import .model-buttons, .model-import .model-apply { margin: 6px 4px; gap: 4px; }
+.model-import .model-apply { border-top: 1px solid #2a2a2a; padding-top: 6px; }
+.model-import .model-exposed { max-height: 240px; overflow: auto; margin: 0 4px 4px; background: #2b2b2b; border: 1px solid #222; }
+.model-import .model-exposed label { gap: 4px; height: 20px; cursor: pointer; }
+.model-import .model-clips { margin: 0 4px; }
+.model-import .model-clips.disabled { opacity: 0.5; pointer-events: none; }
+.model-import .model-clip { display: grid; grid-template-columns: 1fr 0.9fr 48px 48px 30px 20px; gap: 3px; align-items: center; padding: 1px 2px; }
+.model-import .model-clip.head { color: var(--text-dim); font-size: 11px; }
+.model-import .model-clip.selected { background: #2c5d87; }
+.model-import .model-clip input:not([type=checkbox]), .model-import .model-clip select { min-width: 0; width: 100%; }
+.model-import .model-clip span.dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-import .field > input[type=checkbox] { justify-self: start; }
