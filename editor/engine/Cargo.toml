@@ -21,6 +21,7 @@ goat-physics2d.workspace = true
 goat-animation.workspace = true
 goat-navigation.workspace = true
 goat-physics.workspace = true
+goat-lines.workspace = true
 goat-audio.workspace = true
 goat-script.workspace = true
 goat-script-js.workspace = true

@@ -2331,6 +2331,7 @@ dependencies = [
  "goat-core",
  "goat-gfx",
  "goat-gfx-wgpu",
+ "goat-lines",
  "goat-navigation",
  "goat-particles",
  "goat-physics",

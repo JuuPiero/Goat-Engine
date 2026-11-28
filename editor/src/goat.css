@@ -153,3 +153,6 @@
 .g-group-fold > summary { cursor: pointer; font-weight: 600; font-size: 11px; padding: 3px 4px; }
 .g-group-row { display: flex; gap: 4px; }
 .g-group-row > * { flex: 1; min-width: 0; }
+/* Edit Collider / Edit Points (Unity's toggle at the top of the component) */
+.edit-tool-row { justify-content: flex-start; margin-bottom: 4px; }
+.edit-tool-row button.active { background: var(--g-accent, #2f6dbd); color: #fff; border-color: transparent; }

@@ -525,6 +525,12 @@ impl EditorCore {
             }
             stack.extend(children.iter().filter(|(p, _)| *p == x).map(|(_, c)| *c));
         }
+        // colliders / lines count too (objects without renderers are framed by them, like Unity)
+        let pts = crate::editshape::shape_points(w, e);
+        if !pts.is_empty() {
+            let c = pts.iter().copied().sum::<Vec3>() / pts.len() as f32;
+            spheres.push((c, pts.iter().map(|p| (*p - c).length()).fold(0.0, f32::max)));
+        }
         if spheres.is_empty() {
             return w.get::<&GlobalTransform>(e).ok().map(|g| (g.0.w_axis.truncate(), 0.5));
         }

@@ -36,6 +36,8 @@ const C2: [&str; 3] = ["#db4c3f", "#8bc34a", "#4a8fe0"];
 const YELLOW2: &str = "#ffd23f";
 const WHITE2: &str = "#e8e8e8";
 const SELECTION: &str = "#ff9a1f";
+/// Edit Collider / Edit Points dots (the collider outline's green)
+const EDIT_DOT: &str = "#8ef08e";
 
 // PiaEngine's 2D sizes (pixels)
 const HANDLE_2D: f32 = 80.0;
@@ -263,6 +265,23 @@ impl EditorCore {
     /// The handles as screen shapes, in draw order (later ones are on top and win picking).
     fn handle_parts(&self) -> Vec<Part> {
         let mut out = Vec::new();
+        // Edit Collider / Edit Points: the shape's dots replace the transform handles
+        if self.tools.edit != crate::editshape::EditTool::None {
+            let dots = self.edit_dots();
+            if !dots.is_empty() {
+                for (i, d) in dots.iter().enumerate() {
+                    let Some(p) = self.to_px(d.pos) else { continue };
+                    let id = crate::editshape::EDIT + i;
+                    if matches!(d.kind, crate::editshape::Kind::Insert(_)) {
+                        out.push(part(id, Prim::Circle(p, 4.0, 1.5), EDIT_DOT, 0.9));
+                    } else {
+                        out.push(deco(Prim::Circle(p, 6.0, 0.0), "#1b1b1b", 0.9));
+                        out.push(part(id, Prim::Circle(p, 4.5, 0.0), EDIT_DOT, 1.0));
+                    }
+                }
+                return out;
+            }
+        }
         let Some((o, basis, unit)) = self.gizmo_frame() else { return out };
         let Some(c) = self.to_px(o) else { return out };
         let mode = self.tools.mode;
@@ -450,12 +469,20 @@ impl EditorCore {
 
     /// Pointer over the view (no button): the handle it would grab is highlighted.
     pub fn gizmo_hover(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        self.tools.hover = if self.tools.drag.is_none() { self.gizmo_hit(x, y, w, h) } else { self.tools.hover };
+        self.tools.hover = if self.tools.drag.is_none() && self.tools.edit_drag.is_none() { self.gizmo_hit(x, y, w, h) } else { self.tools.hover };
     }
 
     /// Starts dragging `handle` from view pixel `at`: remembers the selection's transforms (every
     /// selected object without a selected ancestor follows).
     pub fn gizmo_start(&mut self, handle: usize, at: Vec2) {
+        if handle >= crate::editshape::EDIT {
+            if self.edit_start(handle - crate::editshape::EDIT, at) {
+                self.tools.dragging = Some(handle);
+                self.tools.hover = Some(handle);
+                self.tools.edit_cur = at;
+            }
+            return;
+        }
         let Some((origin, basis, unit)) = self.gizmo_frame() else { return };
         let w = crate::core::view_world!(self);
         let parent_world = |e: Entity| w.get::<&Parent>(e).ok().and_then(|p| w.get::<&GlobalTransform>(p.0).ok().map(|g| g.0)).unwrap_or(Mat4::IDENTITY);
@@ -499,12 +526,19 @@ impl EditorCore {
     pub fn gizmo_stop(&mut self) {
         self.tools.dragging = None;
         self.tools.drag = None;
+        self.tools.edit_drag = None;
     }
 
     /// The pointer moved by (dx, dy) pixels of a `w × h` view during a drag; `snap` (Ctrl held)
     /// rounds to the snap increments (Unity's Increment Snapping).
     pub fn gizmo_drag(&mut self, dx: f32, dy: f32, w: f32, h: f32, snap: bool) {
         self.tools.view_px = Vec2::new(w, h);
+        if self.tools.edit_drag.is_some() {
+            self.tools.edit_cur += Vec2::new(dx, dy);
+            let cur = self.tools.edit_cur;
+            self.edit_drag_to(cur, snap);
+            return;
+        }
         let Some(d) = self.tools.drag.as_mut() else { return };
         d.cur += Vec2::new(dx, dy);
         let (handle, origin, basis, unit, start, cur) = (d.handle, d.origin, d.basis, d.unit, d.start, d.cur);

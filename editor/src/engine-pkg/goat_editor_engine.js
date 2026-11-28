@@ -313,6 +313,19 @@ export class EditorEngine {
         }
     }
     /**
+     * Ctrl+click on an edit point deletes it; `dry` only tells whether it would.
+     * @param {number} x
+     * @param {number} y
+     * @param {number} w
+     * @param {number} h
+     * @param {boolean} dry
+     * @returns {boolean}
+     */
+    edit_delete(x, y, w, h, dry) {
+        const ret = wasm.editorengine_edit_delete(this.__wbg_ptr, x, y, w, h, dry);
+        return ret !== 0;
+    }
+    /**
      * One frame (`dt` seconds).
      * @param {number} dt
      */
@@ -913,6 +926,15 @@ export class EditorEngine {
      */
     set_dual_3ds(on) {
         wasm.editorengine_set_dual_3ds(this.__wbg_ptr, on);
+    }
+    /**
+     * Edit Collider ("collider") / Edit Points ("points") on the selected object, "" = off.
+     * @param {string} tool
+     */
+    set_edit_tool(tool) {
+        const ptr0 = passStringToWasm0(tool, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.editorengine_set_edit_tool(this.__wbg_ptr, ptr0, len0);
     }
     /**
      * The Console's Error Pause: pause when a script fails.
@@ -2199,7 +2221,7 @@ function __wbg_get_imports() {
             arg0.writeTexture(arg1, arg2, arg3, arg4);
         }, arguments); },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2887, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2882, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_49c42322a91a8d99___convert__closures_____invoke___wasm_bindgen_49c42322a91a8d99___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_49c42322a91a8d99___JsError___true_);
             return ret;
         },

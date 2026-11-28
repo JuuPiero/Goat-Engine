@@ -40,11 +40,16 @@ pub struct Tools {
     /// Ctrl-drag increments: move (units), rotate (degrees), scale (factor).
     pub snap: [f32; 3],
     pub(crate) drag: Option<crate::handles::GizmoDrag>,
+    /// Edit Collider / Edit Points (editshape.rs): dots instead of the transform handles.
+    pub edit: crate::editshape::EditTool,
+    pub(crate) edit_drag: Option<crate::editshape::EditDrag>,
+    /// pointer of an edit drag (view pixels)
+    pub(crate) edit_cur: Vec2,
 }
 
 impl Default for Tools {
     fn default() -> Self {
-        Tools { mode: GizmoMode::Move, grid: None, grid_gpu: None, dragging: None, hover: None, view_px: Vec2::new(800.0, 600.0), local: false, center: false, snap: [0.25, 15.0, 0.1], drag: None }
+        Tools { mode: GizmoMode::Move, grid: None, grid_gpu: None, dragging: None, hover: None, view_px: Vec2::new(800.0, 600.0), local: false, center: false, snap: [0.25, 15.0, 0.1], drag: None, edit: crate::editshape::EditTool::None, edit_drag: None, edit_cur: Vec2::ZERO }
     }
 }
 

@@ -64,6 +64,10 @@ export class EditorEngine {
      */
     duplicate(): string;
     /**
+     * Ctrl+click on an edit point deletes it; `dry` only tells whether it would.
+     */
+    edit_delete(x: number, y: number, w: number, h: number, dry: boolean): boolean;
+    /**
      * One frame (`dt` seconds).
      */
     frame(dt: number): void;
@@ -193,6 +197,10 @@ export class EditorEngine {
      */
     set_dual_3ds(on: boolean): void;
     /**
+     * Edit Collider ("collider") / Edit Points ("points") on the selected object, "" = off.
+     */
+    set_edit_tool(tool: string): void;
+    /**
      * The Console's Error Pause: pause when a script fails.
      */
     set_error_pause(on: boolean): void;
@@ -288,6 +296,7 @@ export interface InitOutput {
     readonly editorengine_create_entity: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly editorengine_delete_entity: (a: number, b: number, c: number) => void;
     readonly editorengine_duplicate: (a: number) => [number, number, number, number];
+    readonly editorengine_edit_delete: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly editorengine_frame: (a: number, b: number) => void;
     readonly editorengine_frame_selected: (a: number) => void;
     readonly editorengine_game_pointer: (a: number, b: number, c: number, d: number) => void;
@@ -332,6 +341,7 @@ export interface InitOutput {
     readonly editorengine_set_active: (a: number, b: number, c: number, d: number) => void;
     readonly editorengine_set_component: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly editorengine_set_dual_3ds: (a: number, b: number) => void;
+    readonly editorengine_set_edit_tool: (a: number, b: number, c: number) => void;
     readonly editorengine_set_error_pause: (a: number, b: number) => void;
     readonly editorengine_set_gizmo_mode: (a: number, b: number, c: number) => void;
     readonly editorengine_set_gizmos: (a: number, b: number) => void;

@@ -57,6 +57,15 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
   const dirty = useStore((s) => s.sceneDirty);
   const drop = useStore((s) => s.dropTarget);
   const tool = useStore((s) => s.tool);
+  const editTool = useStore((s) => s.editTool);
+  // Edit Collider / Edit Points: the engine shows the shape's dots instead of the transform handles
+  useEffect(() => {
+    getEngine()?.set_edit_tool(editTool);
+  }, [editTool]);
+  // picking a transform tool leaves the edit mode (Unity)
+  useEffect(() => {
+    if (getState().editTool) setState({ editTool: '' });
+  }, [tool]);
   const view2d = useStore((s) => s.view2d);
   const grid = useStore((s) => s.showGrid);
   const gizmos = useStore((s) => s.showGizmos);
@@ -103,9 +112,20 @@ export function SceneView({ api }: { api: DockviewPanelApi }) {
     if (!e || !owner) return;
     const r = (ev.currentTarget as HTMLElement).querySelector('canvas')!.getBoundingClientRect();
     // Play mode too (Unity): the handles move the running objects (changes are gone on Stop)
+    // Edit Points: Ctrl+click on a point deletes it (one Undo step)
+    if (editTool && ev.button === 0 && (ev.ctrlKey || ev.metaKey)) {
+      const [x, y] = [(ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height];
+      if (e.edit_delete(x, y, r.width, r.height, true)) {
+        e.record_undo('Delete Point');
+        e.edit_delete(x, y, r.width, r.height, false);
+        afterChange();
+        ev.preventDefault();
+        return;
+      }
+    }
     const onGizmo = ev.button === 0 && !ev.altKey && tool !== 'hand' && e.gizmo_begin((ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height, r.width, r.height);
     // the drag is one Undo step (recorded before the first change)
-    if (onGizmo && !e.is_playing()) e.record_undo(UNDO_LABEL[tool] ?? 'Move');
+    if (onGizmo && !e.is_playing()) e.record_undo(editTool === 'collider' ? 'Edit Collider' : editTool === 'points' ? 'Edit Points' : (UNDO_LABEL[tool] ?? 'Move'));
     const mode = onGizmo ? 'gizmo' : ev.button === 2 || (ev.button === 0 && ev.altKey) ? 'orbit' : ev.button === 1 || (ev.button === 0 && tool === 'hand') ? 'pan' : 'click';
     drag.current = { x: ev.clientX, y: ev.clientY, mode, moved: false };
     (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);

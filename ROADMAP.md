@@ -149,7 +149,7 @@ Duyệt bảng "Đối chiếu với Unity" và từng phần README / API của
 
 **B. Editor**
 - ✅ Hub, Scene / Game view độc lập (kể cả khi Play), gizmo, Undo, Prefab Mode, Animation / Animator / Profiler, Build / Project Settings
-- ⬜ Edit Collider (kéo mặt / cạnh), Edit Points của Line Renderer
+- ✅ Edit Collider (kéo mặt / cạnh, bán kính, đầu capsule, điểm polygon / edge), Edit Points của Line Renderer (thêm / xoá điểm)
 - ⬜ Device Simulator (khung máy, safe area), cửa sổ Stats đầy đủ
 - ⬜ Find References In Scene, khoá Inspector, Sprite Editor (sprite Multiple, border 9-slice), Anchor Presets của RectTransform, tool Rect (T)
 - ⬜ Editor scripting kiểu Unity: `@menuItem`, `EditorWindow` + `onGUI`, `@customEditor`, `PropertyDrawer`, `EditorGUILayout`, `SerializedObject`, `Undo`; `onGUI` trên component

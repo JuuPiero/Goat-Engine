@@ -334,6 +334,19 @@ impl EditorEngine {
     pub fn gizmo_end(&mut self) {
         self.core.gizmo_stop();
     }
+    /// Edit Collider ("collider") / Edit Points ("points") on the selected object, "" = off.
+    pub fn set_edit_tool(&mut self, tool: &str) {
+        self.core.tools.edit = match tool {
+            "collider" => crate::editshape::EditTool::Collider,
+            "points" => crate::editshape::EditTool::Points,
+            _ => crate::editshape::EditTool::None,
+        };
+        self.core.tools.edit_drag = None;
+    }
+    /// Ctrl+click on an edit point deletes it; `dry` only tells whether it would.
+    pub fn edit_delete(&mut self, x: f32, y: f32, w: f32, h: f32, dry: bool) -> bool {
+        self.core.edit_delete(x, y, w, h, dry)
+    }
     /// Tool handle settings: Local / Global axes, Center / Pivot, snap increments.
     pub fn set_tool_handles(&mut self, local: bool, center: bool, snap_move: f32, snap_rotate: f32, snap_scale: f32) {
         let t = &mut self.core.tools;

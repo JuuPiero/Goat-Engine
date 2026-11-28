@@ -798,6 +798,13 @@ Giao diện và hành vi theo editor PiaEngine (skin "Unity Dark", icon lucide, 
   - Game / package mô tả component của mình bằng `goat_scene::registry(ctx).describe("Name", ComponentInfo::new("Menu/Path").asset("texture", "texture").options(...))`.
 - **Console**: Clear, Collapse (gộp dòng trùng), bật / tắt từng mức info / warn / error kèm số đếm, tìm kiếm, double-click để copy một dòng.
 - Kéo model (.glb) hoặc prefab từ Project vào Scene view / Hierarchy để thêm vào scene.
+- **Edit Collider / Edit Points** (như Unity / PiaEngine): nút **Edit Collider** ở đầu component Collider, Collider 2D, Character Controller và nút **Edit Points** của Line Renderer. Khi bật, Scene view hiện các chấm xanh thay cho tay cầm Transform:
+  - Box: chấm ở tâm 6 mặt; kéo một mặt thì chỉ mặt đó di chuyển, mặt đối diện đứng yên (Center và Size cùng đổi).
+  - Sphere / Circle: chấm bán kính. Capsule / Character Controller: chấm bán kính và hai đầu (kéo một đầu đổi chiều cao, đầu kia đứng yên).
+  - Box 2D: chấm ở 4 cạnh và 4 góc.
+  - Polygon / Edge Collider 2D và điểm của Line Renderer: kéo từng điểm; kéo chấm rỗng giữa một đoạn để thêm điểm; Ctrl + click để xoá điểm (polygon giữ tối thiểu 3, edge / line tối thiểu 2).
+  - Mỗi lần kéo hoặc xoá là một bước Undo; giữ Ctrl khi kéo để làm tròn theo bước snap. Chọn object khác hoặc đổi tool (W / E / R...) thì chế độ này tắt.
+  - F (Frame Selected) với object không có mesh thì căn theo collider / line của nó.
 - **Animator**: double-click file `.controller.json` để mở. Chuột phải nền: *Create State*; chuột phải state: *Make Transition* / *Set as Layer Default State* / *Delete*; click mũi tên để sửa transition; Alt + kéo hoặc chuột giữa để kéo khung nhìn; Ctrl+S lưu.
 - **Script**: file `.cs` được tự dịch khi lưu, lỗi biên dịch và lỗi script lúc Play hiện ở Console.
 - **Gizmo của component** (object đang chọn): khung collider 3D / 2D và CharacterController màu xanh lá, frustum của camera, tia / tầm / hình nón của đèn, tầm min / max của AudioSource 3D, hình trụ của NavMeshAgent, khối NavMeshObstacle.

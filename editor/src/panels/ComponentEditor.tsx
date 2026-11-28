@@ -10,7 +10,7 @@ import { api, nameOf } from '../api';
 import { getEngine, openPrefab } from '../engine';
 import { edit, mutate } from '../commands';
 import { registerFieldDrop } from '../dnd';
-import { log, setState, useStore } from '../store';
+import { getState, log, setState, useStore } from '../store';
 import { openContextMenu, openMenuBelow, type MenuItem } from '../ui/Menu';
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -689,8 +689,25 @@ type CompList = { name: string; value: Json }[];
 /// Every component of the active entity except Transform (drawn above it). With several entities
 /// selected (`ids`), only the components they all have; a field edit sets that field on every
 /// one (their other fields stay), fields that differ are marked (Unity's mixed values).
+/** Components with an Edit Collider / Edit Points button (Unity's). */
+const EDIT_TOOLS: Record<string, { tool: 'collider' | 'points'; label: string; tip: string }> = {
+  Collider: { tool: 'collider', label: 'Edit Collider', tip: 'Drag the dots in the Scene view: box faces, radius, capsule ends' },
+  Collider2D: { tool: 'collider', label: 'Edit Collider', tip: 'Drag the dots in the Scene view: edges / corners, radius, points (middle dot = insert, Ctrl+click = delete)' },
+  CharacterController: { tool: 'collider', label: 'Edit Collider', tip: 'Drag the dots in the Scene view: radius and height' },
+  LineRenderer: { tool: 'points', label: 'Edit Points', tip: 'Drag the points in the Scene view (middle dot = insert, Ctrl+click = delete)' },
+};
+
 export function ComponentList({ id, ids = [id] }: { id: string; ids?: string[] }) {
   const rev = useStore((s) => s.hierarchyRev * 100000 + s.inspectorRev);
+  const editTool = useStore((s) => s.editTool);
+  // another object selected: the edit mode ends (Unity)
+  const firstId = useRef(id);
+  useEffect(() => {
+    if (id !== firstId.current) {
+      firstId.current = id;
+      if (getState().editTool) setState({ editTool: '' });
+    }
+  }, [id]);
   const [list, setList] = useState<CompList>([]);
   const [others, setOthers] = useState<CompList[]>([]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -762,6 +779,17 @@ export function ComponentList({ id, ids = [id] }: { id: string; ids?: string[] }
                   <EllipsisVertical size={13} />
                 </button>
               </div>
+              {!collapsed.has(c.name) && EDIT_TOOLS[c.name] && ids.length === 1 && (
+                <div className="component-actions edit-tool-row">
+                  <button
+                    className={editTool === EDIT_TOOLS[c.name].tool ? 'active' : undefined}
+                    title={EDIT_TOOLS[c.name].tip}
+                    onClick={() => setState({ editTool: editTool === EDIT_TOOLS[c.name].tool ? '' : EDIT_TOOLS[c.name].tool })}
+                  >
+                    {EDIT_TOOLS[c.name].label}
+                  </button>
+                </div>
+              )}
               {!collapsed.has(c.name) &&
                 (c.value && typeof c.value === 'object' && !Array.isArray(c.value) && Object.keys(c.value).length ? (
                   Object.entries(c.value).map(([k, v]) => (
