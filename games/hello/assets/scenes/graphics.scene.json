@@ -1,35 +1,251 @@
 {
   "version": 1,
   "entities": [
-    { "id": 1, "name": "Render Settings", "components": { "RenderSettings": { "ambient": "#2a2f3a" } } },
-    { "id": 2, "name": "Main Camera", "components": {
-        "Transform": { "position": [0, 3.4, 7.5], "euler": [-20, 0, 0] },
-        "Camera": { "projection": { "perspective": { "fov": 55, "near": 0.1, "far": 100 } }, "clear": "#151922" } } },
-    { "id": 3, "name": "Minimap Camera", "components": {
-        "Transform": { "position": [0, 12, 0], "euler": [-90, 0, 0] },
-        "Camera": { "projection": { "orthographic": { "height": 9, "near": 0.1, "far": 50 } }, "clear": "#203048", "target_texture": "textures/minimap.renderTexture.json" },
-        "PostEffect": { "materials": ["materials/post_grayscale.mat.json"] } } },
-    { "id": 4, "name": "Sun", "components": { "Transform": { "euler": [-55, 30, 0] }, "DirectionalLight": { "color": "#ffffff", "intensity": 1.0 } } },
-    { "id": 5, "name": "Ground", "components": {
-        "Transform": { "scale": [1.6, 1, 1.2] },
-        "MeshRenderer": { "mesh": "builtin:plane", "material": "materials/ground.mat.json" } } },
-    { "id": 6, "name": "Red Ball (property block)", "components": {
-        "Transform": { "position": [-2.2, 0.6, 0.5] },
-        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/matte.mat.json" },
-        "PropertyBlock": { "color": "#ff4030" } } },
-    { "id": 7, "name": "Green Ball (property block)", "components": {
-        "Transform": { "position": [0, 0.6, 0.5] },
-        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/matte.mat.json" },
-        "PropertyBlock": { "color": "#40e060" } } },
-    { "id": 8, "name": "White Ball (shared material)", "components": {
-        "Transform": { "position": [2.2, 0.6, 0.5] },
-        "MeshRenderer": { "mesh": "builtin:sphere", "material": "materials/matte.mat.json" } } },
-    { "id": 9, "name": "Crate", "components": {
-        "Transform": { "position": [1.2, 0.5, -1.6], "euler": [0, 30, 0] },
-        "MeshRenderer": { "mesh": "builtin:cube", "material": "materials/logo.mat.json" } } },
-    { "id": 10, "name": "Minimap Screen", "components": {
-        "Transform": { "position": [-1.6, 1.6, -2.2], "scale": [2.2, 2.2, 1] },
-        "MeshRenderer": { "mesh": "builtin:quad", "material": "materials/minimap_screen.mat.json" } } },
-    { "id": 11, "name": "Graphics Demo", "components": { "Transform": {}, "Script": { "src": "scripts/GraphicsDemo.ts", "props": { "count": 120 } } } }
+    {
+      "id": 1,
+      "name": "Render Settings",
+      "components": {
+        "RenderSettings": {
+          "ambient": "#2a2f3a",
+          "fog": null
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Main Camera",
+      "components": {
+        "Camera": {
+          "clear": "#151922",
+          "clear_depth": true,
+          "culling_mask": 4294967295,
+          "depth": 0,
+          "display": "main",
+          "projection": {
+            "perspective": {
+              "far": 100.0,
+              "fov": 55.0,
+              "near": 0.10000000149011612
+            }
+          },
+          "viewport": [
+            0.0,
+            0.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            3.4000000953674316,
+            7.5
+          ],
+          "rotation": [
+            -0.1736481785774231,
+            0.0,
+            0.0,
+            0.9848077297210693
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Minimap Camera",
+      "components": {
+        "Camera": {
+          "clear": "#203048",
+          "clear_depth": true,
+          "culling_mask": 4294967295,
+          "depth": 0,
+          "display": "main",
+          "projection": {
+            "orthographic": {
+              "far": 50.0,
+              "height": 9.0,
+              "near": 0.10000000149011612
+            }
+          },
+          "target_texture": "textures/minimap.renderTexture.json",
+          "viewport": [
+            0.0,
+            0.0,
+            1.0,
+            1.0
+          ]
+        },
+        "PostEffect": {
+          "materials": [
+            "materials/post_grayscale.mat.json"
+          ]
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            12.0,
+            0.0
+          ],
+          "rotation": [
+            -0.7071067690849304,
+            0.0,
+            0.0,
+            0.7071067690849304
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Sun",
+      "components": {
+        "DirectionalLight": {
+          "color": "#ffffff",
+          "intensity": 1.0,
+          "mode": "mixed"
+        },
+        "Transform": {
+          "rotation": [
+            -0.4460148811340332,
+            0.2295752912759781,
+            0.11950933188199997,
+            0.8567866683006287
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Ground",
+      "components": {
+        "MeshRenderer": {
+          "material": "materials/ground.mat.json",
+          "mesh": "builtin:plane"
+        },
+        "Transform": {
+          "scale": [
+            1.600000023841858,
+            1.0,
+            1.2000000476837158
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Red Ball (property block)",
+      "components": {
+        "MeshRenderer": {
+          "material": "materials/matte.mat.json",
+          "mesh": "builtin:sphere"
+        },
+        "PropertyBlock": {
+          "color": "#ff4030"
+        },
+        "Transform": {
+          "position": [
+            -2.200000047683716,
+            0.6000000238418579,
+            0.5
+          ]
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Green Ball (property block)",
+      "components": {
+        "MeshRenderer": {
+          "material": "materials/matte.mat.json",
+          "mesh": "builtin:sphere"
+        },
+        "PropertyBlock": {
+          "color": "#40e060"
+        },
+        "Transform": {
+          "position": [
+            0.0,
+            0.6000000238418579,
+            0.5
+          ]
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "White Ball (shared material)",
+      "components": {
+        "MeshRenderer": {
+          "material": "materials/matte.mat.json",
+          "mesh": "builtin:sphere"
+        },
+        "Transform": {
+          "position": [
+            2.200000047683716,
+            0.6000000238418579,
+            0.5
+          ]
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Crate",
+      "components": {
+        "MeshRenderer": {
+          "material": "materials/logo.mat.json",
+          "mesh": "builtin:cube"
+        },
+        "Transform": {
+          "position": [
+            1.2000000476837158,
+            0.5,
+            -1.600000023841858
+          ],
+          "rotation": [
+            0.0,
+            0.258819043636322,
+            0.0,
+            0.9659258127212524
+          ]
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Minimap Screen",
+      "components": {
+        "MeshRenderer": {
+          "material": "materials/minimap_screen.mat.json",
+          "mesh": "builtin:quad"
+        },
+        "Transform": {
+          "position": [
+            -1.600000023841858,
+            1.600000023841858,
+            -2.200000047683716
+          ],
+          "scale": [
+            2.200000047683716,
+            2.200000047683716,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Graphics Demo",
+      "components": {
+        "Script": [
+          {
+            "props": {
+              "count": 120
+            },
+            "src": "scripts/GraphicsDemo.ts"
+          }
+        ]
+      }
+    }
   ]
 }
