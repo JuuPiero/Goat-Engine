@@ -130,8 +130,8 @@ const ASSET_EXT: Record<string, RegExp> = {
   texture: /\.(png|jpe?g|ktx)$|\.renderTexture\.json$/i,
   renderTexture: /\.renderTexture\.json$/i,
   material: /\.mat\.json$/i,
-  mesh: /\.(glb|gltf)$/i,
-  model: /\.(glb|gltf)$/i,
+  mesh: /\.(glb|gltf|fbx|obj)$/i,
+  model: /\.(glb|gltf|fbx|obj)$/i,
   prefab: /\.prefab\.json$/i,
   audio: /\.(wav|ogg)$/i,
   font: /\.(ttf|otf)$/i,
@@ -233,6 +233,24 @@ function Field({ path, name, value, hints, onChange }: { path: string; name: str
           </div>
         )}
       </>
+    );
+  }
+  if (h.kind === 'asset' && Array.isArray(value)) {
+    // a list of assets (Unity's Materials list: one per submesh)
+    const list = value as (string | null)[];
+    const kind = h.asset ?? 'any';
+    return (
+      <Row name={`${name} (${list.length})`} tip={h.tooltip}>
+        <div className="g-asset-list">
+          {list.map((x, i) => (
+            <div key={i} className="g-asset-list-row">
+              <AssetField value={typeof x === 'string' && x ? x : null} kind={kind} onChange={(nv) => onChange(list.map((y, j) => (j === i ? (nv ?? '') : y)) as Json)} />
+              <button className="g-icon-btn" title="Remove" onClick={() => onChange(list.filter((_, j) => j !== i) as Json)}>−</button>
+            </div>
+          ))}
+          <button className="g-btn small" onClick={() => onChange([...list, kind === 'material' ? 'builtin:default' : ''] as Json)}>+ Add</button>
+        </div>
+      </Row>
     );
   }
   if (h.kind === 'asset') {

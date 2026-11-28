@@ -29,6 +29,7 @@ members = [
     "crates/goat-save",
     "crates/goat-platform-desktop",
     "crates/goat-platform-3ds",
+    "crates/goat-fbx",
     "games/hello",
     "players/desktop",
     "players/3ds",
@@ -64,6 +65,7 @@ default-members = [
     "crates/goat-save",
     "crates/goat-gfx-citro3d", # host build = only the portable parts (texture tiling + its test)
     "crates/goat-platform-desktop",
+    "crates/goat-fbx",
     "games/hello",
     "players/desktop",
     "tools/goat",
@@ -86,6 +88,7 @@ goat-platform-desktop = { path = "crates/goat-platform-desktop" }
 goat-platform-3ds = { path = "crates/goat-platform-3ds" }
 goat-sprites = { path = "crates/goat-sprites" }
 goat-assets = { path = "crates/goat-assets" }
+goat-fbx = { path = "crates/goat-fbx" }
 goat-scene = { path = "crates/goat-scene" }
 goat-text = { path = "crates/goat-text" }
 goat-physics = { path = "crates/goat-physics" }

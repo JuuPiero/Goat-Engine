@@ -6,7 +6,7 @@ Ký hiệu: ✅ xong · 🔨 đang làm · ⬜ chưa làm
 
 ## Giai đoạn 0 — Nền móng ✅
 - ✅ Workspace Rust chia lớp: core / gfx (trung lập) / runtime / backend / platform / player / tools
-- ✅ ECS (hecs), Transform phân cấp, Camera, MeshRenderer, DirectionalLight, Input trừu tượng, `Behaviour`
+- ✅ ECS (hecs), Transform phân cấp, Camera, MeshFilter + MeshRenderer (nhiều material / submesh như Unity), DirectionalLight, Input trừu tượng, `Behaviour`
 - ✅ CLI `goat` với `Builder` cho mỗi nền tảng (`build` / `run` / `doctor`), cấu hình máy trong `goat.local.toml`
 
 ## Giai đoạn 1 — Renderer 3DS + desktop 🔨
@@ -145,7 +145,8 @@ Duyệt bảng "Đối chiếu với Unity" và từng phần README / API của
 - ✅ Lớp component kiểu Unity cho mọi component (getComponent(Type), addComponent, InChildren / InParent, FindObjectsByType), Instantiate(object), SendMessage, CreatePrimitive; vòng đời Awake / OnEnable / OnDisable + `enabled`; Input kiểu Unity (KeyCode, getAxis, chuột, touch; Game view của editor nhận chuột / phím); EventSystem kéo thả
 - ✅ `RenderStats`, `ProfilerMarker` / `Profiler.beginSample` / `ProfilerRecorder`, `Screen.safeArea` / `dpi`, Application / Time bổ sung, `Sprite.create`, `Graphics.drawTexture`, `onRenderImage`
 - ⬜ GPU Instancing (material `enableInstancing`; desktop), Baked Animation (GPU) cho đám đông, GPU skinning
-- ⬜ Model FBX / OBJ (hiện chỉ glTF / GLB), ModelImporter đủ tab (Rig / Animation / Materials, Optimize Game Objects)
+- ✅ Model FBX / OBJ (ufbx → GLB: editor, desktop player, `goat build` cho mọi nền tảng kể cả 3DS; `goat model`; `.import.json` scale_factor / animation_rate)
+- ⬜ ModelImporter đủ tab (Rig / Animation / Materials, Optimize Game Objects), SkinnedMeshRenderer tách riêng như Unity
 
 **B. Editor**
 - ✅ Hub, Scene / Game view độc lập (kể cả khi Play), gizmo, Undo, Prefab Mode, Animation / Animator / Profiler, Build / Project Settings

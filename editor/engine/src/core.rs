@@ -110,7 +110,7 @@ fn icon_of(w: &hecs::World, e: Entity) -> &'static str {
         "particles"
     } else if w.get::<&goat_audio::AudioSource>(e).is_ok() {
         "audio"
-    } else if w.get::<&MeshRenderer>(e).is_ok() {
+    } else if w.get::<&MeshRenderer>(e).is_ok() || w.get::<&MeshFilter>(e).is_ok() {
         "mesh"
     } else {
         "empty"
@@ -520,10 +520,12 @@ impl EditorCore {
         let mut stack = vec![e];
         let children: Vec<(Entity, Entity)> = w.query::<&Parent>().iter().map(|(c, p)| (p.0, c)).collect();
         while let Some(x) = stack.pop() {
-            if let (Ok(r), Ok(g)) = (w.get::<&MeshRenderer>(x), w.get::<&GlobalTransform>(x)) {
-                if let Some(b) = gfx.mesh_bounds(r.mesh) {
-                    let s = g.0.to_scale_rotation_translation().0.abs().max_element();
-                    spheres.push((g.0.transform_point3(b.center), b.radius * s));
+            if let (Ok(f), Ok(_), Ok(g)) = (w.get::<&MeshFilter>(x), w.get::<&MeshRenderer>(x), w.get::<&GlobalTransform>(x)) {
+                let s = g.0.to_scale_rotation_translation().0.abs().max_element();
+                for &m in &f.submeshes {
+                    if let Some(b) = gfx.mesh_bounds(m) {
+                        spheres.push((g.0.transform_point3(b.center), b.radius * s));
+                    }
                 }
             }
             stack.extend(children.iter().filter(|(p, _)| *p == x).map(|(_, c)| *c));
@@ -554,15 +556,18 @@ impl EditorCore {
         let (origin, dir) = self.ray(x, y);
 
         let mut best: Option<(f32, Entity)> = None;
-        for (e, (mr, g)) in w.query::<(&MeshRenderer, &GlobalTransform)>().without::<&DontSave>().without::<&InactiveInHierarchy>().iter() {
-            let Some(b) = gfx.mesh_bounds(mr.mesh) else { continue };
-            let c = g.0.transform_point3(b.center);
-            let rad = b.radius * g.0.to_scale_rotation_translation().0.abs().max_element();
-            let oc = c - origin;
-            let t = oc.dot(dir);
-            let d2 = oc.length_squared() - t * t;
-            if t > 0.0 && d2 <= rad * rad && best.is_none_or(|(bt, _)| t < bt) {
-                best = Some((t, e));
+        for (e, (mf, _, g)) in w.query::<(&MeshFilter, &MeshRenderer, &GlobalTransform)>().without::<&DontSave>().without::<&InactiveInHierarchy>().iter() {
+            let scale = g.0.to_scale_rotation_translation().0.abs().max_element();
+            for &m in &mf.submeshes {
+                let Some(b) = gfx.mesh_bounds(m) else { continue };
+                let c = g.0.transform_point3(b.center);
+                let rad = b.radius * scale;
+                let oc = c - origin;
+                let t = oc.dot(dir);
+                let d2 = oc.length_squared() - t * t;
+                if t > 0.0 && d2 <= rad * rad && best.is_none_or(|(bt, _)| t < bt) {
+                    best = Some((t, e));
+                }
             }
         }
         let mut e = best?.1;

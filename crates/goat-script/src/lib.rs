@@ -333,7 +333,7 @@ impl<'a, 'c> Api<'a, 'c> {
     }
     /// A prefab / model instance (`prefabs/Enemy.prefab.json`, `models/a.glb`).
     pub fn instantiate(&mut self, key: &str, parent: Option<Entity>) -> Result<Entity, String> {
-        if key.ends_with(".glb") || key.ends_with(".gltf") {
+        if goat_assets::is_model_key(key) {
             return goat_assets::spawn_model(self.ctx, key, parent).map_err(|e| e.to_string());
         }
         goat_scene::instantiate(self.ctx, key, parent).map_err(|e| e.to_string())

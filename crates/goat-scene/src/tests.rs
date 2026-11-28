@@ -1,7 +1,7 @@
 use super::*;
 use goat_assets::AssetIo;
 use goat_gfx::NullBackend;
-use goat_runtime::{Behaviour, Camera, MeshRenderer};
+use goat_runtime::{Behaviour, Camera, MeshFilter, MeshRenderer};
 
 #[derive(Serialize, Deserialize)]
 struct Spin {
@@ -82,9 +82,11 @@ fn load_save_round_trip() {
 
     // components came through
     let crate_e = world.query::<&Name>().iter().find(|(_, n)| n.0 == "Crate").map(|(e, _)| e).unwrap();
-    let r = *world.get::<&MeshRenderer>(crate_e).unwrap();
+    // the old MeshRenderer { mesh, material } became MeshFilter + MeshRenderer (Unity)
+    let r = (*world.get::<&MeshRenderer>(crate_e).unwrap()).clone();
     assert_eq!(r.layer, 4);
-    let mat = gfx.material(r.material).unwrap();
+    assert_eq!(world.get::<&MeshFilter>(crate_e).unwrap().submeshes.len(), 1);
+    let mat = gfx.material(r.material().unwrap()).unwrap();
     assert_eq!(mat.base_color, goat_core::Color::rgb(1.0, 0.0, 0.0));
     assert!(mat.texture.is_some(), "texture resolved relative to the material file");
     assert_eq!(world.get::<&Scripts>(crate_e).unwrap().len(), 1);
@@ -102,7 +104,9 @@ fn load_save_round_trip() {
     assert_eq!(model.model.as_deref(), Some("models/tri.gltf"));
     let crate_entry = saved.entities.iter().find(|e| e.name.as_deref() == Some("Crate")).unwrap();
     assert_eq!(crate_entry.scripts[0]["speed"], 2.5);
-    assert_eq!(crate_entry.components["MeshRenderer"]["material"], "materials/red.mat.json");
+    assert_eq!(crate_entry.components["MeshRenderer"]["materials"][0], "materials/red.mat.json");
+    assert_eq!(crate_entry.components["MeshFilter"]["mesh"], "builtin:cube");
+    assert!(crate_entry.components["MeshRenderer"].get("mesh").is_none(), "saved in the new format");
 
     // load what was saved into a new world and save again: identical
     let mut world2 = World::new();

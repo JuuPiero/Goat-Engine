@@ -133,7 +133,7 @@ impl Behaviour for BallSpawner {
         let e = ctx.world.spawn((
             Name(format!("Ball {n}")),
             start,
-            MeshRenderer::new(self.mesh, material),
+            MeshFilter::new(self.mesh), MeshRenderer::new(material),
             goat_physics::RigidBody::dynamic(),
             goat_physics::Collider::new(goat_physics::Shape::Sphere(0.5)).with_restitution(0.6),
             // a soft shadow under each falling ball
@@ -319,27 +319,27 @@ impl Game for HelloGame {
         world.spawn((
             Name("Marker".into()),
             Transform::from_position(Vec3::new(0.0, 0.5, -3.0)).with_scale(Vec3::new(1.6, 1.0, 0.1)),
-            MeshRenderer::new(cube, marker),
+            MeshFilter::new(cube), MeshRenderer::new(marker),
         ));
-        world.spawn((Name("Ground".into()), Transform::default(), MeshRenderer::new(plane, ground)));
-        world.spawn((Name("Fence".into()), Transform::from_position(Vec3::new(-1.5, 0.6, 1.6)).with_scale(Vec3::new(2.4, 1.2, 0.04)), MeshRenderer::new(cube, fence)));
+        world.spawn((Name("Ground".into()), Transform::default(), MeshFilter::new(plane), MeshRenderer::new(ground)));
+        world.spawn((Name("Fence".into()), Transform::from_position(Vec3::new(-1.5, 0.6, 1.6)).with_scale(Vec3::new(2.4, 1.2, 0.04)), MeshFilter::new(cube), MeshRenderer::new(fence)));
         world.spawn((
             Name("Crate".into()),
             Transform::from_position(Vec3::new(0.0, 0.7, 0.0)).with_scale(Vec3::splat(1.2)),
-            MeshRenderer::new(cube, crate_mat),
+            MeshFilter::new(cube), MeshRenderer::new(crate_mat),
             Scripts::new().with(Spinner { axis: Vec3::new(0.3, 1.0, 0.2).normalize(), speed: 0.9 }),
         ));
         world.spawn((
             Name("Ball".into()),
             Transform::from_position(Vec3::new(2.2, 0.8, -0.8)),
-            MeshRenderer::new(sphere, shiny),
+            MeshFilter::new(sphere), MeshRenderer::new(shiny),
             goat_physics::BlobShadow { size: 1.3, opacity: 0.7, ..Default::default() },
             Scripts::new().with(Bob { base: 0.0, phase: 0.0 }),
         ));
         world.spawn((
             Name("Glass".into()),
             Transform::from_position(Vec3::new(-2.0, 0.6, 0.9)),
-            MeshRenderer::new(cube, glass),
+            MeshFilter::new(cube), MeshRenderer::new(glass),
             Scripts::new().with(Spinner { axis: Vec3::Y, speed: -0.6 }).with(Bob { base: 0.0, phase: 1.6 }),
         ));
         for i in 0..8 {
@@ -347,7 +347,7 @@ impl Game for HelloGame {
             world.spawn((
                 Name(format!("Pillar {i}")),
                 Transform::from_position(Vec3::new(a.cos() * 4.5, 0.5, a.sin() * 4.5)).with_scale(Vec3::new(0.4, 1.0, 0.4)),
-                MeshRenderer::new(cube, crate_mat),
+                MeshFilter::new(cube), MeshRenderer::new(crate_mat),
             ));
         }
         // main camera (desktop window / 3DS top screen)
@@ -434,22 +434,22 @@ impl Game for HelloGame {
             let wall = ctx.world.spawn((Name("Baked Wall".into()), Transform::from_position(Vec3::new(-4.5, 0.0, -1.5)), StaticBatching { bake_lighting: true }));
             for i in 0..6 {
                 let h = 0.4 + (i % 3) as f32 * 0.25;
-                ctx.world.spawn((Name(format!("Wall Block {i}")), Transform::from_position(Vec3::new(0.0, h * 0.5, i as f32 * 0.65)).with_scale(Vec3::new(0.6, h, 0.6)), Parent(wall), MeshRenderer::new(cube, mat)));
+                ctx.world.spawn((Name(format!("Wall Block {i}")), Transform::from_position(Vec3::new(0.0, h * 0.5, i as f32 * 0.65)).with_scale(Vec3::new(0.6, h, 0.6)), Parent(wall), MeshFilter::new(cube), MeshRenderer::new(mat)));
             }
         }
         // a cel-shaded ball: toon bands, rim light, black outline (materials/toon.mat.json)
         if let (Ok(sphere), Ok(mat)) = (goat_assets::mesh(ctx, "builtin:sphere"), goat_assets::material(ctx, "materials/toon.mat.json")) {
-            ctx.world.spawn((Name("Toon Ball".into()), Transform::from_position(Vec3::new(0.9, 0.55, 2.2)).with_scale(Vec3::splat(1.1)), MeshRenderer::new(sphere, mat)));
+            ctx.world.spawn((Name("Toon Ball".into()), Transform::from_position(Vec3::new(0.9, 0.55, 2.2)).with_scale(Vec3::splat(1.1)), MeshFilter::new(sphere), MeshRenderer::new(mat)));
         }
         // a JPEG texture and an ETC1 KTX (precompressed: the 3DS uploads its blocks as they are)
         if let (Ok(cube), Ok(photo), Ok(pattern)) = (goat_assets::mesh(ctx, "builtin:cube"), goat_assets::material(ctx, "materials/photo.mat.json"), goat_assets::material(ctx, "materials/pattern.mat.json")) {
-            ctx.world.spawn((Name("JPEG Crate".into()), Transform::from_position(Vec3::new(2.3, 0.35, 2.9)).with_scale(Vec3::splat(0.7)), MeshRenderer::new(cube, photo)));
-            ctx.world.spawn((Name("KTX Crate".into()), Transform::from_position(Vec3::new(3.2, 0.35, 2.3)).with_scale(Vec3::splat(0.7)), MeshRenderer::new(cube, pattern)));
+            ctx.world.spawn((Name("JPEG Crate".into()), Transform::from_position(Vec3::new(2.3, 0.35, 2.9)).with_scale(Vec3::splat(0.7)), MeshFilter::new(cube), MeshRenderer::new(photo)));
+            ctx.world.spawn((Name("KTX Crate".into()), Transform::from_position(Vec3::new(3.2, 0.35, 2.3)).with_scale(Vec3::splat(0.7)), MeshFilter::new(cube), MeshRenderer::new(pattern)));
         }
         // procedural materials (3DS: the proctex unit): a pond and a flame
         if let (Ok(plane), Ok(cube), Ok(water), Ok(fire)) = (goat_assets::mesh(ctx, "builtin:plane"), goat_assets::mesh(ctx, "builtin:cube"), goat_assets::material(ctx, "materials/water.mat.json"), goat_assets::material(ctx, "materials/fire.mat.json")) {
-            ctx.world.spawn((Name("Pond".into()), Transform::from_position(Vec3::new(-2.6, 0.01, 3.4)).with_scale(Vec3::new(0.22, 1.0, 0.16)), MeshRenderer::new(plane, water)));
-            ctx.world.spawn((Name("Flame".into()), Transform::from_position(Vec3::new(-2.6, 0.55, 3.4)).with_scale(Vec3::new(0.7, 1.1, 0.01)), MeshRenderer::new(cube, fire)));
+            ctx.world.spawn((Name("Pond".into()), Transform::from_position(Vec3::new(-2.6, 0.01, 3.4)).with_scale(Vec3::new(0.22, 1.0, 0.16)), MeshFilter::new(plane), MeshRenderer::new(water)));
+            ctx.world.spawn((Name("Flame".into()), Transform::from_position(Vec3::new(-2.6, 0.55, 3.4)).with_scale(Vec3::new(0.7, 1.1, 0.01)), MeshFilter::new(cube), MeshRenderer::new(fire)));
         }
         // a firework made in Unity, exported by tools/unity-goat-exporter
         match goat_scene::instantiate(ctx, "fx/Firework.prefab.json", None) {
@@ -511,7 +511,7 @@ fn spawn_physics(ctx: &mut Context) {
             world.spawn((
                 Name(format!("Stack Crate {i}")),
                 Transform::from_position(Vec3::new(3.0 + x, 0.5 + y, -3.0)).with_scale(Vec3::splat(1.0)),
-                MeshRenderer::new(cube, mat),
+                MeshFilter::new(cube), MeshRenderer::new(mat),
                 RigidBody::dynamic(),
                 Collider::unit_box().with_friction(0.8),
             ));

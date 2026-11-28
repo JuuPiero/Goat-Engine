@@ -4,7 +4,7 @@
 use goat_core::math::{Mat4, Vec3};
 use goat_core::time::Time;
 use goat_core::Color;
-use goat_gfx::{DisplayInfo, DrawItem, FrameStats, Frustum, GraphicsBackend, Light, LightKind, Lighting, RenderView, MAX_LIGHTS};
+use goat_gfx::{DisplayInfo, DrawItem, FrameStats, Frustum, GraphicsBackend, Light, LightKind, Lighting, MaterialId, MeshId, RenderView, MAX_LIGHTS};
 use hecs::{Entity, World};
 
 use crate::components::*;
@@ -500,27 +500,43 @@ pub fn extract_camera_views(world: &World, displays: &[DisplayInfo], gfx: &dyn G
     let probes = crate::probes::ProbeField::capture(world, &baked);
     let reflections = crate::probes::reflection_boxes(world);
     // world-space bounding spheres (None = always drawn), layer bit, LOD levels
-    let renderers: Vec<(DrawItem, Option<(Vec3, f32)>, u32, Option<LodGroup>)> = world
-        .query::<(&MeshRenderer, &GlobalTransform, Option<&LodGroup>, Option<&crate::graphics::PropertyBlock>)>().without::<&InactiveInHierarchy>()
+    // one item per (submesh, material) of a MeshFilter + MeshRenderer (Unity); a LOD Group draws its
+    // level's mesh with the first material
+    let mut renderers: Vec<(DrawItem, Option<(Vec3, f32)>, u32, Option<LodGroup>)> = Vec::new();
+    for (_, (f, r, g, lod, block)) in world
+        .query::<(&MeshFilter, &MeshRenderer, &GlobalTransform, Option<&LodGroup>, Option<&crate::graphics::PropertyBlock>)>()
+        .without::<&InactiveInHierarchy>()
         .iter()
-        .filter(|(_, (r, _, _, _))| r.visible)
-        .map(|(_, (r, g, lod, block))| {
-            let mesh = lod.and_then(|l| l.levels.first()).map(|l| l.mesh).unwrap_or(r.mesh);
-            let sphere = gfx.mesh_bounds(mesh).map(|b| {
-                let scale = g.0.x_axis.truncate().length().max(g.0.y_axis.truncate().length()).max(g.0.z_axis.truncate().length());
-                (g.0.transform_point3(b.center), b.radius * scale)
-            });
+    {
+        if !r.visible {
+            continue;
+        }
+        let scale = g.0.x_axis.truncate().length().max(g.0.y_axis.truncate().length()).max(g.0.z_axis.truncate().length());
+        let mut push = |mesh: MeshId, material: MaterialId, lod: Option<LodGroup>| {
+            let sphere = gfx.mesh_bounds(mesh).map(|b| (g.0.transform_point3(b.center), b.radius * scale));
             let at = sphere.map(|(c, _)| c).unwrap_or(g.0.w_axis.truncate());
             let item = DrawItem {
                 sorting_order: r.sorting_order,
                 light_probe: probes.as_ref().map(|p| p.sample(at)),
                 reflection: crate::probes::reflection_at(&reflections, at),
                 color: block.map(|b| b.color).unwrap_or(Color::WHITE),
-                ..DrawItem::new(mesh, r.material, g.0)
+                ..DrawItem::new(mesh, material, g.0)
             };
-            (item, sphere, 1u32 << r.layer.min(31), lod.cloned())
-        })
-        .collect();
+            renderers.push((item, sphere, 1u32 << r.layer.min(31), lod));
+        };
+        match lod.and_then(|l| l.levels.first().map(|first| (l, first.mesh))) {
+            Some((l, mesh)) => {
+                if let Some(m) = r.material() {
+                    push(mesh, m, Some(l.clone()));
+                }
+            }
+            None => {
+                for (mesh, material) in r.draws(f) {
+                    push(mesh, material, None);
+                }
+            }
+        }
+    }
     let mut views: Vec<(Entity, RenderView)> = world
         .query::<(&Camera, &GlobalTransform)>().without::<&InactiveInHierarchy>()
         .iter()
@@ -622,7 +638,7 @@ mod tests {
         let mat = gfx.create_material(&goat_gfx::MaterialDesc::default()).unwrap();
         let mut w = World::new();
         w.spawn((Transform::from_position(Vec3::new(0.0, 0.0, 5.0)), Camera::default()));
-        let obj = w.spawn((Transform::default(), MeshRenderer::new(hi, mat), LodGroup { levels: vec![LodLevel { mesh: hi, screen_height: 0.3 }, LodLevel { mesh: lo, screen_height: 0.05 }], cull: true }));
+        let obj = w.spawn((Transform::default(), MeshFilter::new(hi), MeshRenderer::new(mat), LodGroup { levels: vec![LodLevel { mesh: hi, screen_height: 0.3 }, LodLevel { mesh: lo, screen_height: 0.05 }], cull: true }));
         let displays = gfx.displays();
         let mesh_at = |w: &mut World, z: f32| {
             w.get::<&mut Transform>(obj).unwrap().position.z = -z;

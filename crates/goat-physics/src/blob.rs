@@ -103,7 +103,7 @@ impl Plugin for BlobShadowPlugin {
 mod tests {
     use super::*;
     use crate::{Collider, PhysicsPlugin, Shape};
-    use goat_runtime::{Engine, Game, MeshRenderer, Name, Transform};
+    use goat_runtime::{Engine, Game, MeshFilter, Name, Transform};
 
     struct G;
     impl Game for G {
@@ -125,7 +125,7 @@ mod tests {
         for _ in 0..5 {
             e.frame(1.0 / 60.0, &mut gfx);
         }
-        let batch = e.world.query::<(&Name, &MeshRenderer)>().iter().find(|(_, (n, _))| n.0.contains("Blob")).map(|(_, (_, r))| r.mesh);
+        let batch = e.world.query::<(&Name, &MeshFilter)>().iter().find(|(_, (n, _))| n.0.contains("Blob")).and_then(|(_, (_, f))| f.mesh());
         let mesh = batch.expect("a shadow batch was drawn");
         let b = goat_gfx::GraphicsBackend::mesh_bounds(&gfx, mesh).unwrap();
         // two discs: under x = 1 and x = -3, on the ground (y ≈ 0)

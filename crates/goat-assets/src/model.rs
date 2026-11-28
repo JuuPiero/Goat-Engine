@@ -126,8 +126,33 @@ pub fn load_model(io: &AssetIo, key: &str) -> Result<ModelData, AssetError> {
     parse_model(io, key, &bytes)
 }
 
+/// Turns a model file the glTF loader can't read (FBX, OBJ) into GLB bytes: installed by the host
+/// tools that link a converter (goat-fbx: the editor, `goat build`, the desktop player). Builds for
+/// the 3DS / the web ship models already converted, so they don't need one.
+pub type ModelConverter = fn(io: &AssetIo, key: &str, bytes: &[u8]) -> Result<Vec<u8>, String>;
+
+static CONVERTER: std::sync::OnceLock<ModelConverter> = std::sync::OnceLock::new();
+
+/// Installs the model converter (first call wins).
+pub fn set_model_converter(f: ModelConverter) {
+    let _ = CONVERTER.set(f);
+}
+
+/// GLB, or glTF JSON (after an optional BOM / whitespace).
+pub fn is_gltf(bytes: &[u8]) -> bool {
+    let b = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    b.starts_with(b"glTF") || b.iter().find(|c| !c.is_ascii_whitespace()) == Some(&b'{')
+}
+
 pub fn parse_model(io: &AssetIo, key: &str, bytes: &[u8]) -> Result<ModelData, AssetError> {
     let fmt = |e: String| AssetError::Format(key.to_string(), e);
+    if !is_gltf(bytes) {
+        let Some(convert) = CONVERTER.get() else {
+            return Err(fmt("not a glTF / GLB file: FBX / OBJ models are converted by the editor and `goat build` (no converter in this player)".into()));
+        };
+        let glb = convert(io, key, bytes).map_err(fmt)?;
+        return parse_model(io, key, &glb);
+    }
     let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| fmt(e.to_string()))?;
     let doc = &gltf.document;
 
@@ -145,8 +170,8 @@ pub fn parse_model(io: &AssetIo, key: &str, bytes: &[u8]) -> Result<ModelData, A
             gltf::image::Source::View { view, mime_type } => {
                 let b = &buffers[view.buffer().index()];
                 let slice = b.get(view.offset()..view.offset() + view.length()).map(|s| s.to_vec());
-                if mime_type != "image/png" && mime_type != "image/jpeg" {
-                    goat_core::warn!("{key}: image {} is {mime_type}, only PNG / JPEG are supported", img.index());
+                if mime_type != "image/png" && mime_type != "image/jpeg" && mime_type != "image/ktx" {
+                    goat_core::warn!("{key}: image {} is {mime_type}, only PNG / JPEG / KTX are supported", img.index());
                     None
                 } else {
                     slice
@@ -162,8 +187,17 @@ pub fn parse_model(io: &AssetIo, key: &str, bytes: &[u8]) -> Result<ModelData, A
                 }
             }
         };
-        // JPEG starts with FF D8, PNG with 89 'P' 'N' 'G'
-        let decode = |d: &[u8]| if d.starts_with(&[0xFF, 0xD8]) { crate::image::decode_jpeg(d) } else { crate::image::decode_png(d) };
+        // JPEG starts with FF D8, PNG with 89 'P' 'N' 'G', KTX with «KTX 11» (builds precompress
+        // the textures next to a model under their own names: the bytes tell)
+        let decode = |d: &[u8]| {
+            if d.starts_with(&[0xFF, 0xD8]) {
+                crate::image::decode_jpeg(d)
+            } else if d.starts_with(&[0xAB, 0x4B, 0x54, 0x58]) {
+                crate::image::decode_ktx(d)
+            } else {
+                crate::image::decode_png(d)
+            }
+        };
         images.push(data.and_then(|d| match decode(&d) {
             Ok(t) => Some(t),
             Err(e) => {

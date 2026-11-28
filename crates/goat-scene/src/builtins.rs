@@ -150,13 +150,22 @@ fn load_camera(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String
     )
 }
 
-// ------------------------------------------------------------------ MeshRenderer
+// ------------------------------------------------------------------ MeshFilter + MeshRenderer
+
+#[derive(Serialize, Deserialize)]
+struct MeshFilterJson {
+    mesh: String,
+}
 
 #[derive(Serialize, Deserialize)]
 struct MeshRendererJson {
-    mesh: String,
-    #[serde(default = "default_material")]
-    material: String,
+    #[serde(default)]
+    materials: Option<Vec<String>>,
+    /// Scenes saved before MeshFilter existed: the mesh lived on the renderer, with one material.
+    #[serde(default, skip_serializing)]
+    mesh: Option<String>,
+    #[serde(default, skip_serializing)]
+    material: Option<String>,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     visible: bool,
     #[serde(default, skip_serializing_if = "is_zero_u8")]
@@ -165,9 +174,6 @@ struct MeshRendererJson {
     sorting_order: i32,
 }
 
-fn default_material() -> String {
-    "builtin:default".into()
-}
 fn yes() -> bool {
     true
 }
@@ -181,20 +187,52 @@ fn is_zero_i32(v: &i32) -> bool {
     *v == 0
 }
 
-fn save_mesh_renderer(ctx: &SaveContext, e: Entity) -> Option<Value> {
-    let r = *ctx.world.get::<&MeshRenderer>(e).ok()?;
-    let (Some(mesh), Some(material)) = (ctx.assets.key_of_mesh(r.mesh), ctx.assets.key_of_material(r.material)) else {
-        goat_core::warn!("scene save: a MeshRenderer uses a mesh / material made in code (no asset key): skipped");
+fn save_mesh_filter(ctx: &SaveContext, e: Entity) -> Option<Value> {
+    let f = ctx.world.get::<&MeshFilter>(e).ok()?;
+    let Some(mesh) = ctx.assets.key_of_submeshes(&f.submeshes) else {
+        goat_core::warn!("scene save: a MeshFilter uses a mesh made in code (no asset key): skipped");
         return None;
     };
-    to_value(MeshRendererJson { mesh: mesh.into(), material: material.into(), visible: r.visible, layer: r.layer, sorting_order: r.sorting_order })
+    to_value(MeshFilterJson { mesh })
+}
+
+fn load_mesh_filter(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
+    let j: MeshFilterJson = from_value(v)?;
+    let submeshes = ctx.assets.mesh_filter(ctx.gfx, &j.mesh).map_err(|e| e.to_string())?;
+    insert(ctx, e, MeshFilter::with_submeshes(submeshes))
+}
+
+fn save_mesh_renderer(ctx: &SaveContext, e: Entity) -> Option<Value> {
+    let r = ctx.world.get::<&MeshRenderer>(e).ok()?;
+    let mut materials = Vec::with_capacity(r.materials.len());
+    for m in &r.materials {
+        let Some(key) = ctx.assets.key_of_material(*m) else {
+            goat_core::warn!("scene save: a MeshRenderer uses a material made in code (no asset key): skipped");
+            return None;
+        };
+        materials.push(key.to_string());
+    }
+    to_value(MeshRendererJson { materials: Some(materials), mesh: None, material: None, visible: r.visible, layer: r.layer, sorting_order: r.sorting_order })
 }
 
 fn load_mesh_renderer(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
     let j: MeshRendererJson = from_value(v)?;
-    let mesh = ctx.assets.mesh(ctx.gfx, &j.mesh).map_err(|e| e.to_string())?;
-    let material = ctx.assets.material(ctx.gfx, &j.material).map_err(|e| e.to_string())?;
-    let r = MeshRenderer { visible: j.visible, ..MeshRenderer::new(mesh, material).with_layer(j.layer).with_sorting_order(j.sorting_order) };
+    let keys = match j.materials {
+        Some(list) => list,
+        None => vec![j.material.unwrap_or_else(|| "builtin:default".into())],
+    };
+    let mut materials = Vec::with_capacity(keys.len());
+    for k in &keys {
+        materials.push(ctx.assets.material(ctx.gfx, k).map_err(|e| e.to_string())?);
+    }
+    // the old format: the renderer's mesh becomes the object's MeshFilter
+    if let Some(mesh) = &j.mesh {
+        if ctx.world.get::<&MeshFilter>(e).is_err() {
+            let submeshes = ctx.assets.mesh_filter(ctx.gfx, mesh).map_err(|e| e.to_string())?;
+            insert(ctx, e, MeshFilter::with_submeshes(submeshes))?;
+        }
+    }
+    let r = MeshRenderer { visible: j.visible, ..MeshRenderer::with_materials(materials).with_layer(j.layer).with_sorting_order(j.sorting_order) };
     insert(ctx, e, r)
 }
 
@@ -420,6 +458,7 @@ fn load_post_effect(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), S
 pub(crate) fn register(r: &mut SceneRegistry) {
     r.component(ComponentCodec { name: "Transform", save: save_transform, load: load_transform, remove: remove_typed::<Transform> })
         .component(ComponentCodec { name: "Camera", save: save_camera, load: load_camera, remove: remove_typed::<Camera> })
+        .component(ComponentCodec { name: "MeshFilter", save: save_mesh_filter, load: load_mesh_filter, remove: remove_typed::<MeshFilter> })
         .component(ComponentCodec { name: "MeshRenderer", save: save_mesh_renderer, load: load_mesh_renderer, remove: remove_typed::<MeshRenderer> })
         .component(ComponentCodec { name: "DirectionalLight", save: save_directional, load: load_directional, remove: remove_typed::<DirectionalLight> })
         .component(ComponentCodec { name: "PointLight", save: save_point, load: load_point, remove: remove_typed::<PointLight> })

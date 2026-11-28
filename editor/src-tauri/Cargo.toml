@@ -20,4 +20,5 @@ serde_json.workspace = true
 notify = "6"
 trash = "5"
 goat-assets.workspace = true
+goat-fbx.workspace = true
 goat-scene.workspace = true

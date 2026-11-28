@@ -38,9 +38,10 @@ export class Controls extends Behaviour {
     if (Input.getButtonDown("A")) {
       const box = GameObject.create("Box");
       box.transform.position = { x: 0, y: 5, z: 0 };
-      box.setComponent("MeshRenderer", { mesh: "builtin:cube" });
+      box.setComponent("MeshRenderer", { mesh: "builtin:cube" }); // the old format still works: it adds a MeshFilter
+      const mf = box.getComponent("MeshFilter");
       const mr = box.getComponent("MeshRenderer");
-      this.gameObject.name = "Controls:" + (mr ? mr.mesh : "none");
+      this.gameObject.name = "Controls:" + (mf ? mf.mesh : "none") + ":" + (mr ? mr.materials.length : 0);
     }
     if (Input.getButtonDown("B")) GameObject.destroy(GameObject.find("Box"));
     const n = this.gameObject.call("Test.double", 21);
@@ -93,7 +94,7 @@ fn typescript_behaviours_run_with_the_engine_api() {
     e.frame(1.0 / 60.0, &mut gfx);
     let b = find(&e, "Box").expect("spawned by the script");
     assert_eq!(e.world.get::<&Transform>(b).unwrap().position.y, 5.0);
-    assert!(find(&e, "Controls:builtin:cube").is_some(), "read the component back");
+    assert!(find(&e, "Controls:builtin:cube:1").is_some(), "read the components back (MeshFilter + MeshRenderer)");
     e.input.begin_frame();
     e.input.set(Button::A, false);
     e.input.set(Button::B, true);
@@ -731,7 +732,7 @@ impl Game for CoreGame {
         ctx.world.spawn((Name("Main Camera".into()), Transform::default(), GlobalTransform::default(), goat_runtime::Camera::default()));
         let mesh = ctx.gfx.create_mesh(&goat_gfx::MeshData::cube(1.0)).unwrap();
         let mat = ctx.gfx.create_material(&goat_gfx::MaterialDesc::default()).unwrap();
-        ctx.world.spawn((Name("Box".into()), Transform::default(), GlobalTransform::default(), goat_runtime::MeshRenderer::new(mesh, mat)));
+        ctx.world.spawn((Name("Box".into()), Transform::default(), GlobalTransform::default(), goat_runtime::MeshFilter::new(mesh), goat_runtime::MeshRenderer::new(mat)));
         ctx.world.spawn((Name("Checker".into()), Transform::default(), GlobalTransform::default(), Script::one("scripts/CoreCheck.ts")));
     }
     fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
@@ -749,7 +750,7 @@ fn core_api_math_transforms_camera_materials() {
     assert!(names.iter().any(|n| n == "core ok"), "{names:?}");
     // the box's material was copied, the original kept white
     let box_e = find(&e, "Box").unwrap();
-    let id = e.world.get::<&goat_runtime::MeshRenderer>(box_e).unwrap().material;
+    let id = e.world.get::<&goat_runtime::MeshRenderer>(box_e).unwrap().material().unwrap();
     let d = goat_gfx::GraphicsBackend::material_desc(&gfx, id).unwrap();
     assert_eq!(d.base_color.to_array(), [1.0, 0.0, 0.0, 1.0]);
 }

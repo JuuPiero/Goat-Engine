@@ -12,3 +12,4 @@ path = "src/main.rs"
 [dependencies]
 goat-platform-desktop = { workspace = true, features = ["screenshot"] }
 hello-game = { workspace = true, features = ["quickjs"] }
+goat-fbx.workspace = true

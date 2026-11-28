@@ -184,11 +184,11 @@ fn own_material(api: &mut Api, e: Entity) -> Result<(goat_gfx::MaterialId, goat_
     if let Some(m) = api.ctx.resources.get::<MaterialInstances>().and_then(|m| m.0.get(&e).copied()) {
         return Ok(m);
     }
-    let shared = api.ctx.world.get::<&MeshRenderer>(e).map_err(|_| "no MeshRenderer on this object")?.material;
+    let shared = api.ctx.world.get::<&MeshRenderer>(e).map_err(|_| "no MeshRenderer on this object")?.material().ok_or("the MeshRenderer has no material")?;
     let desc = api.ctx.gfx.material_desc(shared).ok_or("the renderer's material isn't known")?;
     let copy = api.ctx.gfx.create_material(&desc).map_err(|e| e.to_string())?;
     if let Ok(mut r) = api.ctx.world.get::<&mut MeshRenderer>(e) {
-        r.material = copy;
+        r.set_material(copy);
     }
     api.ctx.resources.get_or_default::<MaterialInstances>().0.insert(e, (copy, shared));
     Ok((copy, shared))
@@ -233,7 +233,7 @@ fn set_property(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> 
 /// `Renderer.getProperty(name)` → [x, y, z, w].
 fn get_property(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
     let name = a.first().and_then(Value::as_str).unwrap_or("");
-    let id = api.ctx.world.get::<&MeshRenderer>(e).map_err(|_| "no MeshRenderer on this object")?.material;
+    let id = api.ctx.world.get::<&MeshRenderer>(e).map_err(|_| "no MeshRenderer on this object")?.material().ok_or("the MeshRenderer has no material")?;
     let original = api.ctx.resources.get::<MaterialInstances>().and_then(|m| m.0.get(&e).map(|x| x.1)).unwrap_or(id);
     let desc = api.ctx.gfx.material_desc(id).ok_or("material")?;
     let shader = api.ctx.resources.get_mut::<goat_assets::AssetServer>().and_then(|a| a.material_shader(original));
@@ -246,6 +246,10 @@ fn get_property(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> 
         },
     };
     Ok(json!(v))
+}
+
+fn submesh_count(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
+    Ok(json!(api.ctx.world.get::<&goat_runtime::MeshFilter>(e).map(|f| f.submeshes.len()).unwrap_or(0)))
 }
 
 fn set_visible(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
@@ -402,5 +406,6 @@ pub fn register(x: &mut Extensions) {
         .add("Renderer.setProperty", set_property)
         .add("Renderer.getProperty", get_property)
         .add("Renderer.setEnabled", set_visible)
+        .add("MeshFilter.subMeshCount", submesh_count)
         .add("Renderer.enabled", is_visible);
 }

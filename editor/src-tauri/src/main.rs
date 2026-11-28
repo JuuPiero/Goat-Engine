@@ -100,6 +100,31 @@ fn write_project_settings(s: State<AppState>, text: String) -> Res<()> {
     std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// FBX / OBJ asset → GLB bytes: the engine in the page reads glTF only, models in other formats
+/// are converted here (natively, with the model's `.import.json` settings), cached by file time.
+#[tauri::command]
+fn convert_model(s: State<AppState>, key: String) -> Res<tauri::ipc::Response> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<PathBuf, (std::time::SystemTime, Vec<u8>)>>> = OnceLock::new();
+    let assets = with(&s, |p| Ok(p.assets.clone()))?;
+    let path = assets.join(&key);
+    let stamp = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    // the model and its settings file both change the result
+    let time = stamp(&path).ok_or_else(|| format!("{key}: not found"))?.max(stamp(&assets.join(format!("{key}.import.json"))).unwrap_or(std::time::UNIX_EPOCH));
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some((t, glb)) = cache.lock().map_err(|e| e.to_string())?.get(&path) {
+        if *t == time {
+            return Ok(tauri::ipc::Response::new(glb.clone()));
+        }
+    }
+    let bytes = std::fs::read(&path).map_err(|e| format!("{key}: {e}"))?;
+    let read = |k: &str| std::fs::read(assets.join(k)).ok();
+    let opts = goat_fbx::options_for(&key, &read, goat_fbx::Target::Desktop);
+    let glb = goat_fbx::convert(&bytes, &key, &read, &opts)?;
+    cache.lock().map_err(|e| e.to_string())?.insert(path, (time, glb.clone()));
+    Ok(tauri::ipc::Response::new(glb))
+}
+
 /// Back to the Hub (File ▸ Open Project… / New Project…).
 #[tauri::command]
 fn close_project(s: State<AppState>) -> Res<()> {
@@ -454,6 +479,7 @@ fn main() {
             close_project,
             read_project_settings,
             write_project_settings,
+            convert_model,
             project_info,
             build_game,
             list_dir,

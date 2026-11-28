@@ -14,6 +14,13 @@
 
 pub mod bake;
 pub mod bjson;
+pub mod glb;
+
+/// Model files (glTF / GLB, and FBX / OBJ: converted to GLB by the editor, `goat build` and the desktop player).
+pub fn is_model_key(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    [".glb", ".gltf", ".fbx", ".obj"].iter().any(|e| k.ends_with(e))
+}
 pub mod image;
 pub mod batch;
 pub mod material;
@@ -22,7 +29,7 @@ pub mod server;
 
 pub use batch::StaticBatchPlugin;
 pub use material::MaterialFile;
-pub use model::{AnimChannel, AnimPath, Interpolation, ModelAnimation, ModelData, ModelNode, ModelSkin, SkinVertices};
+pub use model::{set_model_converter, AnimChannel, AnimPath, Interpolation, ModelAnimation, ModelConverter, ModelData, ModelMaterial, ModelNode, ModelPrimitive, ModelSkin, SkinVertices};
 pub use server::{material, mesh, spawn_model, texture, AssetServer, AssetsPlugin, LoadedModel, ModelInstance, ModelNodes, SkinnedMesh};
 
 use std::path::{Path, PathBuf};

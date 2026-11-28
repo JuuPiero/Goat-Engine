@@ -718,14 +718,14 @@ fn load_meshes(ctx: &mut Context) {
     {
         let Some(assets) = ctx.resources.get::<goat_assets::AssetServer>() else { return };
         for (key, source) in wanted {
-            // empty source: the entity's MeshRenderer mesh
+            // empty source: the entity's MeshFilter mesh (every submesh — Unity's MeshCollider uses the whole mesh)
             let source = if source.is_empty() {
                 let bits: u64 = key.trim_start_matches("renderer:").parse().unwrap_or(0);
-                let mesh = Entity::from_bits(bits).and_then(|e| ctx.world.get::<&goat_runtime::MeshRenderer>(e).ok().map(|r| r.mesh));
-                match mesh.and_then(|m| assets.key_of_mesh(m)) {
-                    Some(k) => k.to_string(),
+                let submeshes = Entity::from_bits(bits).and_then(|e| ctx.world.get::<&goat_runtime::MeshFilter>(e).ok().map(|f| f.submeshes.clone()));
+                match submeshes.and_then(|s| assets.key_of_submeshes(&s)) {
+                    Some(k) => k,
                     None => {
-                        goat_core::warn!("mesh collider: no MeshRenderer mesh with an asset key");
+                        goat_core::warn!("mesh collider: no MeshFilter mesh with an asset key");
                         continue;
                     }
                 }

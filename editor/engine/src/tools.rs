@@ -186,7 +186,7 @@ impl EditorCore {
         let name = key.rsplit('/').next().unwrap_or(key).split('.').next().unwrap_or(key).to_string();
         let root = self.edit.world.spawn((Name(name), Transform::from_position(at), GlobalTransform::default()));
         let lower = key.to_ascii_lowercase();
-        let result = if lower.ends_with(".glb") || lower.ends_with(".gltf") {
+        let result = if goat_assets::is_model_key(&lower) {
             match self.edit.resources.get_mut::<AssetServer>() {
                 Some(a) => a.spawn_model_into(&mut self.edit.world, gfx, key, root).map_err(|e| e.to_string()),
                 None => Err("no asset server".into()),
@@ -272,7 +272,7 @@ impl EditorCore {
                 }
             }
             if let Some((mesh, mat)) = self.tools.grid_gpu {
-                let g = crate::core::view_world!(mut self).spawn((Name("Grid".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, mat).with_layer(EDITOR_LAYER).with_sorting_order(-1000)));
+                let g = crate::core::view_world!(mut self).spawn((Name("Grid".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshFilter::new(mesh), MeshRenderer::new(mat).with_layer(EDITOR_LAYER).with_sorting_order(-1000)));
                 self.tools.grid = Some(g);
             }
         }

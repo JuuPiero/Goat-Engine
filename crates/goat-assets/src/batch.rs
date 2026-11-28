@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use goat_core::math::{Mat4, Vec3};
 use goat_gfx::{MeshData, Vertex};
-use goat_runtime::{Context, DontSave, Entity, GlobalTransform, MeshRenderer, Name, Parent, Plugin, StaticBatching, Transform};
+use goat_runtime::{Context, DontSave, Entity, GlobalTransform, MeshFilter, MeshRenderer, Name, Parent, Plugin, StaticBatching, Transform};
 
 use crate::AssetServer;
 
@@ -93,23 +93,27 @@ pub fn build(ctx: &mut Context, root: Entity, bake: bool) -> Vec<Entity> {
     let mut groups: HashMap<(u64, u8, i32), (goat_gfx::MaterialId, Vec<(Entity, MeshData, Mat4)>)> = HashMap::new();
     let mut cache: HashMap<String, MeshData> = HashMap::new();
     for e in descendants(ctx, root) {
-        let Ok(r) = ctx.world.get::<&MeshRenderer>(e).map(|r| *r) else { continue };
+        let Ok(r) = ctx.world.get::<&MeshRenderer>(e).map(|r| (*r).clone()) else { continue };
+        let Ok(f) = ctx.world.get::<&MeshFilter>(e).map(|f| (*f).clone()) else { continue };
         if !r.visible {
             continue;
         }
-        let Some(key) = assets.key_of_mesh(r.mesh).map(str::to_string) else { continue };
-        let data = match cache.get(&key) {
-            Some(d) => d.clone(),
-            None => match assets.mesh_data(&key) {
-                Ok(d) => {
-                    cache.insert(key.clone(), d.clone());
-                    d
-                }
-                Err(_) => continue,
-            },
-        };
         let m = ctx.world.get::<&GlobalTransform>(e).map(|g| g.0).unwrap_or(Mat4::IDENTITY);
-        groups.entry((r.material.id(), r.layer, r.sorting_order)).or_insert_with(|| (r.material, Vec::new())).1.push((e, data, m));
+        // every (submesh, material) pair goes to its material's batch
+        for (mesh, material) in r.draws(&f) {
+            let Some(key) = assets.key_of_mesh(mesh).map(str::to_string) else { continue };
+            let data = match cache.get(&key) {
+                Some(d) => d.clone(),
+                None => match assets.mesh_data(&key) {
+                    Ok(d) => {
+                        cache.insert(key.clone(), d.clone());
+                        d
+                    }
+                    Err(_) => continue,
+                },
+            };
+            groups.entry((material.id(), r.layer, r.sorting_order)).or_insert_with(|| (material, Vec::new())).1.push((e, data, m));
+        }
     }
     let mut made = Vec::new();
     for ((_, layer, order), (material, parts)) in groups {
@@ -128,7 +132,7 @@ pub fn build(ctx: &mut Context, root: Entity, bake: bool) -> Vec<Entity> {
                 return;
             }
             if let Ok(mesh) = ctx.gfx.create_mesh(chunk) {
-                let e = ctx.world.spawn((Name("Static Batch".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, material).with_layer(layer).with_sorting_order(order)));
+                let e = ctx.world.spawn((Name("Static Batch".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshFilter::new(mesh), MeshRenderer::new(material).with_layer(layer).with_sorting_order(order)));
                 made.push(e);
             }
             *chunk = MeshData::default();
@@ -179,7 +183,7 @@ mod tests {
             let mat = crate::material(ctx, "builtin:default").unwrap();
             let root = ctx.world.spawn((Name("Level".into()), Transform::default(), StaticBatching::default()));
             for i in 0..5 {
-                ctx.world.spawn((Transform::from_position(Vec3::new(i as f32 * 2.0, 0.0, 0.0)), Parent(root), MeshRenderer::new(if i < 4 { mesh } else { sphere }, mat)));
+                ctx.world.spawn((Transform::from_position(Vec3::new(i as f32 * 2.0, 0.0, 0.0)), Parent(root), MeshFilter::new(if i < 4 { mesh } else { sphere }), MeshRenderer::new(mat)));
             }
         }
         fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
@@ -198,7 +202,7 @@ mod tests {
         let hidden = e.world.query::<&MeshRenderer>().iter().filter(|(_, r)| !r.visible).count();
         assert_eq!(hidden, 5);
         // the merged mesh spans the 5 objects (x from -0.5 to 8.5)
-        let b = gfx.mesh_bounds(e.world.get::<&MeshRenderer>(batches[0]).unwrap().mesh).unwrap();
+        let b = gfx.mesh_bounds(e.world.get::<&MeshFilter>(batches[0]).unwrap().mesh().unwrap()).unwrap();
         assert!((b.center.x - 4.0).abs() < 0.6, "{:?}", b);
     }
 }
@@ -218,7 +222,7 @@ mod bake_tests {
             // sun straight down
             ctx.world.spawn((Transform::default().with_rotation(goat_core::math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)), DirectionalLight { color: goat_core::Color::WHITE, intensity: 0.5, shadows: false, ..Default::default() }));
             let root = ctx.world.spawn((Transform::default(), StaticBatching { bake_lighting: true }));
-            ctx.world.spawn((Transform::default(), Parent(root), MeshRenderer::new(mesh, mat)));
+            ctx.world.spawn((Transform::default(), Parent(root), MeshFilter::new(mesh), MeshRenderer::new(mat)));
         }
         fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
             vec![Box::new(StaticBatchPlugin)]
@@ -231,8 +235,8 @@ mod bake_tests {
         let mut e = Engine::new(G);
         e.frame(0.0, &mut gfx);
         e.frame(1.0 / 60.0, &mut gfx);
-        let r = e.world.query::<(&Name, &MeshRenderer)>().iter().find(|(_, (n, _))| n.0 == "Static Batch").map(|(_, (_, r))| *r).expect("a batch even for one object");
-        assert_eq!(gfx.material(r.material).unwrap().lighting, goat_gfx::LightingModel::Unlit);
+        let r = e.world.query::<(&Name, &MeshRenderer)>().iter().find(|(_, (n, _))| n.0 == "Static Batch").map(|(_, (_, r))| r.clone()).expect("a batch even for one object");
+        assert_eq!(gfx.material(r.material().unwrap()).unwrap().lighting, goat_gfx::LightingModel::Unlit);
     }
 
     #[test]

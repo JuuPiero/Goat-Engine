@@ -102,11 +102,38 @@ impl Default for Camera {
     }
 }
 
-/// Draws a mesh with a material at the entity's transform.
-#[derive(Clone, Copy, Debug)]
+/// The mesh an entity draws (Unity's MeshFilter): one mesh made of submeshes (a model mesh with
+/// several materials has one per material; built-in meshes have one). The [`MeshRenderer`] next to
+/// it draws submesh `i` with its material `i`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MeshFilter {
+    pub submeshes: Vec<MeshId>,
+}
+
+impl MeshFilter {
+    pub fn new(mesh: MeshId) -> Self {
+        MeshFilter { submeshes: vec![mesh] }
+    }
+    pub fn with_submeshes(submeshes: Vec<MeshId>) -> Self {
+        MeshFilter { submeshes }
+    }
+    /// The first submesh (the whole mesh when it has one).
+    pub fn mesh(&self) -> Option<MeshId> {
+        self.submeshes.first().copied()
+    }
+    /// Replaces the mesh by a one-submesh mesh.
+    pub fn set_mesh(&mut self, mesh: MeshId) {
+        self.submeshes.clear();
+        self.submeshes.push(mesh);
+    }
+}
+
+/// Draws the [`MeshFilter`]'s mesh with materials (Unity's MeshRenderer): material `i` draws
+/// submesh `i`; more materials than submeshes draw the last submesh again (extra passes), submeshes
+/// without a material aren't drawn — like Unity.
+#[derive(Clone, Debug, PartialEq)]
 pub struct MeshRenderer {
-    pub mesh: MeshId,
-    pub material: MaterialId,
+    pub materials: Vec<MaterialId>,
     pub visible: bool,
     /// Layer 0..31: cameras draw the layers in their `culling_mask`.
     pub layer: u8,
@@ -115,8 +142,12 @@ pub struct MeshRenderer {
 }
 
 impl MeshRenderer {
-    pub fn new(mesh: MeshId, material: MaterialId) -> Self {
-        MeshRenderer { mesh, material, visible: true, layer: 0, sorting_order: 0 }
+    /// One material.
+    pub fn new(material: MaterialId) -> Self {
+        MeshRenderer { materials: vec![material], visible: true, layer: 0, sorting_order: 0 }
+    }
+    pub fn with_materials(materials: Vec<MaterialId>) -> Self {
+        MeshRenderer { materials, visible: true, layer: 0, sorting_order: 0 }
     }
     pub fn with_layer(mut self, layer: u8) -> Self {
         self.layer = layer.min(31);
@@ -126,9 +157,26 @@ impl MeshRenderer {
         self.sorting_order = order;
         self
     }
+    /// The first material (Unity's sharedMaterial).
+    pub fn material(&self) -> Option<MaterialId> {
+        self.materials.first().copied()
+    }
+    /// Sets the first material (adds one when there is none).
+    pub fn set_material(&mut self, material: MaterialId) {
+        match self.materials.first_mut() {
+            Some(m) => *m = material,
+            None => self.materials.push(material),
+        }
+    }
+    /// The (submesh, material) pairs drawn with `filter`.
+    pub fn draws<'a>(&'a self, filter: &'a MeshFilter) -> impl Iterator<Item = (MeshId, MaterialId)> + 'a {
+        let n = filter.submeshes.len();
+        self.materials.iter().enumerate().filter(move |_| n > 0).map(move |(i, &m)| (filter.submeshes[i.min(n.saturating_sub(1))], m))
+    }
 }
 
 /// Level of detail (Unity's LOD Group) next to a [`MeshRenderer`]: the renderer draws the mesh
+/// (with its first material)
 /// of the first level whose `screen_height` (the object's height as a fraction of the screen,
 /// 0..1) is reached; below the last level it isn't drawn when `cull` is on. Picked per camera.
 #[derive(Clone, Debug, PartialEq)]

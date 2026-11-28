@@ -126,6 +126,28 @@ pub(crate) fn bake_assets(dest: &Path, target: goat_assets::bake::Target) -> Res
     let (mut json_n, mut json_before, mut json_after) = (0usize, 0u64, 0u64);
     let (mut tex_n, mut tex_before, mut tex_after) = (0usize, 0u64, 0u64);
     let mut codecs = std::collections::BTreeMap::<String, usize>::new();
+    // FBX / OBJ models → GLB under the same name (loaders look at the bytes), before the textures:
+    // the files they use are compressed with the others; embedded ones are compressed here
+    let (mut model_n, mut model_before, mut model_after) = (0usize, 0u64, 0u64);
+    let fbx_target = if target == goat_assets::bake::Target::N3ds { goat_fbx::Target::N3ds } else { goat_fbx::Target::Desktop };
+    for f in &files {
+        let key = f.strip_prefix(dest).unwrap_or(f).to_string_lossy().replace('\\', "/");
+        if !goat_fbx::is_convertible(&key) {
+            continue;
+        }
+        let bytes = std::fs::read(f).map_err(|e| format!("{key}: {e}"))?;
+        let read = |k: &str| std::fs::read(dest.join(k)).ok();
+        let opts = goat_fbx::options_for(&key, &read, fbx_target);
+        match goat_fbx::convert(&bytes, &key, &read, &opts) {
+            Ok(glb) => {
+                model_n += 1;
+                model_before += bytes.len() as u64;
+                model_after += glb.len() as u64;
+                std::fs::write(f, glb).map_err(|e| format!("{key}: {e}"))?;
+            }
+            Err(e) => println!("goat: {key}: not converted ({e})"),
+        }
+    }
     // textures first: they read their `.import.json` as text
     for f in &files {
         let key = f.strip_prefix(dest).unwrap_or(f).to_string_lossy().replace('\\', "/");
@@ -161,6 +183,9 @@ pub(crate) fn bake_assets(dest: &Path, target: goat_assets::bake::Target) -> Res
         }
     }
     let kb = |b: u64| b as f64 / 1024.0;
+    if model_n > 0 {
+        println!("goat: {model_n} FBX / OBJ model(s) → GLB: {:.1} KB → {:.1} KB", kb(model_before), kb(model_after));
+    }
     if json_n > 0 {
         println!("goat: {json_n} JSON file(s) → binary: {:.1} KB → {:.1} KB", kb(json_before), kb(json_after));
     }

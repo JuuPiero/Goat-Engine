@@ -95,7 +95,7 @@ pub fn kind_of(name: &str, is_dir: bool) -> &'static str {
         "script"
     } else if ends(".png") || ends(".jpg") || ends(".jpeg") {
         "image"
-    } else if ends(".glb") || ends(".gltf") {
+    } else if ends(".glb") || ends(".gltf") || ends(".fbx") || ends(".obj") {
         "model"
     } else if ends(".wav") || ends(".ogg") {
         "audio"

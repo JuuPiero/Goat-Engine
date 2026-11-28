@@ -81,12 +81,13 @@ pub(crate) fn describe_engine_components(r: &mut SceneRegistry) {
                 .tip("size", "Objects whose center is inside this box (world axes) reflect the probe's cube map"),
         ),
         ("RenderSettings", I::new("Rendering/Render Settings").kind("ambient", "color").tip("fog", "null = no fog; { color, start, end }")),
+        ("MeshFilter", I::new("Mesh/Mesh Filter").defaults(json!({ "mesh": "builtin:cube" })).asset("mesh", "mesh").tip("mesh", "A built-in mesh or a model mesh (one submesh per material)")),
         (
             "MeshRenderer",
             I::new("Mesh/Mesh Renderer")
-                .defaults(json!({ "mesh": "builtin:cube", "material": "builtin:default" }))
-                .asset("mesh", "mesh")
-                .asset("material", "material")
+                .defaults(json!({ "materials": ["builtin:default"] }))
+                .asset("materials", "material")
+                .tip("materials", "Material i draws submesh i of the Mesh Filter's mesh; extra materials draw the last submesh again")
                 .kind("layer", "layer"),
         ),
         ("LodGroup", I::new("Rendering/LOD Group").defaults(json!({ "levels": [] })).asset("mesh", "mesh").range("screen_height", 0.0, 1.0)),

@@ -29,6 +29,16 @@ export async function syncFiles(e: EditorEngine, only?: (key: string) => boolean
   }
   await Promise.all(
     files.map(async (f) => {
+      // FBX / OBJ: converted to GLB by the editor host (the engine reads glTF)
+      if (/\.(fbx|obj)$/i.test(f.key)) {
+        try {
+          const glb = await invoke<ArrayBuffer>('convert_model', { key: f.key });
+          e.put_file(f.key, new Uint8Array(glb));
+        } catch (err) {
+          log(`${f.key}: ${err}`, 'error');
+        }
+        return;
+      }
       const r = await fetch(fileUrl(p.assets, f.key, Date.now()));
       if (r.ok) e.put_file(f.key, new Uint8Array(await r.arrayBuffer()));
     }),

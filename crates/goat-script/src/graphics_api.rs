@@ -392,7 +392,7 @@ fn set_texture(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
 
 /// `Renderer.getTexture([name])` → key or null.
 fn get_texture(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
-    let m = api.ctx.world.get::<&MeshRenderer>(e).map_err(|_| "no MeshRenderer on this object")?.material;
+    let m = api.ctx.world.get::<&MeshRenderer>(e).map_err(|_| "no MeshRenderer on this object")?.material().ok_or("the MeshRenderer has no material")?;
     let t = api.ctx.gfx.material_desc(m).and_then(|d| d.texture);
     Ok(t.and_then(|t| api.ctx.resources.get::<AssetServer>().and_then(|s| s.key_of_texture(t)).map(|k| json!(k))).unwrap_or(Value::Null))
 }

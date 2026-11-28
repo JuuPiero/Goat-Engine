@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use goat_assets::{AnimPath, AssetServer, Interpolation, ModelAnimation, ModelNodes, SkinnedMesh};
 use goat_core::math::{Mat4, Quat, Vec3, Vec4};
 use goat_gfx::{MeshData, Vertex};
-use goat_runtime::{Context, Entity, GlobalTransform, MeshRenderer, Plugin, Transform, World};
+use goat_runtime::{Context, Entity, GlobalTransform, MeshFilter, Plugin, Transform, World};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimState {
@@ -440,8 +440,8 @@ impl Plugin for AnimationPlugin {
         for e in skinned {
             let Ok(sm) = ctx.world.get::<&SkinnedMesh>(e).map(|s| (*s).clone()) else { continue };
             let Some(model) = assets.loaded_model(&sm.model) else { continue };
-            let Some(prim) = model.data.meshes.get(sm.mesh).and_then(|m| m.get(sm.primitive)) else { continue };
-            let (Some(sv), Some(model_skin)) = (&prim.skin_vertices, model.data.skins.get(sm.skin)) else { continue };
+            let Some(prims) = model.data.meshes.get(sm.mesh) else { continue };
+            let Some(model_skin) = model.data.skins.get(sm.skin) else { continue };
             let Ok(nodes) = ctx.world.get::<&ModelNodes>(sm.root).map(|n| n.0.clone()) else { continue };
             let mesh_world = ctx.world.get::<&GlobalTransform>(e).map(|g| g.0).unwrap_or(Mat4::IDENTITY);
             let to_mesh = mesh_world.inverse();
@@ -454,24 +454,30 @@ impl Plugin for AnimationPlugin {
                     to_mesh * jw * *ibm
                 })
                 .collect();
-            skin(&prim.mesh, &sv.joints, &sv.weights, &palette, &mut self.scratch);
-            // a mesh of this instance's own (the shared one stays in bind pose)
-            let instance = match sm.instance {
-                Some(m) => m,
-                None => match ctx.gfx.create_mesh(&self.scratch) {
-                    Ok(m) => {
-                        if let Ok(mut s) = ctx.world.get::<&mut SkinnedMesh>(e) {
-                            s.instance = Some(m);
-                        }
-                        if let Ok(mut r) = ctx.world.get::<&mut MeshRenderer>(e) {
-                            r.mesh = m;
-                        }
-                        continue;
+            // every skinned submesh of the entity's mesh (one per material)
+            for (si, prim) in prims.iter().enumerate() {
+                let Some(sv) = &prim.skin_vertices else { continue };
+                skin(&prim.mesh, &sv.joints, &sv.weights, &palette, &mut self.scratch);
+                // a mesh of this instance's own (the shared one stays in bind pose)
+                match sm.instances.get(si).copied().flatten() {
+                    Some(m) => {
+                        let _ = ctx.gfx.update_mesh(m, &self.scratch);
                     }
-                    Err(_) => continue,
-                },
-            };
-            let _ = ctx.gfx.update_mesh(instance, &self.scratch);
+                    None => {
+                        let Ok(m) = ctx.gfx.create_mesh(&self.scratch) else { continue };
+                        if let Ok(mut s) = ctx.world.get::<&mut SkinnedMesh>(e) {
+                            if si < s.instances.len() {
+                                s.instances[si] = Some(m);
+                            }
+                        }
+                        if let Ok(mut f) = ctx.world.get::<&mut MeshFilter>(e) {
+                            if si < f.submeshes.len() {
+                                f.submeshes[si] = m;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -5,7 +5,7 @@
 
 use goat_assets::AssetServer;
 use goat_core::math::{Mat4, Vec3};
-use goat_runtime::{Entity, GlobalTransform, MeshRenderer, Parent, World};
+use goat_runtime::{Entity, GlobalTransform, MeshFilter, MeshRenderer, Parent, World};
 
 use crate::core::BakeInput;
 use crate::{CollectObjects, NavMeshAgent, NavMeshModifier, NavMeshObstacle, NavMeshSurface, UseGeometry};
@@ -130,7 +130,7 @@ pub fn collect_sources(world: &World, assets: &mut AssetServer, s: &NavMeshSurfa
                 if !r.visible || (s.layer_mask >> (r.layer & 31)) & 1 == 0 {
                     continue;
                 }
-                let Some(key) = assets.key_of_mesh(r.mesh).map(str::to_string) else { continue };
+                let Some(key) = world.get::<&MeshFilter>(e).ok().and_then(|f| assets.key_of_submeshes(&f.submeshes)) else { continue };
                 match assets.mesh_geometry(&key) {
                     Ok((points, tris)) => t.mesh(&m, &points, &tris, area),
                     Err(err) => {
@@ -154,7 +154,7 @@ pub fn collect_sources(world: &World, assets: &mut AssetServer, s: &NavMeshSurfa
                         Shape::Sphere(r) => t.round(&m, c.center, *r, 0.0, area),
                         Shape::Capsule { half_height, radius } => t.round(&m, c.center, *radius, *half_height, area),
                         Shape::Mesh { source, .. } => {
-                            let key = if source.is_empty() { world.get::<&MeshRenderer>(e).ok().and_then(|r| assets.key_of_mesh(r.mesh).map(str::to_string)) } else { Some(source.clone()) };
+                            let key = if source.is_empty() { world.get::<&MeshFilter>(e).ok().and_then(|f| assets.key_of_submeshes(&f.submeshes)) } else { Some(source.clone()) };
                             if let Some((points, tris)) = key.and_then(|k| assets.mesh_geometry(&k).ok()) {
                                 let mc = m * Mat4::from_translation(c.center);
                                 t.mesh(&mc, &points, &tris, area);

@@ -262,7 +262,7 @@ impl EditorCore {
         let Some(mat) = self.gizmos.material else { return };
         if self.gizmos.entity.is_none() {
             let Ok(mesh) = gfx.create_mesh(&MeshData::default()) else { return };
-            let e = crate::core::view_world!(mut self).spawn((Name("Component Gizmos".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, mat).with_layer(EDITOR_LAYER).with_sorting_order(1500)));
+            let e = crate::core::view_world!(mut self).spawn((Name("Component Gizmos".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshFilter::new(mesh), MeshRenderer::new(mat).with_layer(EDITOR_LAYER).with_sorting_order(1500)));
             self.gizmos.entity = Some(e);
             self.gizmos.mesh = Some(mesh);
         }

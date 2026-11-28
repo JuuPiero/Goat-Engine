@@ -95,7 +95,7 @@ impl EditorCore {
         for (i, data) in meshes.iter().enumerate() {
             if i >= self.nav_preview.entities.len() {
                 let Ok(mesh) = gfx.create_mesh(&MeshData::default()) else { return };
-                let e = self.edit.world.spawn((Name("NavMesh Preview".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, mat).with_layer(EDITOR_LAYER).with_sorting_order(900)));
+                let e = self.edit.world.spawn((Name("NavMesh Preview".into()), DontSave, Transform::default(), GlobalTransform::default(), MeshFilter::new(mesh), MeshRenderer::new(mat).with_layer(EDITOR_LAYER).with_sorting_order(900)));
                 self.nav_preview.entities.push((e, mesh));
             }
             let (e, mesh) = self.nav_preview.entities[i];

@@ -2195,16 +2195,32 @@ export class Light extends Component {
   get type() { return this._name.replace('Light', ''); }
 }
 props(Light, { color: ['color', 'color'], intensity: 'intensity', range: 'range', spotAngle: 'spot_angle', innerSpotAngle: 'inner_spot_angle', mode: 'mode' });
-/** Unity's MeshRenderer: `material` (its own copy) from Renderer, `sharedMaterial` = the asset key. */
+/**
+ * Unity's MeshRenderer: draws the MeshFilter's mesh, material i on submesh i. `sharedMaterials` /
+ * `sharedMaterial` = asset keys (`materials/red.mat.json`, `builtin:default`), `material` = the
+ * object's own copy of the first one (Renderer).
+ */
 export class MeshRenderer extends Renderer {
   constructor(h) { super(h); }
-  get sharedMaterial() { return N.getComponent(this._h, 'MeshRenderer')?.material ?? null; }
-  set sharedMaterial(m) { const c = N.getComponent(this._h, 'MeshRenderer'); if (c) { c.material = typeof m === 'string' ? m : 'builtin:default'; N.setComponent(this._h, 'MeshRenderer', c); } }
+  _c() { return N.getComponent(this._h, 'MeshRenderer'); }
+  get sharedMaterial() { return this._c()?.materials?.[0] ?? null; }
+  set sharedMaterial(m) { const c = this._c(); if (c) { const l = c.materials ?? []; l[0] = typeof m === 'string' ? m : 'builtin:default'; c.materials = l; N.setComponent(this._h, 'MeshRenderer', c); } }
+  get sharedMaterials() { return [...(this._c()?.materials ?? [])]; }
+  set sharedMaterials(list) { const c = this._c(); if (c) { c.materials = Array.from(list ?? [], (m) => (typeof m === 'string' ? m : 'builtin:default')); N.setComponent(this._h, 'MeshRenderer', c); } }
+  /** Same as sharedMaterials (keys): Unity's per-object copies of every material aren't made. */
+  get materials() { return this.sharedMaterials; }
+  set materials(list) { this.sharedMaterials = list; }
 }
 MeshRenderer._engine = 'MeshRenderer';
-MeshRenderer._defaults = { mesh: 'builtin:cube', material: 'builtin:default' };
-/** Unity's MeshFilter: the mesh of the object's MeshRenderer ('builtin:cube', a model's mesh key). */
-export class MeshFilter extends Component { static _engine = 'MeshRenderer'; static _defaults = { mesh: 'builtin:cube', material: 'builtin:default' }; }
+MeshRenderer._defaults = { materials: ['builtin:default'] };
+props(MeshRenderer, { sortingOrder: 'sorting_order', layer: 'layer' });
+/** Unity's MeshFilter: the mesh the MeshRenderer draws ('builtin:cube', a model mesh '<model>#mesh:0' with a submesh per material). */
+export class MeshFilter extends Component {
+  static _engine = 'MeshFilter';
+  static _defaults = { mesh: 'builtin:cube' };
+  /** Number of submeshes (= materials it takes). */
+  get subMeshCount() { return N.call('MeshFilter.subMeshCount', this._h, []) ?? 1; }
+}
 props(MeshFilter, { mesh: 'mesh', sharedMesh: 'mesh' });
 export class SpriteRenderer extends Component { static _engine = 'SpriteRenderer'; static _defaults = { texture: 'builtin:white' }; }
 props(SpriteRenderer, { color: ['color', 'color'], sprite: ['texture', 'key'], texture: ['texture', 'key'], sortingOrder: 'sorting_order', layer: 'layer', pixelsPerUnit: 'pixels_per_unit', pivot: ['pivot', 'v2'] });
@@ -2392,7 +2408,7 @@ export class PhysicsRaycaster extends Component { static _engine = 'PhysicsRayca
 export class Physics2DRaycaster extends Component { static _engine = 'Physics2DRaycaster'; }
 
 /** Every component class, for getComponents(Component). */
-const COMPONENT_CLASSES = [Rigidbody, Rigidbody2D, Collider, Collider2D, CharacterController, ConstantForce, ConstantForce2D, Joint, Joint2D, TargetJoint2D, AreaEffector2D, PointEffector2D, BuoyancyEffector2D, PlatformEffector2D, SurfaceEffector2D, Light, MeshRenderer, SpriteRenderer, SpriteMask, TextMesh, LineRenderer, TrailRenderer, ParticleSystem, PostEffect, LightProbeGroup, ReflectionProbe, LODGroup, BlobShadow, AudioListener, NavMeshObstacle, NavMeshSurface, NavMeshModifier, Canvas, RectTransform, Image, RawImage, Text, Button, Toggle, Slider, Scrollbar, InputField, Dropdown, CanvasGroup, ScrollRect, LayoutElement, LayoutGroup, ContentSizeFitter, AspectRatioFitter, Mask, RectMask2D, Outline, Shadow, ToggleGroup, EventSystem, PhysicsRaycaster, Physics2DRaycaster, Camera, Animator, Animation, NavMeshAgent, SpriteAnimator, AudioSource];
+const COMPONENT_CLASSES = [Rigidbody, Rigidbody2D, Collider, Collider2D, CharacterController, ConstantForce, ConstantForce2D, Joint, Joint2D, TargetJoint2D, AreaEffector2D, PointEffector2D, BuoyancyEffector2D, PlatformEffector2D, SurfaceEffector2D, Light, MeshFilter, MeshRenderer, SpriteRenderer, SpriteMask, TextMesh, LineRenderer, TrailRenderer, ParticleSystem, PostEffect, LightProbeGroup, ReflectionProbe, LODGroup, BlobShadow, AudioListener, NavMeshObstacle, NavMeshSurface, NavMeshModifier, Canvas, RectTransform, Image, RawImage, Text, Button, Toggle, Slider, Scrollbar, InputField, Dropdown, CanvasGroup, ScrollRect, LayoutElement, LayoutGroup, ContentSizeFitter, AspectRatioFitter, Mask, RectMask2D, Outline, Shadow, ToggleGroup, EventSystem, PhysicsRaycaster, Physics2DRaycaster, Camera, Animator, Animation, NavMeshAgent, SpriteAnimator, AudioSource];
 
 // ------------------------------------------------------------------ Unity's Input (keys, mouse, touch, axes)
 
@@ -2738,7 +2754,8 @@ export const PrimitiveType = { Cube: 'Cube', Sphere: 'Sphere', Capsule: 'Capsule
 /** Unity's CreatePrimitive: a mesh with the default material and the matching collider. */
 GameObject.createPrimitive = function (type) {
   const go = GameObject.create(type);
-  go.setComponent('MeshRenderer', { mesh: `builtin:${String(type).toLowerCase()}`, material: 'builtin:default' });
+  go.setComponent('MeshFilter', { mesh: `builtin:${String(type).toLowerCase()}` });
+  go.setComponent('MeshRenderer', { materials: ['builtin:default'] });
   const shape = { Cube: { box: [0.5, 0.5, 0.5] }, Sphere: { sphere: 0.5 }, Capsule: { capsule: { half_height: 0.5, radius: 0.5 } }, Cylinder: { capsule: { half_height: 0.5, radius: 0.5 } }, Plane: { box: [5, 0.01, 5] }, Quad: { box: [0.5, 0.5, 0.01] } }[type];
   if (shape) { try { go.setComponent('Collider', { shape }); } catch (e) { /* no 3D physics in this game */ } }
   return go;

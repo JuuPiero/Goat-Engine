@@ -21,7 +21,7 @@ goat-core            toán (glam), Color, Handle/Pool, log, Time — không ph�
 goat-gfx             API đồ họa trung lập: trait GraphicsBackend, MeshData/Vertex, TextureData,
    │                 MaterialDesc, RenderView/DrawItem, Display (Main / Secondary), draw_order()
    │
-goat-runtime         Engine + ECS (hecs): Transform/GlobalTransform/Parent, Camera, MeshRenderer,
+goat-runtime         Engine + ECS (hecs): Transform/GlobalTransform/Parent, Camera, MeshFilter + MeshRenderer,
    │                 DirectionalLight, Input trừu tượng, Behaviour (script), trait Game
    │
    ├── backend đồ họa        goat-gfx-wgpu (Vulkan/Metal/DX12)   goat-gfx-citro3d (PICA200)
@@ -174,7 +174,7 @@ impl Game for MyGame {
     fn start(&mut self, ctx: &mut Context) {
         let cube = ctx.gfx.create_mesh(&gfx::MeshData::cube(1.0)).unwrap();
         let mat = ctx.gfx.create_material(&gfx::MaterialDesc::default()).unwrap();
-        ctx.world.spawn((Name("Cube".into()), Transform::default(), MeshRenderer::new(cube, mat),
+        ctx.world.spawn((Name("Cube".into()), Transform::default(), MeshFilter::new(cube), MeshRenderer::new(mat),
                          Scripts::new().with(Spinner { speed: 1.0 })));
         // + một Camera và một DirectionalLight — xem games/hello
     }
@@ -253,7 +253,23 @@ let text = goat_scene::save_scene(ctx)?;                             // JSON c�
 ```
 
 Trong file scene, mỗi entity có:
-- `components`: Transform, Camera, MeshRenderer, các loại đèn, RenderSettings, SpriteRenderer…
+- `components`: Transform, Camera, MeshFilter + MeshRenderer, các loại đèn, RenderSettings, SpriteRenderer…
+
+### Mesh Filter + Mesh Renderer, model FBX / OBJ (như Unity)
+
+- **Mesh Filter** giữ mesh: một mesh gồm nhiều submesh (model có bao nhiêu material thì có bấy nhiêu submesh; mesh built-in có 1). **Mesh Renderer** giữ danh sách **Materials**: material thứ i vẽ submesh thứ i. Thừa material thì vẽ lại submesh cuối (nhiều pass), thiếu material thì submesh đó không vẽ (như Unity). Inspector hiện `Materials (n)` với nút + / −.
+  - Code Rust: `world.spawn((MeshFilter::new(mesh), MeshRenderer::new(material)))`, nhiều material: `MeshFilter::with_submeshes(vec![a, b])` + `MeshRenderer::with_materials(vec![m1, m2])`.
+  - Script: `getComponent(MeshFilter).mesh` / `subMeshCount`, `getComponent(MeshRenderer).sharedMaterials` / `sharedMaterial` / `materials`.
+  - Key mesh: `builtin:cube`, `models/x.glb#mesh:0` (cả mesh, mọi submesh), `models/x.glb#mesh:0:1` (một submesh).
+  - Scene / prefab cũ dạng `"MeshRenderer": { "mesh", "material" }` vẫn mở được (tự tách thành MeshFilter + MeshRenderer); lưu lại thì theo dạng mới `"MeshFilter": { "mesh" }`, `"MeshRenderer": { "materials": [...] }`.
+  - Kéo model vào scene: mỗi node có mesh thành **một** object có Mesh Filter + Mesh Renderer với đủ material (trước đây mỗi material là một object con).
+- **Model FBX / OBJ**: dùng như glTF (kéo vào scene, làm prefab, mesh collider, NavMesh…). Engine chỉ đọc glTF, nên FBX / OBJ được **chuyển sang GLB** (thư viện ufbx, crate `goat-fbx`):
+  - Editor tự chuyển khi nạp file (có cache theo thời điểm sửa file). Desktop player chạy từ mã nguồn chuyển lúc tải. `goat build` chuyển mọi `.fbx` / `.obj` trong bản build thành GLB, giữ nguyên tên file. Nhờ vậy **3DS** và web chỉ đọc GLB, không cần thư viện FBX.
+  - Hệ trục và đơn vị: tay phải, trục Y hướng lên, mét (như "Convert Units" của Unity: model đơn vị cm thành m). Pivot hình học của 3ds Max thành node phụ.
+  - Mỗi material một submesh, polygon được chia tam giác, mesh quá 65 535 đỉnh được tách (index 16-bit). Skin (tối đa 4 xương mỗi đỉnh), mọi take animation (bake 30 key/s, có giảm key).
+  - Texture: ảnh nhúng trong FBX được lưu trong GLB (bản 3DS nén sẵn ETC1, kích thước luỹ thừa 2). Texture là file thì tìm theo đường dẫn tương đối, theo tên file cạnh model, hoặc trong `textures/`; file được giữ nguyên để bản build nén như mọi texture. Chỉ PNG / JPEG: TGA / PSD hãy đổi sang PNG.
+  - Cài đặt riêng từng model: `<model>.fbx.import.json` = `{ "scale_factor": 1, "animation_rate": 30 }`.
+  - Chuyển bằng tay: `goat model <model.fbx|.obj> [out.glb] [--3ds]`.
 - `scripts`: các behaviour đã đăng ký.
 - `active: false`: object bị tắt (Unity `SetActive(false)`): nó và mọi object con không được vẽ, không chạy script / behaviour, không có trong physics, UI, particle, âm thanh, navigation. Rust: `goat_runtime::set_active(world, e, false)`, `active_self`, `active_in_hierarchy`; script: `go.setActive(false)`, `go.activeSelf`, `go.activeInHierarchy`. Editor: checkbox cạnh tên trong Inspector, dòng mờ trong Hierarchy.
 - `tag`: `Player`, `Enemy`…; `goat_runtime::find_with_tag`, script `go.tag`, `go.compareTag(t)`, `GameObject.findWithTag` / `findGameObjectsWithTag`; editor: ô Tag (gợi ý các tag có sẵn của Unity, gõ tag mới được).
@@ -419,7 +435,7 @@ Chữ có thể có viền (`.with_outline(màu, 0.06)`), bóng (`.with_shadow(m
 world.spawn((Transform::from_position(pos), Text::new("Xin chào!", "fonts/BeVietnamPro-Regular.ttf", 15.0).with_align(Align::Center, VAlign::Middle)));
 
 // Physics (PhysicsPlugin): giống Rigidbody / Collider của Unity
-world.spawn((Transform::from_position(vec3(0.0, 5.0, 0.0)), MeshRenderer::new(ball, mat),
+world.spawn((Transform::from_position(vec3(0.0, 5.0, 0.0)), MeshFilter::new(ball), MeshRenderer::new(mat),
              RigidBody::dynamic(), Collider::new(Shape::Sphere(0.5)).with_restitution(0.6)));
 for e in &goat_physics::physics(ctx).events { /* Enter / Exit / TriggerEnter / TriggerExit */ }
 let hit = goat_physics::physics(ctx).raycast(origin, Vec3::NEG_Y, 100.0);
@@ -519,7 +535,7 @@ Trong scene: `"Animator": { "controller": "animators/tentacle.controller.json", 
 
 - **Layer:** `Collider { layer: 3, .. }` + `physics.set_layer_collision(0, 3, false)` (Layer Collision Matrix của Unity). `raycast_layers(..., mask)` và `overlap_sphere` lọc theo layer mask.
 - **Mesh collider:** `Shape::Mesh { source: "models/rock.glb", convex: false }`.
-  - `source` có thể là `builtin:cube`, một model, một mesh con `#mesh:0:0`, hoặc để trống để lấy mesh của MeshRenderer.
+  - `source` có thể là `builtin:cube`, một model, một mesh con `#mesh:0:0`, hoặc để trống để lấy mesh của Mesh Filter (cả mọi submesh).
   - Mesh lõm chỉ dùng cho vật tĩnh / kinematic; `convex: true` dùng bao lồi, vật dynamic cũng được.
 - **Joint:** đặt trên vật thứ nhất, `connected` là tên vật kia (để trống = gắn vào thế giới).
   - 3D: `Joint::hinge(Vec3::Z).to("Door Frame")` (có giới hạn góc, motor), ngoài ra có fixed / ball / slider / spring / rope.
@@ -571,7 +587,7 @@ Hiệu ứng làm sẵn trong Unity có thể chuyển sang bằng `tools/unity-
 ## Navigation (`goat-navigation`)
 
 NavMesh giống package AI Navigation của Unity (cùng thiết kế với `com.pia.ai-navigation` của PiaEngine):
-- `NavMeshSurface`: bấm **Bake** trong Inspector (hoặc `bake_on_awake`, `build_nav_mesh()` lúc chạy). Hình học lấy từ collider của goat-physics (Box / Sphere / Capsule / Mesh) hoặc từ MeshRenderer (cả mesh trong model glTF). Có bán kính / chiều cao / độ dốc / bậc leo của agent, All / Volume / Children, layer mask, voxel size, min region area. Chọn surface trong editor để thấy lưới navmesh phủ lên Scene view. Dữ liệu bake lưu trong scene.
+- `NavMeshSurface`: bấm **Bake** trong Inspector (hoặc `bake_on_awake`, `build_nav_mesh()` lúc chạy). Hình học lấy từ collider của goat-physics (Box / Sphere / Capsule / Mesh) hoặc từ Mesh Filter + Mesh Renderer (cả mesh trong model glTF / FBX). Có bán kính / chiều cao / độ dốc / bậc leo của agent, All / Volume / Children, layer mask, voxel size, min region area. Chọn surface trong editor để thấy lưới navmesh phủ lên Scene view. Dữ liệu bake lưu trong scene.
 - `NavMeshAgent`: `set_destination` (đường được tính ở lần update kế tiếp: `path_pending`), tự tăng tốc / quay / phanh, `stopping_distance`, tránh agent khác theo `avoidance_priority`, `warp` / `move_by` / `reset_path`, `is_stopped`, đi một phần đường khi đích không tới được và tự tính lại khi navmesh đổi.
 - `NavMeshObstacle` (Box / Capsule): agent lách quanh; bật `carve` thì khoét lỗ trên navmesh. `NavMeshModifier`: đổi area hoặc bỏ khỏi bake.
 - Resource `NavMeshes` (``NavMesh`` của Unity): `calculate_path`, `sample_position`, `raycast`, `find_closest_edge`, tên area + cost.

@@ -7,4 +7,5 @@ license.workspace = true
 [dependencies]
 goat-script-js = { workspace = true, features = ["typescript"] }
 goat-assets = { workspace = true }
+goat-fbx = { workspace = true }
 serde_json = "1"

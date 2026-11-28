@@ -137,12 +137,12 @@ const UI_RECT = (w: number, h: number) => ({ RectTransform: { size: [w, h] } });
 
 /// Unity's GameObject menu entries: what each creates.
 export const PRESETS: Record<string, Preset> = {
-  Cube: { name: 'Cube', components: { MeshRenderer: { mesh: 'builtin:cube', material: 'builtin:default' }, Collider: { shape: { box: [0.5, 0.5, 0.5] } } } },
-  Sphere: { name: 'Sphere', components: { MeshRenderer: { mesh: 'builtin:sphere', material: 'builtin:default' }, Collider: { shape: { sphere: 0.5 } } } },
-  Capsule: { name: 'Capsule', components: { MeshRenderer: { mesh: 'builtin:capsule', material: 'builtin:default' }, Collider: { shape: { capsule: { half_height: 0.5, radius: 0.5 } } } } },
-  Cylinder: { name: 'Cylinder', components: { MeshRenderer: { mesh: 'builtin:cylinder', material: 'builtin:default' }, Collider: { shape: { capsule: { half_height: 0.5, radius: 0.5 } } } } },
-  Quad: { name: 'Quad', components: { MeshRenderer: { mesh: 'builtin:quad', material: 'builtin:default' }, Collider: { shape: { box: [0.5, 0.5, 0.005] } } } },
-  Plane: { name: 'Plane', components: { MeshRenderer: { mesh: 'builtin:plane', material: 'builtin:default' }, Collider: { shape: { box: [5, 0.01, 5] } } } },
+  Cube: { name: 'Cube', components: { MeshFilter: { mesh: 'builtin:cube' }, MeshRenderer: { materials: ['builtin:default'] }, Collider: { shape: { box: [0.5, 0.5, 0.5] } } } },
+  Sphere: { name: 'Sphere', components: { MeshFilter: { mesh: 'builtin:sphere' }, MeshRenderer: { materials: ['builtin:default'] }, Collider: { shape: { sphere: 0.5 } } } },
+  Capsule: { name: 'Capsule', components: { MeshFilter: { mesh: 'builtin:capsule' }, MeshRenderer: { materials: ['builtin:default'] }, Collider: { shape: { capsule: { half_height: 0.5, radius: 0.5 } } } } },
+  Cylinder: { name: 'Cylinder', components: { MeshFilter: { mesh: 'builtin:cylinder' }, MeshRenderer: { materials: ['builtin:default'] }, Collider: { shape: { capsule: { half_height: 0.5, radius: 0.5 } } } } },
+  Quad: { name: 'Quad', components: { MeshFilter: { mesh: 'builtin:quad' }, MeshRenderer: { materials: ['builtin:default'] }, Collider: { shape: { box: [0.5, 0.5, 0.005] } } } },
+  Plane: { name: 'Plane', components: { MeshFilter: { mesh: 'builtin:plane' }, MeshRenderer: { materials: ['builtin:default'] }, Collider: { shape: { box: [5, 0.01, 5] } } } },
   Sprite: { name: 'Sprite', components: { SpriteRenderer: { texture: 'builtin:white' } } },
   Text3D: { name: 'Text', components: { Text: { text: 'Hello', font: '' } } },
   ParticleSystem: { name: 'Particle System', components: { ParticleSystem: {} } },

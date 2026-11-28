@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use goat_core::math::{Mat4, Vec2, Vec3};
 use goat_core::Color;
 use goat_gfx::{BlendMode, CullMode, LightingModel, MaterialDesc, MaterialId, MeshData, MeshId, TextureId, Vertex};
-use goat_runtime::{Context, DontSave, GlobalTransform, MeshRenderer, Name, Plugin, Transform};
+use goat_runtime::{Context, DontSave, GlobalTransform, MeshFilter, MeshRenderer, Name, Plugin, Transform};
 
 /// A pixel rectangle of a texture (origin top-left).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -208,7 +208,7 @@ impl Batcher {
         while self.batches.len() <= i {
             let mesh = ctx.gfx.create_mesh(&MeshData::default()).ok()?;
             let name = Name(format!("{} Batch {}", self.name, self.batches.len()));
-            let entity = ctx.world.spawn((name, SpriteBatch, DontSave, Transform::default(), GlobalTransform::default(), MeshRenderer::new(mesh, material)));
+            let entity = ctx.world.spawn((name, SpriteBatch, DontSave, Transform::default(), GlobalTransform::default(), MeshFilter::new(mesh), MeshRenderer::new(material)));
             self.batches.push(Batch { entity, mesh });
         }
         let b = &self.batches[i];
@@ -240,8 +240,12 @@ impl Batcher {
             }
             let Some((entity, mesh_id)) = self.batch(ctx, used, material) else { break };
             if ctx.gfx.update_mesh(mesh_id, &mesh).is_ok() {
+                // in place (no allocation per frame); the batch's MeshFilter keeps its mesh
                 if let Ok(mut r) = ctx.world.get::<&mut MeshRenderer>(entity) {
-                    *r = MeshRenderer::new(mesh_id, material).with_layer(key.1).with_sorting_order(key.0);
+                    r.set_material(material);
+                    r.layer = key.1.min(31);
+                    r.sorting_order = key.0;
+                    r.visible = true;
                 }
                 used += 1;
             }

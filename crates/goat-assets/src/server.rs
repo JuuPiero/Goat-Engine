@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use goat_gfx::{GfxError, GraphicsBackend, MaterialDesc, MaterialId, MeshData, MeshId, TextureData, TextureId};
-use goat_runtime::{Context, Entity, GlobalTransform, MeshRenderer, Name, Parent, Plugin, Transform, World};
+use goat_runtime::{Context, Entity, GlobalTransform, MeshFilter, MeshRenderer, Name, Parent, Plugin, Transform, World};
 
 use crate::image::{decode_png, to_power_of_two, TextureImport};
 use crate::material::MaterialFile;
@@ -27,11 +27,12 @@ pub struct ModelNodes(pub Vec<Option<Entity>>);
 pub struct SkinnedMesh {
     pub model: String,
     pub mesh: usize,
-    pub primitive: usize,
     pub skin: usize,
     /// The model instance's root (holds [`ModelNodes`]).
     pub root: Entity,
-    pub instance: Option<MeshId>,
+    /// Per submesh (= the model mesh's primitive), this instance's own deformed mesh (made on
+    /// the first skinning; it replaces the shared bind-pose mesh in the entity's [`MeshFilter`]).
+    pub instances: Vec<Option<MeshId>>,
 }
 
 /// Put on the root entity of a spawned model (scenes save the reference, not the hierarchy).
@@ -114,6 +115,15 @@ impl AssetServer {
     }
     pub fn key_of_mesh(&self, id: MeshId) -> Option<&str> {
         self.mesh_keys.get(&id).map(String::as_str)
+    }
+    /// The key of a [`MeshFilter`]'s mesh: a one-submesh mesh's own key, or `<model>#mesh:<m>`
+    /// when the submeshes are all the primitives of a model mesh.
+    pub fn key_of_submeshes(&self, submeshes: &[MeshId]) -> Option<String> {
+        match submeshes {
+            [] => None,
+            [one] => self.key_of_mesh(*one).map(str::to_string),
+            many => self.models.iter().find_map(|(file, m)| m.meshes.iter().position(|ids| ids.as_slice() == many).map(|mi| format!("{file}#mesh:{mi}"))),
+        }
     }
 
     /// Names resources made in code (`runtime:...`) so scenes can refer to them.
@@ -606,6 +616,21 @@ impl AssetServer {
         Ok(id)
     }
 
+    /// The submeshes of a mesh key (a [`MeshFilter`]'s mesh): `<model>#mesh:<m>` = every primitive of
+    /// that model mesh (one per material), `<model>#mesh:<m>:<p>` / `builtin:*` = one.
+    pub fn mesh_filter(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<Vec<MeshId>, AssetError> {
+        let key: &str = &self.io.canonical(key);
+        if let Some((file, sub)) = key.split_once('#') {
+            let parts: Vec<&str> = sub.strip_prefix("mesh:").unwrap_or("").split(':').collect();
+            if parts.len() == 1 {
+                let m = parts[0].parse::<usize>().map_err(|_| AssetError::Format(key.into(), "bad sub-asset".into()))?;
+                self.model(gfx, file)?;
+                return self.models[file].meshes.get(m).cloned().ok_or_else(|| AssetError::Format(key.into(), "no such mesh".into()));
+            }
+        }
+        Ok(vec![self.mesh(gfx, key)?])
+    }
+
     /// Loads a glTF / GLB and uploads its meshes and materials.
     pub fn model(&mut self, gfx: &mut dyn GraphicsBackend, key: &str) -> Result<&LoadedModel, AssetError> {
         let key: &str = &self.io.canonical(key);
@@ -689,11 +714,15 @@ impl AssetServer {
                 let data = load_model(&self.io, file_of(key))?;
                 if let Some((_, sub)) = key.split_once('#') {
                     let mut parts = sub.strip_prefix("mesh:").unwrap_or("").split(':').map(|s| s.parse::<usize>().ok());
-                    let (Some(Some(mi)), pi) = (parts.next(), parts.next().flatten().unwrap_or(0)) else {
+                    let (Some(Some(mi)), pi) = (parts.next(), parts.next().flatten()) else {
                         return Err(AssetError::Format(key.into(), "bad sub-asset".into()));
                     };
-                    let p = data.meshes.get(mi).and_then(|ps| ps.get(pi)).ok_or_else(|| AssetError::Format(key.into(), "no such mesh".into()))?;
-                    add(&p.mesh, &Mat4::IDENTITY);
+                    let prims = data.meshes.get(mi).ok_or_else(|| AssetError::Format(key.into(), "no such mesh".into()))?;
+                    match pi {
+                        // one primitive, or every submesh of the mesh
+                        Some(pi) => add(&prims.get(pi).ok_or_else(|| AssetError::Format(key.into(), "no such mesh".into()))?.mesh, &Mat4::IDENTITY),
+                        None => prims.iter().for_each(|p| add(&p.mesh, &Mat4::IDENTITY)),
+                    }
                 } else {
                     let mut stack: Vec<(usize, Mat4)> = data.roots.iter().map(|&r| (r, Mat4::IDENTITY)).collect();
                     while let Some((n, parent)) = stack.pop() {
@@ -750,17 +779,12 @@ impl AssetServer {
             let e = world.spawn((Name(n.name.clone()), t, GlobalTransform::default(), Parent(parent)));
             nodes[node] = Some(e);
             if let Some(mi) = n.mesh {
+                // Unity: one MeshFilter (the mesh, a submesh per material) + one MeshRenderer (its materials)
                 let prims = &model.data.meshes[mi];
-                let renderer = |pi: usize| {
-                    let material = prims[pi].material.and_then(|m| model.materials.get(m).copied()).unwrap_or(fallback);
-                    MeshRenderer::new(model.meshes[mi][pi], material)
-                };
-                for pi in 0..prims.len() {
-                    let target = if prims.len() == 1 { e } else { world.spawn((Name(format!("{} [{pi}]", n.name)), Transform::default(), GlobalTransform::default(), Parent(e))) };
-                    let _ = world.insert_one(target, renderer(pi));
-                    if let (Some(skin), Some(_)) = (n.skin, &prims[pi].skin_vertices) {
-                        let _ = world.insert_one(target, SkinnedMesh { model: file.to_string(), mesh: mi, primitive: pi, skin, root, instance: None });
-                    }
+                let materials = prims.iter().map(|p| p.material.and_then(|m| model.materials.get(m).copied()).unwrap_or(fallback)).collect();
+                let _ = world.insert(e, (MeshFilter::with_submeshes(model.meshes[mi].clone()), MeshRenderer::with_materials(materials)));
+                if let Some(skin) = n.skin.filter(|_| prims.iter().any(|p| p.skin_vertices.is_some())) {
+                    let _ = world.insert_one(e, SkinnedMesh { model: file.to_string(), mesh: mi, skin, root, instances: vec![None; prims.len()] });
                 }
             }
             for &c in &n.children {
