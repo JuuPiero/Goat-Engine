@@ -113,6 +113,7 @@ fn screen(api: &mut Api, _: Entity, _: &[Value]) -> Result<Value, String> {
         "width": main.map(|m| m.width).unwrap_or(0),
         "height": main.map(|m| m.height).unwrap_or(0),
         "displays": d.iter().map(|x| json!({ "width": x.width, "height": x.height, "stereo": x.stereo })).collect::<Vec<_>>(),
+        "slider3D": api.ctx.input.slider_3d,
     }))
 }
 

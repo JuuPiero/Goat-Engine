@@ -73,6 +73,10 @@ export class EditorEngine {
     frame(dt: number): void;
     frame_selected(): void;
     /**
+     * Device Simulator: a button of the simulated device ("A", "Start", "Up"...).
+     */
+    game_button(name: string, down: boolean): void;
+    /**
      * The pointer over the Game view (`nx, ny` 0..1 over its canvas, negative = outside;
      * `buttons` = bit 0 left, 1 right, 2 middle): display pixels for the game (the touch screen in
      * the 3DS layout, like the desktop player).
@@ -82,6 +86,10 @@ export class EditorEngine {
      * Mouse wheel over the Game view (lines; y > 0 = away from the user).
      */
     game_scroll(dx: number, dy: number): void;
+    /**
+     * Device Simulator: circle pad (`right` false) / C-stick, -1..1 with y up.
+     */
+    game_stick(right: boolean, x: number, y: number): void;
     /**
      * Starts a gizmo drag if (x, y) (0..1 of a w × h view) is on a handle.
      */
@@ -197,6 +205,10 @@ export class EditorEngine {
      */
     set_dual_3ds(on: boolean): void;
     /**
+     * Device Simulator: room between the 3DS screens (logical pixels) — the device's hinge.
+     */
+    set_dual_gap(gap: number): void;
+    /**
      * Edit Collider ("collider") / Edit Points ("points") on the selected object, "" = off.
      */
     set_edit_tool(tool: string): void;
@@ -223,6 +235,11 @@ export class EditorEngine {
      * The canvas shows the Scene view (true) or the Game view (false).
      */
     set_scene_view(on: boolean): void;
+    /**
+     * Device Simulator: the 3D slider (0..1): the game reads it (`Screen.slider3D`) and the top
+     * screen previews the stereo pair as a red / cyan anaglyph (`anaglyph` false = slider only).
+     */
+    set_slider_3d(v: number, anaglyph: boolean): void;
     /**
      * Sets the tag ("Untagged" / empty removes it).
      */
@@ -299,8 +316,10 @@ export interface InitOutput {
     readonly editorengine_edit_delete: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly editorengine_frame: (a: number, b: number) => void;
     readonly editorengine_frame_selected: (a: number) => void;
+    readonly editorengine_game_button: (a: number, b: number, c: number, d: number) => void;
     readonly editorengine_game_pointer: (a: number, b: number, c: number, d: number) => void;
     readonly editorengine_game_scroll: (a: number, b: number, c: number) => void;
+    readonly editorengine_game_stick: (a: number, b: number, c: number, d: number) => void;
     readonly editorengine_gizmo_begin: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly editorengine_gizmo_drag: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly editorengine_gizmo_end: (a: number) => void;
@@ -341,6 +360,7 @@ export interface InitOutput {
     readonly editorengine_set_active: (a: number, b: number, c: number, d: number) => void;
     readonly editorengine_set_component: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly editorengine_set_dual_3ds: (a: number, b: number) => void;
+    readonly editorengine_set_dual_gap: (a: number, b: number) => void;
     readonly editorengine_set_edit_tool: (a: number, b: number, c: number) => void;
     readonly editorengine_set_error_pause: (a: number, b: number) => void;
     readonly editorengine_set_gizmo_mode: (a: number, b: number, c: number) => void;
@@ -350,6 +370,7 @@ export interface InitOutput {
     readonly editorengine_set_parent: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_set_paused: (a: number, b: number) => void;
     readonly editorengine_set_scene_view: (a: number, b: number) => void;
+    readonly editorengine_set_slider_3d: (a: number, b: number, c: number) => void;
     readonly editorengine_set_tag: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly editorengine_set_tool_handles: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly editorengine_set_transform: (a: number, b: number, c: number, d: number, e: number) => [number, number];

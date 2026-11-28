@@ -234,6 +234,8 @@ pub struct EditorCore {
     /// Buttons held (Play mode input), by Button index.
     held: [bool; 14],
     axes: [f32; 4],
+    /// Device Simulator: the 3D slider given to the game (`Input::slider_3d`).
+    pub slider_3d: f32,
     pub aspect: f32,
 }
 
@@ -280,6 +282,7 @@ impl EditorCore {
             orbit3d: None,
             held: [false; 14],
             axes: [0.0; 4],
+            slider_3d: 0.0,
             aspect: 16.0 / 9.0,
         }
     }
@@ -651,6 +654,22 @@ impl EditorCore {
         }
     }
 
+    /// Device Simulator: a button of the simulated device (pressed with the mouse / touch).
+    /// Names = the runtime's buttons ("A", "B", "X", "Y", "L", "R", "ZL", "ZR", "Start", "Select",
+    /// "Up", "Down", "Left", "Right").
+    pub fn game_button(&mut self, name: &str, down: bool) {
+        if let Some(b) = Button::ALL.iter().find(|b| format!("{b:?}") == name) {
+            self.held[*b as usize] = down;
+        }
+    }
+
+    /// Device Simulator: the circle pad / left stick (-1..1, y up) or the right stick (C-stick).
+    pub fn game_stick(&mut self, right: bool, x: f32, y: f32) {
+        let i = if right { 2 } else { 0 };
+        self.axes[i] = x.clamp(-1.0, 1.0);
+        self.axes[i + 1] = y.clamp(-1.0, 1.0);
+    }
+
     // ------------------------------------------------------------------ frame
     /// One frame on one canvas: the Scene view or the Game view, whichever `view.scene_view` says.
     pub fn frame(&mut self, gfx: &mut dyn GraphicsBackend, dt: f32) {
@@ -756,6 +775,9 @@ impl EditorCore {
             }
             play.input.set_axis(Axis::LeftX, self.axes[0]);
             play.input.set_axis(Axis::LeftY, self.axes[1]);
+            play.input.set_axis(Axis::RightX, self.axes[2]);
+            play.input.set_axis(Axis::RightY, self.axes[3]);
+            play.input.slider_3d = self.slider_3d;
             // the Game view's keyboard / mouse (pointer in display pixels)
             let gi = &mut self.game_input;
             play.input.keys = gi.keys.clone();

@@ -42,6 +42,12 @@ export interface EditorState {
   /// Play mode paused (Unity's Pause).
   paused: boolean;
   dual3ds: boolean;
+  /** Game view tab: the plain Game view or the Device Simulator (Unity's Game / Simulator). */
+  gameMode: 'game' | 'simulator';
+  /** Device Simulator: device id (simulator.ts SIM_DEVICES), 3D slider, anaglyph preview. */
+  simDevice: string;
+  slider3d: number;
+  anaglyph: boolean;
   viewTab: 'scene' | 'game';
   /// The controller open in the Animator window.
   controller: string | null;
@@ -68,10 +74,10 @@ export interface EditorState {
   editTool: '' | 'collider' | 'points';
 }
 
-let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, entities: [], renaming: null, undoLabel: null, redoLabel: null, contextMenu: null, hierarchyRev: 0, inspectorRev: 0, playing: false, paused: false, dual3ds: true, viewTab: 'scene', controller: null, tool: 'move', pivotCenter: false, toolLocal: false, view2d: false, viewOrtho: false, showGrid: true, showGizmos: true, gameSize: '3ds', gameZoom: 1, gameStats: false, stats: '', engineError: null, engineReady: false, prefabStack: [], editTool: '' };
+let state: EditorState = { project: null, dir: '', selection: [], dropTarget: null, logs: [], revision: 0, clipboard: null, scene: null, sceneDirty: false, entity: null, entities: [], renaming: null, undoLabel: null, redoLabel: null, contextMenu: null, hierarchyRev: 0, inspectorRev: 0, playing: false, paused: false, dual3ds: true, viewTab: 'scene', controller: null, tool: 'move', pivotCenter: false, toolLocal: false, view2d: false, viewOrtho: false, showGrid: true, showGizmos: true, gameSize: '3ds', gameMode: 'game', simDevice: 'n3dsxl', slider3d: 0, anaglyph: true, gameZoom: 1, gameStats: false, stats: '', engineError: null, engineReady: false, prefabStack: [], editTool: '' };
 /// Editor preferences remembered between sessions (per machine, like Unity's EditorPrefs).
 const PREFS_KEY = 'goat.editor.prefs.v1';
-const PREF_KEYS = ['tool', 'pivotCenter', 'toolLocal', 'showGrid', 'showGizmos', 'gameSize', 'gameZoom', 'gameStats', 'dual3ds'] as const;
+const PREF_KEYS = ['tool', 'pivotCenter', 'toolLocal', 'showGrid', 'showGizmos', 'gameSize', 'gameZoom', 'gameStats', 'dual3ds', 'gameMode', 'simDevice', 'slider3d', 'anaglyph'] as const;
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as Partial<EditorState>;
   for (const k of PREF_KEYS) if (k in saved) (state as unknown as Record<string, unknown>)[k] = saved[k];

@@ -75,6 +75,9 @@ pub struct Input {
     mouse_prev: [bool; 3],
     /// Mouse wheel this frame (y > 0 = away from the user, Unity's mouseScrollDelta).
     pub scroll: Vec2,
+    /// The 3DS's 3D depth slider (0 = 2D .. 1 = full depth; the editor's Device Simulator sets it,
+    /// other platforms leave 0). Scripts: `Screen.slider3D`.
+    pub slider_3d: f32,
 }
 
 impl Input {

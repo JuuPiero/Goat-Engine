@@ -150,7 +150,8 @@ Duyệt bảng "Đối chiếu với Unity" và từng phần README / API của
 **B. Editor**
 - ✅ Hub, Scene / Game view độc lập (kể cả khi Play), gizmo, Undo, Prefab Mode, Animation / Animator / Profiler, Build / Project Settings
 - ✅ Edit Collider (kéo mặt / cạnh, bán kính, đầu capsule, điểm polygon / edge), Edit Points của Line Renderer (thêm / xoá điểm)
-- ⬜ Device Simulator (khung máy, safe area), cửa sổ Stats đầy đủ
+- ✅ Device Simulator họ 3DS (New 3DS XL / 3DS / New 2DS XL / 2DS: nút, circle pad, C-stick, màn hình cảm ứng, khoảng cách hai màn hình, thanh trượt 3D + xem trước anaglyph, `Screen.slider3D`)
+- ⬜ Device Simulator cho điện thoại (safe area, xoay màn hình), cửa sổ Stats đầy đủ
 - ⬜ Find References In Scene, khoá Inspector, Sprite Editor (sprite Multiple, border 9-slice), Anchor Presets của RectTransform, tool Rect (T)
 - ⬜ Editor scripting kiểu Unity: `@menuItem`, `EditorWindow` + `onGUI`, `@customEditor`, `PropertyDrawer`, `EditorGUILayout`, `SerializedObject`, `Undo`; `onGUI` trên component
 - ⬜ Package Manager (package của project + package chính thức), xuất / nhập `.goatpackage` (như `.unitypackage`)

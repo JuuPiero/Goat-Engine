@@ -1330,6 +1330,9 @@ export const Screen = {
   get height() { return N.call('Screen.info', -1, []).height; },
   /** Every display ({ width, height, stereo }); the 3DS has two. */
   get displays() { return N.call('Screen.info', -1, []).displays; },
+  /** The 3DS's 3D depth slider: 0 (2D) .. 1 (full depth); 0 on other platforms. The editor's
+   *  Device Simulator moves it. Lower effects / depth with it, like 3DS games do. */
+  get slider3D() { return N.call('Screen.info', -1, []).slider3D ?? 0; },
 };
 
 /** Unity's Camera (the Camera component of an object): Camera.main, rays and screen points. */

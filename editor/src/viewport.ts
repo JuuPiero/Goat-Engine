@@ -8,6 +8,8 @@ export type ViewMode = 'scene' | 'game';
 
 /// Game view sizes (Unity's aspect menu). `3ds` = the two 3DS screens (chosen when Play starts);
 /// an aspect fits the largest box into the view; a resolution renders that many pixels, scaled to fit.
+import { simDevice, simLayout } from './simulator';
+
 export const GAME_SIZES: { id: string; label: string; aspect?: number; px?: [number, number] }[] = [
   { id: '3ds', label: 'Nintendo 3DS (400×240 + 320×240)' },
   { id: 'free', label: 'Free Aspect' },
@@ -102,7 +104,16 @@ export function relayout(m: ViewMode = 'scene') {
   const dpr = window.devicePixelRatio || 1;
   const s = getState();
   const size = m === 'game' ? (s.dual3ds ? '3ds' : s.gameSize) : 'free';
-  const r = gameRect(size === '3ds' ? 'free' : size, Math.max(1, host.clientWidth), Math.max(1, host.clientHeight), dpr, m === 'game' ? s.gameZoom : 1);
+  const [hw, hh] = [Math.max(1, host.clientWidth), Math.max(1, host.clientHeight)];
+  let r = gameRect(size === '3ds' ? 'free' : size, hw, hh, dpr, m === 'game' ? s.gameZoom : 1);
+  // Device Simulator: the canvas spans the device's screens, the device picture is drawn over it
+  const device = m === 'game' && s.gameMode === 'simulator' ? host.querySelector<SVGElement>('.g-sim-device') : null;
+  if (device) {
+    const L = simLayout(simDevice(s.simDevice), hw, hh, s.gameZoom);
+    Object.assign(device.style, { left: `${L.device.x}px`, top: `${L.device.y}px`, width: `${L.device.w}px`, height: `${L.device.h}px` });
+    const c = L.canvas;
+    r = { x: c.x, y: c.y, w: c.w, h: c.h, pw: Math.round(c.w * dpr), ph: Math.round(c.h * dpr) };
+  }
   Object.assign(c.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
   const w = Math.max(1, r.pw), h = Math.max(1, r.ph);
   if (c.width !== w || c.height !== h) {

@@ -301,6 +301,8 @@ namespace GoatEngine
     {
         public static int width => 0;
         public static int height => 0;
+        /// <summary>The 3DS's 3D depth slider: 0 (2D) .. 1 (full depth); 0 elsewhere.</summary>
+        public static float slider3D => 0;
     }
 
     /// <summary>The Camera of an object: Camera.main, rays and screen points.</summary>

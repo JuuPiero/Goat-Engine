@@ -16,6 +16,8 @@ import { frameSelected, selectEntities } from '../selection';
 import { afterChange } from '../commands';
 import { exitPrefab, getEngine, saveScene, startPlay, stopPlay } from '../engine';
 import { getState, log, setState, useStore } from '../store';
+import { DeviceSimulator } from './DeviceSimulator';
+import { SIM_DEVICES, simDevice } from '../simulator';
 import { afterFrame, attach, GAME_SIZES, relayout, setVisible, viewMode, type ViewMode } from '../viewport';
 
 /// The view's own canvas in this panel; the engine draws it while the panel is on screen.
@@ -484,7 +486,21 @@ export function GameView({ api }: { api: DockviewPanelApi }) {
   const zoom = useStore((s) => s.gameZoom);
   const showStats = useStore((s) => s.gameStats);
   const stats = useStore((s) => s.stats);
-  useEffect(() => relayout('game'), [dual, size, zoom, owner]);
+  const mode = useStore((s) => s.gameMode);
+  const deviceId = useStore((s) => s.simDevice);
+  const slider = useStore((s) => s.slider3d);
+  const anaglyph = useStore((s) => s.anaglyph);
+  const ready = useStore((s) => s.engineReady);
+  const sim = mode === 'simulator';
+  const device = simDevice(deviceId);
+  useEffect(() => relayout('game'), [dual, size, zoom, owner, mode, deviceId]);
+  // the simulated device → the engine: room between the screens (its hinge), the 3D slider
+  useEffect(() => {
+    const e = getEngine();
+    if (!e) return;
+    e.set_dual_gap(sim ? device.gap : 0);
+    e.set_slider_3d(sim && device.stereo ? slider : 0, anaglyph);
+  }, [ready, sim, device, slider, anaglyph]);
 
   // keyboard: the 3DS buttons while playing (when the Game view holds the canvas)
   useEffect(() => {
@@ -512,8 +528,44 @@ export function GameView({ api }: { api: DockviewPanelApi }) {
   return (
     <div className="g-panel g-viewpanel">
       <div className="g-viewbar">
-        <span className="g-tbtn on">Game</span>
+        <button className={`g-tbtn${sim ? '' : ' on'}`} onClick={() => setState({ gameMode: 'game' })} title="Game view">
+          Game
+        </button>
+        <button
+          className={`g-tbtn${sim ? ' on' : ''}`}
+          title="Device Simulator: the game inside a 3DS-family device (buttons, circle pad, touch screen, 3D slider)"
+          onClick={() => {
+            if (playing && !dual) return log('the 3DS screen layout is chosen when Play starts', 'warn');
+            setState({ gameMode: 'simulator', dual3ds: true });
+          }}
+        >
+          Simulator
+        </button>
         <span className="g-viewbar-sep" />
+        {sim ? (
+          <>
+            <select className="g-input g-select g-aspect" title="Simulated device" value={device.id} onChange={(e) => setState({ simDevice: e.target.value })}>
+              {SIM_DEVICES.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
+            <span className="g-viewbar-label" title={device.stereo ? 'The 3D depth slider (Screen.slider3D)' : 'This device has no 3D screen'}>
+              3D
+            </span>
+            <input type="range" className="g-scale g-sim-3d" min={0} max={1} step={0.01} value={device.stereo ? slider : 0} disabled={!device.stereo} onChange={(e) => setState({ slider3d: +e.target.value })} />
+            <button
+              className={`g-tbtn${anaglyph ? ' on' : ''}`}
+              disabled={!device.stereo}
+              onClick={() => setState({ anaglyph: !anaglyph })}
+              title="Preview the top screen's 3D as a red / cyan anaglyph (needs red-cyan glasses); off = the game still reads the slider"
+            >
+              Anaglyph
+            </button>
+          </>
+        ) : (
+        <>
         <span className="g-viewbar-label">Display 1</span>
         <select
           className="g-input g-select g-aspect"
@@ -531,6 +583,8 @@ export function GameView({ api }: { api: DockviewPanelApi }) {
             </option>
           ))}
         </select>
+        </>
+        )}
         <span className="g-viewbar-label">Scale</span>
         <input type="range" className="g-scale" min={0.25} max={1} step={0.05} value={zoom} onChange={(e) => setState({ gameZoom: +e.target.value })} title="Game view zoom" />
         <span className="g-viewbar-label">{zoom.toFixed(2)}x</span>
@@ -556,7 +610,7 @@ export function GameView({ api }: { api: DockviewPanelApi }) {
         onWheel={(ev) => getEngine()?.game_scroll(-ev.deltaX / 100, -ev.deltaY / 100)}
         onContextMenu={(ev) => playing && ev.preventDefault()}
       >
-
+        {sim && owner && <DeviceSimulator device={device} slider={device.stereo ? slider : 0} onSlider={(v) => setState({ slider3d: v })} />}
         {owner && showStats && <div className="g-stats">{stats.replace(/ · /g, '\n')}</div>}
       </div>
     </div>

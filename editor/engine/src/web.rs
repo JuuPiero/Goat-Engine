@@ -485,6 +485,25 @@ impl EditorEngine {
         }
     }
 
+    /// Device Simulator: a button of the simulated device ("A", "Start", "Up"...).
+    pub fn game_button(&mut self, name: &str, down: bool) {
+        self.core.game_button(name, down);
+    }
+    /// Device Simulator: circle pad (`right` false) / C-stick, -1..1 with y up.
+    pub fn game_stick(&mut self, right: bool, x: f32, y: f32) {
+        self.core.game_stick(right, x, y);
+    }
+    /// Device Simulator: room between the 3DS screens (logical pixels) — the device's hinge.
+    pub fn set_dual_gap(&mut self, gap: f32) {
+        self.gfx.set_dual_gap(gap);
+    }
+    /// Device Simulator: the 3D slider (0..1): the game reads it (`Screen.slider3D`) and the top
+    /// screen previews the stereo pair as a red / cyan anaglyph (`anaglyph` false = slider only).
+    pub fn set_slider_3d(&mut self, v: f32, anaglyph: bool) {
+        self.core.slider_3d = v.clamp(0.0, 1.0);
+        self.gfx.set_stereo_preview(if anaglyph { v } else { 0.0 });
+    }
+
     /// Mouse wheel over the Game view (lines; y > 0 = away from the user).
     pub fn game_scroll(&mut self, dx: f32, dy: f32) {
         self.core.game_input.scroll += goat_core::math::Vec2::new(dx, dy);

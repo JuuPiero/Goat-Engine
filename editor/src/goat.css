@@ -156,3 +156,14 @@
 /* Edit Collider / Edit Points (Unity's toggle at the top of the component) */
 .edit-tool-row { justify-content: flex-start; margin-bottom: 4px; }
 .edit-tool-row button.active { background: var(--g-accent, #2f6dbd); color: #fff; border-color: transparent; }
+
+/* Device Simulator */
+.g-sim-device { position: absolute; z-index: 1; pointer-events: none; user-select: none; overflow: visible; filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.55)); }
+.g-sim-device .g-sim-btn, .g-sim-device .g-sim-stick { pointer-events: auto; cursor: pointer; }
+.g-sim-device .g-sim-btn.down > :first-child { fill: #6b7080; }
+.g-sim-device .g-sim-btn:hover > :first-child { filter: brightness(1.25); }
+.g-sim-label { font: 600 11px sans-serif; fill: #c8ccd6; text-anchor: middle; pointer-events: none; }
+.g-sim-face { font: 700 14px sans-serif; fill: #d6dae3; text-anchor: middle; pointer-events: none; }
+.g-sim-small { font: 600 8.5px sans-serif; fill: #9aa0ad; text-anchor: middle; letter-spacing: 0.5px; pointer-events: none; }
+.g-sim-3d { width: 70px; }
+.g-gameview .g-stats { z-index: 3; }

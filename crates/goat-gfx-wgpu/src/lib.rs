@@ -244,6 +244,8 @@ struct PipelineKey {
     outline: bool,
     /// 0 = the standard material, else a custom shader's index + 1.
     shader: u32,
+    /// Colour writes: 0 all, 1 red (left eye), 2 green + blue (right eye) — the anaglyph stereo preview.
+    mask: u8,
 }
 
 struct RenderTarget {
@@ -263,6 +265,8 @@ struct Planned {
     clear_depth: bool,
     frame_off: u32,
     objects: Vec<(MeshId, MaterialId, u32, Option<TextureId>)>,
+    /// colour write mask of the pipelines (see `PipelineKey::mask`)
+    mask: u8,
 }
 
 /// What belongs to one drawing surface (window / canvas). The active one lives in the backend's
@@ -286,6 +290,12 @@ pub struct WgpuBackend {
     config: wgpu::SurfaceConfiguration,
     adapter_name: String,
     layout: DisplayLayout,
+    /// Dual3ds: logical pixels between the top and bottom screens (the editor's Device Simulator
+    /// leaves room for the device's hinge; 0 = the screens touch, like the desktop player).
+    dual_gap: f32,
+    /// Dual3ds: the 3D slider of the simulated device (0..1): > 0 previews the top screen's stereo
+    /// as a red / cyan anaglyph with the 3DS's own stereo projection.
+    stereo_preview: f32,
     depth: wgpu::TextureView,
     shader: wgpu::ShaderModule,
     clear_shader: wgpu::ShaderModule,
@@ -533,6 +543,8 @@ impl WgpuBackend {
             active: 0,
             adapter_name,
             layout,
+            dual_gap: 0.0,
+            stereo_preview: 0.0,
             depth,
             shader,
             clear_shader,
@@ -627,6 +639,20 @@ impl WgpuBackend {
         self.layout = layout;
     }
 
+    /// Dual3ds: room between the two screens, in logical (3DS) pixels.
+    pub fn set_dual_gap(&mut self, gap: f32) {
+        self.dual_gap = gap.max(0.0);
+    }
+
+    /// Dual3ds: the simulated 3D slider (0 = off).
+    pub fn set_stereo_preview(&mut self, slider: f32) {
+        self.stereo_preview = slider.clamp(0.0, 1.0);
+    }
+
+    fn stereo_active(&self) -> bool {
+        self.layout == DisplayLayout::Dual3ds && self.stereo_preview > 0.0
+    }
+
     pub fn layout(&self) -> DisplayLayout {
         self.layout
     }
@@ -638,28 +664,29 @@ impl WgpuBackend {
             (DisplayLayout::Window, Display::Main) => Some((0.0, 0.0, w, h)),
             (DisplayLayout::Window, Display::Secondary) => None,
             (DisplayLayout::Dual3ds, _) => {
-                // 400×480 logical, scaled uniformly and centered
-                let s = (w / 400.0).min(h / 480.0);
+                // 400×(480 + gap) logical, scaled uniformly and centered
+                let total = 480.0 + self.dual_gap;
+                let s = (w / 400.0).min(h / total);
                 let ox = (w - 400.0 * s) * 0.5;
-                let oy = (h - 480.0 * s) * 0.5;
+                let oy = (h - total * s) * 0.5;
                 Some(match d {
                     Display::Main => (ox, oy, 400.0 * s, 240.0 * s),
-                    Display::Secondary => (ox + 40.0 * s, oy + 240.0 * s, 320.0 * s, 240.0 * s),
+                    Display::Secondary => (ox + 40.0 * s, oy + (240.0 + self.dual_gap) * s, 320.0 * s, 240.0 * s),
                 })
             }
         }
     }
 
-    fn pipeline(&mut self, m: &MaterialDesc) {
-        self.pipeline_with(m, false);
+    fn pipeline(&mut self, m: &MaterialDesc, mask: u8) {
+        self.pipeline_with(m, false, mask);
         if m.outline_width > 0.0 {
-            self.pipeline_with(m, true);
+            self.pipeline_with(m, true, mask);
         }
     }
 
-    fn pipeline_with(&mut self, m: &MaterialDesc, outline: bool) {
+    fn pipeline_with(&mut self, m: &MaterialDesc, outline: bool, mask: u8) {
         let custom = if outline { None } else { m.shader.and_then(|s| self.gpu_shaders.get(&s.index()).map(|g| (s, g))) };
-        let key = PipelineKey { blend: m.blend as u8, cull: m.cull as u8, depth_write: m.depth_write, depth_test: m.depth_test, outline, shader: custom.map(|(s, _)| s.index() + 1).unwrap_or(0) };
+        let key = PipelineKey { blend: m.blend as u8, cull: m.cull as u8, depth_write: m.depth_write, depth_test: m.depth_test, outline, shader: custom.map(|(s, _)| s.index() + 1).unwrap_or(0), mask };
         let (device, layout, format) = (&self.device, &self.pipeline_layout, self.config.format);
         let (shader, vs, fs) = match custom {
             Some((_, g)) => (&g.module, if g.custom_vertex { "vs_custom" } else { "vs_main" }, "fs_custom"),
@@ -690,7 +717,7 @@ impl WgpuBackend {
                     module: shader,
                     entry_point: Some(fs),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: match mask { 1 => wgpu::ColorWrites::RED, 2 => wgpu::ColorWrites::GREEN | wgpu::ColorWrites::BLUE, _ => wgpu::ColorWrites::ALL } })],
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
@@ -792,7 +819,7 @@ impl WgpuBackend {
                 }
                 let material_group = env.and_then(|e| mat.probe_groups.get(&e.index())).unwrap_or(&mat.bind_group);
                 let shader = mat.desc.shader.filter(|s| self.gpu_shaders.contains_key(&s.index())).map(|s| s.index() + 1).unwrap_or(0);
-                let key = PipelineKey { blend: mat.desc.blend as u8, cull: mat.desc.cull as u8, depth_write: mat.desc.depth_write, depth_test: mat.desc.depth_test, outline: false, shader };
+                let key = PipelineKey { blend: mat.desc.blend as u8, cull: mat.desc.cull as u8, depth_write: mat.desc.depth_write, depth_test: mat.desc.depth_test, outline: false, shader, mask: p.mask };
                 let Some(pipe) = self.pipelines.get(&key) else { continue };
                 pass.set_pipeline(pipe);
                 pass.set_bind_group(1, object_bg, &[off]);
@@ -976,6 +1003,22 @@ fn upload_cubemap(device: &wgpu::Device, queue: &wgpu::Queue, faces: &[TextureDa
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default() });
     let view = tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::Cube), ..Default::default() });
     GpuTexture { view, sampler, texture: tex }
+}
+
+/// One eye of the 3DS's stereo projection (citro3d `Mtx_PerspStereoTilt`: interocular distance
+/// `eye × slider / 3`, zero parallax at 2 units): the camera moves half of it sideways and the
+/// frustum is skewed so the screen plane stays put. `eye` 0 = mono.
+fn stereo_eye(view: Mat4, proj: Mat4, eye: f32, slider: f32) -> (Mat4, Mat4) {
+    if eye == 0.0 || slider <= 0.0 {
+        return (view, proj);
+    }
+    const SCREEN: f32 = 2.0;
+    let shift = eye * slider / 3.0 * 0.5;
+    let eye_view = Mat4::from_translation(Vec3::new(-shift, 0.0, 0.0)) * view;
+    let mut p = proj;
+    // x_clip += P00 · shift / screen · w_clip  (w_clip = −z_view)
+    p.z_axis.x -= proj.x_axis.x * shift / SCREEN;
+    (eye_view, p)
 }
 
 fn projection_matrix(p: Projection, aspect: f32) -> Mat4 {
@@ -1248,7 +1291,10 @@ impl GraphicsBackend for WgpuBackend {
         let draws: usize = views.iter().flat_map(|v| v.items.iter()).map(|it| passes_of(it.material)).sum();
         let frame_slots = (std::mem::size_of::<FrameUniform>() as u64).div_ceil(UNIFORM_ALIGN);
         let object_slots = (std::mem::size_of::<ObjectUniform>() as u64).div_ceil(UNIFORM_ALIGN);
-        let needed = ((views.len() as u64) * (1 + frame_slots) + draws as u64 * object_slots + 1) * UNIFORM_ALIGN;
+        // the stereo preview plans the top screen's views twice (frame + object uniforms per eye):
+        // room for a second copy of everything is an upper bound
+        let eyes_extra = if self.stereo_active() { views.len() as u64 * frame_slots + draws as u64 * object_slots } else { 0 };
+        let needed = ((views.len() as u64) * (1 + frame_slots) + eyes_extra + draws as u64 * object_slots + 1) * UNIFORM_ALIGN;
         if needed > self.uniform_capacity {
             self.uniform_capacity = needed.next_power_of_two();
             self.uniforms = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1287,8 +1333,13 @@ impl GraphicsBackend for WgpuBackend {
             // a target can't be sampled while drawn into: its own users skip that view
             let samples_target = |d: &MaterialDesc| v.target.is_some_and(|t| d.texture == Some(t) || d.emissive_texture == Some(t) || d.shader_textures.contains(&Some(t)));
             let clear_off = v.clear.map(|c| put(bytemuck::bytes_of(&c4(c, lin))));
-            let proj = projection_matrix(v.projection, rect.2 / rect.3);
-            let cam_world = v.view.inverse();
+            // the top screen's perspective views with the stereo preview: one pass per eye
+            let stereo = self.stereo_active() && v.target.is_none() && v.display == Display::Main && matches!(v.projection, Projection::Perspective { .. });
+            let eyes: &[f32] = if stereo { &[-1.0, 1.0] } else { &[0.0] };
+            let first_plan = planned.len();
+            for &eye in eyes {
+            let (eye_view, proj) = stereo_eye(v.view, projection_matrix(v.projection, rect.2 / rect.3), eye, self.stereo_preview);
+            let cam_world = eye_view.inverse();
             let cam = cam_world.w_axis.truncate();
             let mut lights = [GpuLight::zeroed(); MAX_LIGHTS];
             for (g, l) in lights.iter_mut().zip(v.lighting.lights.iter().take(MAX_LIGHTS)) {
@@ -1306,7 +1357,7 @@ impl GraphicsBackend for WgpuBackend {
             }
             let fog = v.fog;
             let fu = FrameUniform {
-                view_proj: (proj * v.view).to_cols_array_2d(),
+                view_proj: (proj * eye_view).to_cols_array_2d(),
                 camera_pos: cam.extend(v.lighting.lights.len().min(MAX_LIGHTS) as f32).into(),
                 // w = 1: vertex colors are sRGB-authored and must be linearized (sRGB target)
                 camera_forward: cam_world.transform_vector3(Vec3::NEG_Z).normalize_or(Vec3::NEG_Z).extend(if lin { 1.0 } else { 0.0 }).into(),
@@ -1361,14 +1412,18 @@ impl GraphicsBackend for WgpuBackend {
                 }
               }
             }
-            planned.push(Planned { view: view_index, target: v.target, rect, clear_off, clear_depth: v.clear_depth, frame_off, objects });
+            // the second eye draws over the first: depth cleared, colour kept
+            let (clear_off, clear_depth) = if planned.len() > first_plan { (None, true) } else { (clear_off, v.clear_depth) };
+            let mask = if eye < 0.0 { 1 } else if eye > 0.0 { 2 } else { 0 };
+            planned.push(Planned { view: view_index, target: v.target, rect, clear_off, clear_depth, frame_off, objects, mask });
+            }
         }
         self.queue.write_buffer(&self.uniforms, 0, &data);
 
         // pipelines for every material drawn
-        let mats: Vec<MaterialDesc> = planned.iter().flat_map(|p| p.objects.iter()).filter_map(|(_, m, _, _)| self.gpu_materials.get(&m.index()).map(|g| g.desc.clone())).collect();
-        for m in &mats {
-            self.pipeline(m);
+        let mats: Vec<(MaterialDesc, u8)> = planned.iter().flat_map(|p| p.objects.iter().map(move |o| (o, p.mask))).filter_map(|((_, m, _, _), mask)| self.gpu_materials.get(&m.index()).map(|g| (g.desc.clone(), mask))).collect();
+        for (m, mask) in &mats {
+            self.pipeline(m, *mask);
         }
         // bind groups with reflection probes' cube maps
         let wanted: Vec<(MaterialId, TextureId)> = planned.iter().flat_map(|p| p.objects.iter()).filter_map(|&(_, m, _, env)| env.map(|e| (m, e))).collect();
@@ -1561,5 +1616,43 @@ mod standard_module_tests {
     #[test]
     fn standard_module_is_valid_wgsl() {
         goat_shader::validate_wgsl(&super::standard_wgsl()).unwrap_or_else(|e| panic!("{e}"));
+    }
+}
+
+#[cfg(test)]
+mod stereo_tests {
+    use super::*;
+
+    fn ndc_x(view: Mat4, proj: Mat4, p: Vec3) -> f32 {
+        let c = proj * view * p.extend(1.0);
+        c.x / c.w
+    }
+
+    #[test]
+    fn mono_is_untouched() {
+        let proj = projection_matrix(Projection::Perspective { fov_y_radians: 1.0, near: 0.1, far: 100.0 }, 400.0 / 240.0);
+        let (v, p) = stereo_eye(Mat4::IDENTITY, proj, 0.0, 1.0);
+        assert_eq!(v, Mat4::IDENTITY);
+        assert_eq!(p, proj);
+        let (_, p) = stereo_eye(Mat4::IDENTITY, proj, 1.0, 0.0);
+        assert_eq!(p, proj);
+    }
+
+    #[test]
+    fn screen_plane_has_zero_parallax() {
+        let proj = projection_matrix(Projection::Perspective { fov_y_radians: 1.0, near: 0.1, far: 100.0 }, 400.0 / 240.0);
+        let view = Mat4::look_at_rh(Vec3::new(1.0, 2.0, 5.0), Vec3::ZERO, Vec3::Y);
+        let (lv, lp) = stereo_eye(view, proj, -1.0, 1.0);
+        let (rv, rp) = stereo_eye(view, proj, 1.0, 1.0);
+        // a point 2 units in front of the camera (citro3d's screen distance): same place for both eyes
+        let cam = view.inverse();
+        let on_screen = cam.transform_point3(Vec3::new(0.3, -0.2, -2.0));
+        assert!((ndc_x(lv, lp, on_screen) - ndc_x(rv, rp, on_screen)).abs() < 1e-4);
+        // farther: the right eye sees it more to the right (positive parallax, behind the screen)
+        let far = cam.transform_point3(Vec3::new(0.0, 0.0, -10.0));
+        assert!(ndc_x(rv, rp, far) > ndc_x(lv, lp, far) + 0.01);
+        // nearer: crossed (pops out of the screen)
+        let near = cam.transform_point3(Vec3::new(0.0, 0.0, -1.0));
+        assert!(ndc_x(rv, rp, near) < ndc_x(lv, lp, near) - 0.01);
     }
 }

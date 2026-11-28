@@ -336,6 +336,17 @@ export class EditorEngine {
         wasm.editorengine_frame_selected(this.__wbg_ptr);
     }
     /**
+     * Device Simulator: a button of the simulated device ("A", "Start", "Up"...).
+     * @param {string} name
+     * @param {boolean} down
+     */
+    game_button(name, down) {
+        const val2 = +down;
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.editorengine_game_button(this.__wbg_ptr, ptr0, len0, val2);
+    }
+    /**
      * The pointer over the Game view (`nx, ny` 0..1 over its canvas, negative = outside;
      * `buttons` = bit 0 left, 1 right, 2 middle): display pixels for the game (the touch screen in
      * the 3DS layout, like the desktop player).
@@ -353,6 +364,15 @@ export class EditorEngine {
      */
     game_scroll(dx, dy) {
         wasm.editorengine_game_scroll(this.__wbg_ptr, dx, dy);
+    }
+    /**
+     * Device Simulator: circle pad (`right` false) / C-stick, -1..1 with y up.
+     * @param {boolean} right
+     * @param {number} x
+     * @param {number} y
+     */
+    game_stick(right, x, y) {
+        wasm.editorengine_game_stick(this.__wbg_ptr, right, x, y);
     }
     /**
      * Starts a gizmo drag if (x, y) (0..1 of a w × h view) is on a handle.
@@ -928,6 +948,13 @@ export class EditorEngine {
         wasm.editorengine_set_dual_3ds(this.__wbg_ptr, on);
     }
     /**
+     * Device Simulator: room between the 3DS screens (logical pixels) — the device's hinge.
+     * @param {number} gap
+     */
+    set_dual_gap(gap) {
+        wasm.editorengine_set_dual_gap(this.__wbg_ptr, gap);
+    }
+    /**
      * Edit Collider ("collider") / Edit Points ("points") on the selected object, "" = off.
      * @param {string} tool
      */
@@ -1002,6 +1029,15 @@ export class EditorEngine {
      */
     set_scene_view(on) {
         wasm.editorengine_set_scene_view(this.__wbg_ptr, on);
+    }
+    /**
+     * Device Simulator: the 3D slider (0..1): the game reads it (`Screen.slider3D`) and the top
+     * screen previews the stereo pair as a red / cyan anaglyph (`anaglyph` false = slider only).
+     * @param {number} v
+     * @param {boolean} anaglyph
+     */
+    set_slider_3d(v, anaglyph) {
+        wasm.editorengine_set_slider_3d(this.__wbg_ptr, v, anaglyph);
     }
     /**
      * Sets the tag ("Untagged" / empty removes it).
@@ -2221,7 +2257,7 @@ function __wbg_get_imports() {
             arg0.writeTexture(arg1, arg2, arg3, arg4);
         }, arguments); },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2882, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2883, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_49c42322a91a8d99___convert__closures_____invoke___wasm_bindgen_49c42322a91a8d99___JsValue__core_9b3796e30d99ddb7___result__Result_____wasm_bindgen_49c42322a91a8d99___JsError___true_);
             return ret;
         },

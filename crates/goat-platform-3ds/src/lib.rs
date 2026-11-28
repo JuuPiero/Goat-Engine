@@ -131,6 +131,7 @@ mod imp {
             let dead = |v: i16| if v.abs() < 15 { 0.0 } else { v as f32 / 156.0 };
             input.set_axis(Axis::LeftX, dead(cx));
             input.set_axis(Axis::LeftY, dead(cy));
+            input.slider_3d = unsafe { ctru_sys::osGet3DSliderState() };
             if held.contains(KeyPad::TOUCH) {
                 let (tx, ty) = hid.touch_position();
                 input.pointer = Some(Vec2::new(tx as f32, ty as f32));
