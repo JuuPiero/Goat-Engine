@@ -11,7 +11,7 @@ use goat_assets::AssetServer;
 use goat_core::math::{Mat4, Quat, Vec3};
 use goat_core::Color;
 use goat_gfx::{GraphicsBackend, MaterialId, MeshId, RenderTargetDesc, TextureData, TextureId};
-use goat_runtime::{GlMode, GlSpace, GraphicsQueue, MeshRenderer, PropertyBlock};
+use goat_runtime::{GlMode, GlSpace, GraphicsQueue, PropertyBlock};
 use goat_runtime::Entity;
 use serde_json::{json, Value};
 
@@ -345,8 +345,8 @@ fn tex_encode_png(_: &mut Api, _: Entity, a: &[Value]) -> Result<Value, String> 
 
 /// `Renderer.setPropertyBlock([color] | [])`: an empty block removes it.
 fn set_property_block(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
-    if api.ctx.world.get::<&MeshRenderer>(e).is_err() {
-        return Err("no MeshRenderer on this object".into());
+    if goat_runtime::renderer_visible(api.ctx.world, e).is_none() {
+        return Err("no MeshRenderer / SkinnedMeshRenderer on this object".into());
     }
     match a.first().filter(|v| !v.is_null()) {
         Some(c) => {
@@ -392,7 +392,7 @@ fn set_texture(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
 
 /// `Renderer.getTexture([name])` → key or null.
 fn get_texture(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
-    let m = api.ctx.world.get::<&MeshRenderer>(e).map_err(|_| "no MeshRenderer on this object")?.material().ok_or("the MeshRenderer has no material")?;
+    let m = goat_runtime::renderer_material(api.ctx.world, e).ok_or("no MeshRenderer / SkinnedMeshRenderer with a material on this object")?;
     let t = api.ctx.gfx.material_desc(m).and_then(|d| d.texture);
     Ok(t.and_then(|t| api.ctx.resources.get::<AssetServer>().and_then(|s| s.key_of_texture(t)).map(|k| json!(k))).unwrap_or(Value::Null))
 }

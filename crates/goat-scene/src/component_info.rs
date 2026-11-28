@@ -90,6 +90,19 @@ pub(crate) fn describe_engine_components(r: &mut SceneRegistry) {
                 .tip("materials", "Material i draws submesh i of the Mesh Filter's mesh; extra materials draw the last submesh again")
                 .kind("layer", "layer"),
         ),
+        (
+            "SkinnedMeshRenderer",
+            I::new("Mesh/Skinned Mesh Renderer")
+                .defaults(json!({ "mesh": "builtin:cube", "materials": ["builtin:default"] }))
+                .asset("mesh", "mesh")
+                .asset("materials", "material")
+                .options("quality", &["Auto", "1 Bone", "2 Bones", "4 Bones"])
+                .tip("quality", "Bones per vertex used by the skinning (fewer = cheaper on the 3DS)")
+                .tip("update_when_offscreen", "Off: not skinned while no camera can see it (keeps its last pose)")
+                .tip("root_bone", "The skeleton's root (set by the model; read only here)")
+                .tip("bones", "Number of bones (set by the model)")
+                .kind("layer", "layer"),
+        ),
         ("LodGroup", I::new("Rendering/LOD Group").defaults(json!({ "levels": [] })).asset("mesh", "mesh").range("screen_height", 0.0, 1.0)),
         ("StaticBatching", I::new("Rendering/Static Batching").tip("bake_lighting", "Bake the lights into vertex colors (cheap on the 3DS)")),
         (

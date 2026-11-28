@@ -146,7 +146,8 @@ Duyệt bảng "Đối chiếu với Unity" và từng phần README / API của
 - ✅ `RenderStats`, `ProfilerMarker` / `Profiler.beginSample` / `ProfilerRecorder`, `Screen.safeArea` / `dpi`, Application / Time bổ sung, `Sprite.create`, `Graphics.drawTexture`, `onRenderImage`
 - ⬜ GPU Instancing (material `enableInstancing`; desktop), Baked Animation (GPU) cho đám đông, GPU skinning
 - ✅ Model FBX / OBJ (ufbx → GLB: editor, desktop player, `goat build` cho mọi nền tảng kể cả 3DS; `goat model`; `.import.json` scale_factor / animation_rate)
-- ⬜ ModelImporter đủ tab (Rig / Animation / Materials, Optimize Game Objects), SkinnedMeshRenderer tách riêng như Unity
+- ✅ SkinnedMeshRenderer tách riêng như Unity (mesh + materials + bones + root bone, Update When Offscreen, Quality 1/2/4 xương; không có MeshFilter / MeshRenderer; edit mode hiện pose đã skin)
+- ⬜ ModelImporter đủ tab (Rig / Animation / Materials, Optimize Game Objects)
 
 **B. Editor**
 - ✅ Hub, Scene / Game view độc lập (kể cả khi Play), gizmo, Undo, Prefab Mode, Animation / Animator / Profiler, Build / Project Settings

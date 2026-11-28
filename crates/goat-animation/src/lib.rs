@@ -26,10 +26,10 @@ use std::sync::Arc;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use goat_assets::{AnimPath, AssetServer, Interpolation, ModelAnimation, ModelNodes, SkinnedMesh};
+use goat_assets::{AnimPath, AssetServer, Interpolation, ModelAnimation, ModelNodes};
 use goat_core::math::{Mat4, Quat, Vec3, Vec4};
 use goat_gfx::{MeshData, Vertex};
-use goat_runtime::{Context, Entity, GlobalTransform, MeshFilter, Plugin, Transform, World};
+use goat_runtime::{Context, Entity, GlobalTransform, Plugin, SkinnedMeshRenderer, Transform, World};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimState {
@@ -318,14 +318,16 @@ pub fn apply_layer(world: &mut World, nodes: &[Option<Entity>], clips: &[(&Model
 
 /// Linear blend skinning of a bind-pose mesh by joint matrices (`joint world * inverse bind`,
 /// already in the mesh's space).
-pub fn skin(base: &MeshData, joints: &[[u16; 4]], weights: &[[f32; 4]], palette: &[Mat4], out: &mut MeshData) {
+/// Deforms `base` by bone matrices (`palette`: mesh space → posed mesh space per bone), using the
+/// `max_bones` strongest weights of each vertex (1, 2 or 4: Unity's SkinQuality).
+pub fn skin(base: &MeshData, joints: &[[u16; 4]], weights: &[[f32; 4]], palette: &[Mat4], max_bones: usize, out: &mut MeshData) {
     out.indices.clone_from(&base.indices);
     out.vertices.resize(base.vertices.len(), Vertex::default());
     for (i, v) in base.vertices.iter().enumerate() {
         let (j, w) = (joints[i], weights[i]);
         let mut m = Mat4::ZERO;
         let mut total = 0.0;
-        for k in 0..4 {
+        for k in 0..max_bones.clamp(1, 4) {
             if w[k] > 0.0 {
                 if let Some(p) = palette.get(j[k] as usize) {
                     m += *p * w[k];
@@ -435,46 +437,76 @@ impl Plugin for AnimationPlugin {
     }
 
     fn late_update(&mut self, ctx: &mut Context) {
-        let Some(assets) = ctx.resources.get::<AssetServer>() else { return };
-        let skinned: Vec<Entity> = ctx.world.query::<&SkinnedMesh>().iter().map(|(e, _)| e).collect();
-        for e in skinned {
-            let Ok(sm) = ctx.world.get::<&SkinnedMesh>(e).map(|s| (*s).clone()) else { continue };
-            let Some(model) = assets.loaded_model(&sm.model) else { continue };
-            let Some(prims) = model.data.meshes.get(sm.mesh) else { continue };
-            let Some(model_skin) = model.data.skins.get(sm.skin) else { continue };
-            let Ok(nodes) = ctx.world.get::<&ModelNodes>(sm.root).map(|n| n.0.clone()) else { continue };
-            let mesh_world = ctx.world.get::<&GlobalTransform>(e).map(|g| g.0).unwrap_or(Mat4::IDENTITY);
-            let to_mesh = mesh_world.inverse();
-            let palette: Vec<Mat4> = model_skin
-                .joints
-                .iter()
-                .zip(&model_skin.inverse_bind)
-                .map(|(&j, ibm)| {
-                    let jw = nodes.get(j).copied().flatten().and_then(|je| ctx.world.get::<&GlobalTransform>(je).ok().map(|g| g.0)).unwrap_or(Mat4::IDENTITY);
-                    to_mesh * jw * *ibm
-                })
-                .collect();
-            // every skinned submesh of the entity's mesh (one per material)
-            for (si, prim) in prims.iter().enumerate() {
-                let Some(sv) = &prim.skin_vertices else { continue };
-                skin(&prim.mesh, &sv.joints, &sv.weights, &palette, &mut self.scratch);
-                // a mesh of this instance's own (the shared one stays in bind pose)
-                match sm.instances.get(si).copied().flatten() {
-                    Some(m) => {
-                        let _ = ctx.gfx.update_mesh(m, &self.scratch);
-                    }
-                    None => {
-                        let Ok(m) = ctx.gfx.create_mesh(&self.scratch) else { continue };
-                        if let Ok(mut s) = ctx.world.get::<&mut SkinnedMesh>(e) {
-                            if si < s.instances.len() {
-                                s.instances[si] = Some(m);
-                            }
+        update_skinned_meshes(ctx.world, ctx.gfx, &mut self.scratch);
+    }
+}
+
+/// Deforms every visible SkinnedMeshRenderer from its bones (Unity's skinning): bone world poses ×
+/// bindposes → the renderer's own meshes. Run by [`AnimationPlugin`] after the animations, and by the
+/// editor on the edited scene (Unity skins in Edit mode too). `scratch` is reused between calls.
+pub fn update_skinned_meshes(world: &World, gfx: &mut dyn goat_gfx::GraphicsBackend, scratch: &mut MeshData) {
+    // SkinnedMeshRenderer (Unity): bone poses × bindposes → this object's deformed submeshes
+    let cameras: Vec<(Vec3, Vec3, f32)> = world
+        .query::<(&goat_runtime::Camera, &GlobalTransform)>()
+        .without::<&goat_runtime::InactiveInHierarchy>()
+        .iter()
+        .map(|(_, (c, g))| {
+            let far = match c.projection {
+                goat_gfx::Projection::Perspective { far, .. } | goat_gfx::Projection::Orthographic { far, .. } => far,
+            };
+            (g.0.w_axis.truncate(), (-g.0.z_axis.truncate()).normalize_or(Vec3::NEG_Z), far)
+        })
+        .collect();
+    let skinned: Vec<Entity> = world
+        .query::<&SkinnedMeshRenderer>()
+        .without::<&goat_runtime::InactiveInHierarchy>()
+        .iter()
+        .filter(|(_, r)| r.visible && r.skin.is_some())
+        .map(|(e, _)| e)
+        .collect();
+    for e in skinned {
+        let Ok((skin_data, bones, root_bone, offscreen, quality, shared)) = world.get::<&SkinnedMeshRenderer>(e).map(|r| (r.skin.clone(), r.bones.clone(), r.root_bone, r.update_when_offscreen, r.quality, r.shared.first().copied())) else { continue };
+        let Some(skin_data) = skin_data else { continue };
+        let mesh_world = world.get::<&GlobalTransform>(e).map(|g| g.0).unwrap_or(Mat4::IDENTITY);
+        // Update When Offscreen off: skip while every camera is looking away / too far (last pose kept)
+        if !offscreen && !cameras.is_empty() {
+            let center = root_bone.and_then(|b| world.get::<&GlobalTransform>(b).ok().map(|g| g.0.w_axis.truncate())).unwrap_or(mesh_world.w_axis.truncate());
+            let scale = mesh_world.x_axis.truncate().length().max(mesh_world.y_axis.truncate().length()).max(mesh_world.z_axis.truncate().length());
+            let radius = shared.and_then(|m| gfx.mesh_bounds(m)).map(|b| (b.center.length() + b.radius) * scale * 1.5).unwrap_or(2.0);
+            let seen = cameras.iter().any(|(p, f, far)| {
+                let d = center - *p;
+                d.dot(*f) > -radius && d.length() < far + radius
+            });
+            if !seen {
+                continue;
+            }
+        }
+        let to_mesh = mesh_world.inverse();
+        let palette: Vec<Mat4> = skin_data
+            .bindposes
+            .iter()
+            .enumerate()
+            .map(|(i, bind)| {
+                let bw = bones.get(i).and_then(|&b| world.get::<&GlobalTransform>(b).ok().map(|g| g.0)).unwrap_or(mesh_world);
+                to_mesh * bw * *bind
+            })
+            .collect();
+        for (si, sub) in skin_data.submeshes.iter().enumerate() {
+            let Some(sub) = sub else { continue };
+            skin(&sub.mesh, &sub.joints, &sub.weights, &palette, quality.bones(), scratch);
+            let current = world.get::<&SkinnedMeshRenderer>(e).ok().and_then(|r| r.deformed.get(si).copied().flatten());
+            match current {
+                Some(m) => {
+                    let _ = gfx.update_mesh(m, scratch);
+                }
+                None => {
+                    // this object's own mesh (the shared one stays in bind pose)
+                    let Ok(m) = gfx.create_mesh(scratch) else { continue };
+                    if let Ok(mut r) = world.get::<&mut SkinnedMeshRenderer>(e) {
+                        if r.deformed.len() <= si {
+                            r.deformed.resize(si + 1, None);
                         }
-                        if let Ok(mut f) = ctx.world.get::<&mut MeshFilter>(e) {
-                            if si < f.submeshes.len() {
-                                f.submeshes[si] = m;
-                            }
-                        }
+                        r.deformed[si] = Some(m);
                     }
                 }
             }
@@ -517,11 +549,11 @@ mod tests {
         let prim = model.data.meshes.iter().flatten().find(|p| p.skin_vertices.is_some()).unwrap();
         let sv = prim.skin_vertices.as_ref().unwrap();
         let mut out = MeshData::default();
-        skin(&prim.mesh, &sv.joints, &sv.weights, &vec![Mat4::IDENTITY; 4], &mut out);
+        skin(&prim.mesh, &sv.joints, &sv.weights, &vec![Mat4::IDENTITY; 4], 4, &mut out);
         assert_eq!(out.vertices.len(), prim.mesh.vertices.len());
         assert!((Vec3::from(out.vertices[7].position) - Vec3::from(prim.mesh.vertices[7].position)).length() < 1e-5);
         // and moving every joint up moves the mesh up
-        skin(&prim.mesh, &sv.joints, &sv.weights, &vec![Mat4::from_translation(Vec3::Y); 4], &mut out);
+        skin(&prim.mesh, &sv.joints, &sv.weights, &vec![Mat4::from_translation(Vec3::Y); 4], 4, &mut out);
         assert!((out.vertices[7].position[1] - prim.mesh.vertices[7].position[1] - 1.0).abs() < 1e-4);
     }
 
@@ -560,6 +592,70 @@ mod tests {
             e.frame(1.0 / 60.0, &mut gfx);
         }
         assert_eq!(e.world.get::<&Animator>(root).unwrap().current_state(0), Some("Idle"), "back after the exit time");
+    }
+
+
+    /// Unity's SkinnedMeshRenderer: a skinned model mesh gets one (bones + root bone, no MeshFilter),
+    /// the skinning deforms its own copy, and Update When Offscreen skips it when no camera looks.
+    #[test]
+    fn skinned_mesh_renderer_like_unity() {
+        struct G(bool);
+        impl goat_runtime::Game for G {
+            fn start(&mut self, ctx: &mut Context) {
+                let mut assets = AssetServer::new(AssetIo::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/hello/assets")));
+                let root = assets.spawn_model(ctx.world, ctx.gfx, "models/tentacle.glb", None).unwrap();
+                let anim = Animator::from_controller_asset(&assets, "animators/tentacle.controller.json").unwrap();
+                ctx.world.insert(root, (anim, goat_runtime::Name("T".into()))).unwrap();
+                // a camera looking at the model, or away from it (behind and far)
+                let cam = if self.0 { goat_runtime::Transform::from_position(Vec3::new(0.0, 1.0, 6.0)) } else { goat_runtime::Transform::from_position(Vec3::new(0.0, 1.0, 600.0)).with_rotation(Quat::from_rotation_y(std::f32::consts::PI)) };
+                ctx.world.spawn((cam, GlobalTransform::default(), goat_runtime::Camera::default()));
+                ctx.resources.insert(assets);
+            }
+            fn plugins(&mut self) -> Vec<Box<dyn Plugin>> {
+                vec![Box::new(AnimationPlugin::default())]
+            }
+        }
+        let mut gfx = NullBackend::new();
+        let mut e = goat_runtime::Engine::new(G(true));
+        e.frame(0.0, &mut gfx);
+        let (smr_e, r) = e.world.query::<&SkinnedMeshRenderer>().iter().map(|(x, r)| (x, r.clone())).next().expect("a SkinnedMeshRenderer");
+        assert!(e.world.get::<&goat_runtime::MeshFilter>(smr_e).is_err() && e.world.get::<&goat_runtime::MeshRenderer>(smr_e).is_err(), "no MeshFilter / MeshRenderer on it");
+        assert_eq!(r.bones.len(), 4, "the skin's joints");
+        assert!(r.root_bone.is_some_and(|b| r.bones.contains(&b)), "root bone = the skeleton's top joint");
+        assert_eq!(r.skin.as_ref().unwrap().bindposes.len(), 4);
+        for _ in 0..20 {
+            e.frame(1.0 / 60.0, &mut gfx);
+        }
+        let r = e.world.get::<&SkinnedMeshRenderer>(smr_e).unwrap().clone();
+        let deformed = r.deformed.iter().flatten().next().copied().expect("its own deformed mesh");
+        assert!(r.draws().any(|(m, _)| m == deformed), "the deformed mesh is drawn");
+        assert_ne!(Some(deformed), r.shared.first().copied(), "the shared mesh stays in bind pose");
+        // Update When Offscreen off (the default) + a camera far away looking away: never skinned
+        let mut e2 = goat_runtime::Engine::new(G(false));
+        e2.frame(0.0, &mut gfx);
+        for _ in 0..5 {
+            e2.frame(1.0 / 60.0, &mut gfx);
+        }
+        let r2 = e2.world.query::<&SkinnedMeshRenderer>().iter().map(|(_, r)| r.clone()).next().unwrap();
+        assert!(r2.deformed.iter().all(Option::is_none), "offscreen: not skinned");
+        // on: skinned anyway
+        for (_, r) in e2.world.query_mut::<&mut SkinnedMeshRenderer>() {
+            r.update_when_offscreen = true;
+        }
+        e2.frame(1.0 / 60.0, &mut gfx);
+        let r2 = e2.world.query::<&SkinnedMeshRenderer>().iter().map(|(_, r)| r.clone()).next().unwrap();
+        assert!(r2.deformed.iter().any(Option::is_some), "Update When Offscreen: skinned");
+    }
+
+    #[test]
+    fn skin_quality_limits_bones_per_vertex() {
+        let base = MeshData { vertices: vec![Vertex::default()], indices: vec![0, 0, 0] };
+        let palette = [Mat4::from_translation(Vec3::X), Mat4::from_translation(Vec3::Y)];
+        let mut out = MeshData::default();
+        skin(&base, &[[0, 1, 0, 0]], &[[0.5, 0.5, 0.0, 0.0]], &palette, 2, &mut out);
+        assert!((Vec3::from(out.vertices[0].position) - Vec3::new(0.5, 0.5, 0.0)).length() < 1e-5, "two bones blended");
+        skin(&base, &[[0, 1, 0, 0]], &[[0.5, 0.5, 0.0, 0.0]], &palette, 1, &mut out);
+        assert!((Vec3::from(out.vertices[0].position) - Vec3::X).length() < 1e-5, "1 Bone: the strongest only");
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub mod server;
 pub use batch::StaticBatchPlugin;
 pub use material::MaterialFile;
 pub use model::{set_model_converter, AnimChannel, AnimPath, Interpolation, ModelAnimation, ModelConverter, ModelData, ModelMaterial, ModelNode, ModelPrimitive, ModelSkin, SkinVertices};
-pub use server::{material, mesh, spawn_model, texture, AssetServer, AssetsPlugin, LoadedModel, ModelInstance, ModelNodes, SkinnedMesh};
+pub use server::{material, mesh, spawn_model, texture, AssetServer, AssetsPlugin, LoadedModel, ModelInstance, ModelNodes};
 
 use std::path::{Path, PathBuf};
 

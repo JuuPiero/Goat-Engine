@@ -537,6 +537,25 @@ pub fn extract_camera_views(world: &World, displays: &[DisplayInfo], gfx: &dyn G
             }
         }
     }
+    // skinned meshes: their own deformed submeshes, culled by the deformed bounds
+    for (_, (r, g, block)) in world.query::<(&SkinnedMeshRenderer, &GlobalTransform, Option<&crate::graphics::PropertyBlock>)>().without::<&InactiveInHierarchy>().iter() {
+        if !r.visible {
+            continue;
+        }
+        let scale = g.0.x_axis.truncate().length().max(g.0.y_axis.truncate().length()).max(g.0.z_axis.truncate().length());
+        for (mesh, material) in r.draws() {
+            let sphere = gfx.mesh_bounds(mesh).map(|b| (g.0.transform_point3(b.center), b.radius * scale));
+            let at = sphere.map(|(c, _)| c).unwrap_or(g.0.w_axis.truncate());
+            let item = DrawItem {
+                sorting_order: r.sorting_order,
+                light_probe: probes.as_ref().map(|p| p.sample(at)),
+                reflection: crate::probes::reflection_at(&reflections, at),
+                color: block.map(|b| b.color).unwrap_or(Color::WHITE),
+                ..DrawItem::new(mesh, material, g.0)
+            };
+            renderers.push((item, sphere, 1u32 << r.layer.min(31), None));
+        }
+    }
     let mut views: Vec<(Entity, RenderView)> = world
         .query::<(&Camera, &GlobalTransform)>().without::<&InactiveInHierarchy>()
         .iter()

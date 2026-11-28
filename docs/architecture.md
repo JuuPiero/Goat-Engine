@@ -180,11 +180,13 @@ tools/goat: Builder per platform (check / build / run), no engine dependency
 - `AnimationPlugin::update` (before transform propagation):
   - samples each state's channels: binary search on the key times; step or linear; rotations nlerp'd in the same hemisphere;
   - accumulates per node and path weighted by state weight, then writes `Transform`s of the `ModelNodes` entities; total weight < 1 blends with the current pose.
-- `late_update` skins every `SkinnedMesh`:
-  - palette = inverse(mesh world) × joint world × inverse bind;
-  - linear blend of positions / normals into a scratch `MeshData`;
-  - `update_mesh` on a per-instance mesh, created on first use; the renderer switches to it.
-- The model keeps the bind-pose CPU data of skinned primitives only (`AssetServer::model`).
+- Skinned nodes get a Unity-like `SkinnedMeshRenderer` (goat-runtime components.rs) instead of MeshFilter + MeshRenderer: `shared` (submesh meshes, bind pose), `materials`, `bones` (joint entities), `root_bone` (top joint), `update_when_offscreen`, `quality` (Auto / 1 / 2 / 4 bones per vertex), `skin: Arc<SkinData>` (bindposes + per-submesh bind-pose CPU mesh, joints, weights; shared by every instance through `LoadedModel.skins`, keyed by (mesh, skin)) and `deformed` (per-instance meshes; `draws()` prefers them).
+- `goat_animation::update_skinned_meshes(world, gfx, scratch)` skins them — from `AnimationPlugin::late_update` in play, and every frame on the editor's edit world (so edit mode shows the rest pose, not the raw bind pose):
+  - skipped when `update_when_offscreen` is off and every camera looks away or is farther than its far plane (bounds sphere test);
+  - palette = inverse(renderer world) × bone world × bindpose;
+  - linear blend (the strongest `quality.bones()` weights, renormalized) into a scratch `MeshData`;
+  - `update_mesh` on the deformed mesh, created on first use.
+- The scene codec saves settings only (mesh, materials, root bone name, bone count, quality...); bones / skin come back from the model prefab, so loading onto a model's renderer updates its settings.
 
 ## Particles (goat-particles)
 - `ParticleSystem` holds its settings and its particles (`Vec<Particle>`). Bookkeeping lives in `state: EmitterState` (xorshift RNG, cycle time, emission accumulator), so `..Default::default()` works outside the crate.

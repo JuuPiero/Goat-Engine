@@ -669,7 +669,11 @@ impl EditorCore {
             let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
             let mut corners2d: Option<[Vec3; 8]> = None;
             while let Some(x) = stack.pop() {
-                let subs: Vec<goat_gfx::MeshId> = if w.get::<&MeshRenderer>(x).is_ok() { w.get::<&MeshFilter>(x).map(|f| f.submeshes.clone()).unwrap_or_default() } else { Vec::new() };
+                let subs: Vec<goat_gfx::MeshId> = if w.get::<&MeshRenderer>(x).is_ok() {
+                    w.get::<&MeshFilter>(x).map(|f| f.submeshes.clone()).unwrap_or_default()
+                } else {
+                    w.get::<&SkinnedMeshRenderer>(x).map(|r| r.draws().map(|(m, _)| m).collect()).unwrap_or_default()
+                };
                 if let Ok(g) = w.get::<&GlobalTransform>(x) {
                     for b in subs.iter().filter_map(|&m| gfx.mesh_bounds(m)) {
                         let mut k = 0;

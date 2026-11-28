@@ -15,25 +15,13 @@ pub struct LoadedModel {
     pub data: ModelData,
     pub meshes: Vec<Vec<MeshId>>,
     pub materials: Vec<MaterialId>,
+    /// Skin data per (mesh, skin), made when an instance is spawned (shared by every instance).
+    pub skins: HashMap<(usize, usize), std::sync::Arc<goat_runtime::SkinData>>,
 }
 
 /// On a model instance's root: the entity of each glTF node (animation targets, skin joints).
 #[derive(Clone, Debug, Default)]
 pub struct ModelNodes(pub Vec<Option<Entity>>);
-
-/// On an entity drawing a skinned primitive: deformed on the CPU every frame by the animation
-/// plugin into its own `instance` mesh.
-#[derive(Clone, Debug)]
-pub struct SkinnedMesh {
-    pub model: String,
-    pub mesh: usize,
-    pub skin: usize,
-    /// The model instance's root (holds [`ModelNodes`]).
-    pub root: Entity,
-    /// Per submesh (= the model mesh's primitive), this instance's own deformed mesh (made on
-    /// the first skinning; it replaces the shared bind-pose mesh in the entity's [`MeshFilter`]).
-    pub instances: Vec<Option<MeshId>>,
-}
 
 /// Put on the root entity of a spawned model (scenes save the reference, not the hierarchy).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -648,7 +636,7 @@ impl AssetServer {
                 meshes.push(ids);
             }
             // insert before materials (they look the model up)
-            self.models.insert(key.to_string(), LoadedModel { data, meshes, materials: Vec::new() });
+            self.models.insert(key.to_string(), LoadedModel { data, meshes, materials: Vec::new(), skins: HashMap::new() });
             let count = self.models[key].data.materials.len();
             let mut materials = Vec::with_capacity(count);
             for i in 0..count {
@@ -765,12 +753,35 @@ impl AssetServer {
     pub fn spawn_model_into(&mut self, world: &mut World, gfx: &mut dyn GraphicsBackend, key: &str, root: Entity) -> Result<(), AssetError> {
         let key: &str = &self.io.canonical(key);
         let fallback = self.material(gfx, "builtin:default")?;
-        let model = self.model(gfx, key)?;
+        self.model(gfx, key)?;
         let file = file_of(key).to_string();
+        // skin data (bindposes + weights) of the skinned meshes, shared by every instance
+        {
+            let m = self.models.get_mut(&file).expect("loaded above");
+            let wanted: Vec<(usize, usize)> = m.data.nodes.iter().filter_map(|n| Some((n.mesh?, n.skin?))).collect();
+            for (mi, si) in wanted {
+                if m.skins.contains_key(&(mi, si)) {
+                    continue;
+                }
+                let Some(prims) = m.data.meshes.get(mi) else { continue };
+                if !prims.iter().any(|p| p.skin_vertices.is_some()) {
+                    continue;
+                }
+                let bindposes = m.data.skins.get(si).map(|s| s.inverse_bind.clone()).unwrap_or_default();
+                let submeshes = prims
+                    .iter()
+                    .map(|p| p.skin_vertices.as_ref().map(|sv| goat_runtime::SkinnedSubmesh { mesh: p.mesh.clone(), joints: sv.joints.clone(), weights: sv.weights.clone() }))
+                    .collect();
+                m.skins.insert((mi, si), std::sync::Arc::new(goat_runtime::SkinData { bindposes, submeshes }));
+            }
+        }
+        let model = &self.models[&file];
         let _ = world.insert_one(root, ModelInstance { key: file.clone() });
         let mut nodes: Vec<Option<Entity>> = vec![None; model.data.nodes.len()];
+        // skinned entities: their bones are set once every node exists
+        let mut skinned: Vec<(Entity, usize)> = Vec::new();
         #[allow(clippy::too_many_arguments)]
-        fn spawn_node(world: &mut World, model: &LoadedModel, file: &str, fallback: MaterialId, node: usize, parent: Entity, root: Entity, nodes: &mut Vec<Option<Entity>>, depth: u32) {
+        fn spawn_node(world: &mut World, model: &LoadedModel, fallback: MaterialId, node: usize, parent: Entity, nodes: &mut Vec<Option<Entity>>, skinned: &mut Vec<(Entity, usize)>, depth: u32) {
             let Some(n) = model.data.nodes.get(node) else { return };
             if depth > 64 {
                 return;
@@ -779,20 +790,46 @@ impl AssetServer {
             let e = world.spawn((Name(n.name.clone()), t, GlobalTransform::default(), Parent(parent)));
             nodes[node] = Some(e);
             if let Some(mi) = n.mesh {
-                // Unity: one MeshFilter (the mesh, a submesh per material) + one MeshRenderer (its materials)
                 let prims = &model.data.meshes[mi];
-                let materials = prims.iter().map(|p| p.material.and_then(|m| model.materials.get(m).copied()).unwrap_or(fallback)).collect();
-                let _ = world.insert(e, (MeshFilter::with_submeshes(model.meshes[mi].clone()), MeshRenderer::with_materials(materials)));
-                if let Some(skin) = n.skin.filter(|_| prims.iter().any(|p| p.skin_vertices.is_some())) {
-                    let _ = world.insert_one(e, SkinnedMesh { model: file.to_string(), mesh: mi, skin, root, instances: vec![None; prims.len()] });
+                let materials: Vec<MaterialId> = prims.iter().map(|p| p.material.and_then(|m| model.materials.get(m).copied()).unwrap_or(fallback)).collect();
+                match n.skin.and_then(|si| model.skins.get(&(mi, si)).map(|d| (si, d.clone()))) {
+                    // Unity: a SkinnedMeshRenderer (mesh + materials + bones), no MeshFilter
+                    Some((si, data)) => {
+                        let mut r = goat_runtime::SkinnedMeshRenderer::new(model.meshes[mi].clone(), materials);
+                        r.skin = Some(data);
+                        let _ = world.insert_one(e, r);
+                        skinned.push((e, si));
+                    }
+                    // Unity: one MeshFilter (the mesh, a submesh per material) + one MeshRenderer (its materials)
+                    None => {
+                        let _ = world.insert(e, (MeshFilter::with_submeshes(model.meshes[mi].clone()), MeshRenderer::with_materials(materials)));
+                    }
                 }
             }
             for &c in &n.children {
-                spawn_node(world, model, file, fallback, c, e, root, nodes, depth + 1);
+                spawn_node(world, model, fallback, c, e, nodes, skinned, depth + 1);
             }
         }
         for &r in &model.data.roots {
-            spawn_node(world, model, &file, fallback, r, root, root, &mut nodes, 0);
+            spawn_node(world, model, fallback, r, root, &mut nodes, &mut skinned, 0);
+        }
+        // bones = the skin's joints; root bone = the joint whose parent isn't a joint (the skeleton's top)
+        let mut parent_of = vec![usize::MAX; model.data.nodes.len()];
+        for (i, n) in model.data.nodes.iter().enumerate() {
+            for &c in &n.children {
+                if c < parent_of.len() {
+                    parent_of[c] = i;
+                }
+            }
+        }
+        for (e, si) in skinned {
+            let Some(s) = model.data.skins.get(si) else { continue };
+            let bones: Vec<Entity> = s.joints.iter().map(|&j| nodes.get(j).copied().flatten().unwrap_or(root)).collect();
+            let top = s.joints.iter().find(|&&j| !s.joints.contains(&parent_of.get(j).copied().unwrap_or(usize::MAX))).copied();
+            if let Ok(mut r) = world.get::<&mut goat_runtime::SkinnedMeshRenderer>(e) {
+                r.root_bone = top.and_then(|j| nodes.get(j).copied().flatten());
+                r.bones = bones;
+            }
         }
         let _ = world.insert_one(root, ModelNodes(nodes));
         Ok(())

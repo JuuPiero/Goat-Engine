@@ -263,6 +263,10 @@ Trong file scene, mỗi entity có:
   - Key mesh: `builtin:cube`, `models/x.glb#mesh:0` (cả mesh, mọi submesh), `models/x.glb#mesh:0:1` (một submesh).
   - Scene / prefab cũ dạng `"MeshRenderer": { "mesh", "material" }` vẫn mở được (tự tách thành MeshFilter + MeshRenderer); lưu lại thì theo dạng mới `"MeshFilter": { "mesh" }`, `"MeshRenderer": { "materials": [...] }`.
   - Kéo model vào scene: mỗi node có mesh thành **một** object có Mesh Filter + Mesh Renderer với đủ material (trước đây mỗi material là một object con).
+- **Skinned Mesh Renderer** (như Unity): mesh có xương dùng một component riêng thay cho Mesh Filter + Mesh Renderer — giữ **Mesh**, **Materials**, **Bones** (các object xương), **Root Bone** (xương gốc của skeleton), **Update When Offscreen** và **Quality** (Auto / 1 / 2 / 4 xương mỗi đỉnh; ít xương = nhẹ hơn trên 3DS).
+  - Skin bằng CPU trên mọi nền tảng, mỗi instance một mesh riêng (mesh gốc giữ bind pose, dùng chung). Tắt Update When Offscreen (mặc định) thì object không camera nào nhìn thấy sẽ không bị skin.
+  - Trong edit mode, model hiện đúng pose của xương (không phải bind pose thô); xoay xương trong Hierarchy thấy mesh đổi theo.
+  - Script: `getComponent(SkinnedMeshRenderer).sharedMesh` / `sharedMaterials` / `rootBone` / `bones` / `quality` / `updateWhenOffscreen`.
 - **Model FBX / OBJ**: dùng như glTF (kéo vào scene, làm prefab, mesh collider, NavMesh…). Engine chỉ đọc glTF, nên FBX / OBJ được **chuyển sang GLB** (thư viện ufbx, crate `goat-fbx`):
   - Editor tự chuyển khi nạp file (có cache theo thời điểm sửa file). Desktop player chạy từ mã nguồn chuyển lúc tải. `goat build` chuyển mọi `.fbx` / `.obj` trong bản build thành GLB, giữ nguyên tên file. Nhờ vậy **3DS** và web chỉ đọc GLB, không cần thư viện FBX.
   - Hệ trục và đơn vị: tay phải, trục Y hướng lên, mét (như "Convert Units" của Unity: model đơn vị cm thành m). Pivot hình học của 3ds Max thành node phụ.
@@ -418,7 +422,7 @@ export default class Demo extends Behaviour {
 }
 ```
 
-- Có: Rigidbody / Rigidbody2D, Collider / BoxCollider / SphereCollider / CapsuleCollider / MeshCollider, các Collider2D, CharacterController, ConstantForce(2D), Joint(2D), các Effector2D, Light (Directional / Point / Spot), MeshRenderer / MeshFilter, SpriteRenderer, SpriteMask, TextMesh, LineRenderer, TrailRenderer, ParticleSystem, PostEffect, probe, NavMesh*, Camera, Animator, Animation, AudioSource / AudioListener, UI (Canvas, RectTransform, Image, RawImage, Text, Button, Toggle, Slider, Scrollbar, InputField, Dropdown, CanvasGroup, ScrollRect, layout, Mask, Outline / Shadow, EventSystem).
+- Có: Rigidbody / Rigidbody2D, Collider / BoxCollider / SphereCollider / CapsuleCollider / MeshCollider, các Collider2D, CharacterController, ConstantForce(2D), Joint(2D), các Effector2D, Light (Directional / Point / Spot), MeshRenderer / MeshFilter / SkinnedMeshRenderer, SpriteRenderer, SpriteMask, TextMesh, LineRenderer, TrailRenderer, ParticleSystem, PostEffect, probe, NavMesh*, Camera, Animator, Animation, AudioSource / AudioListener, UI (Canvas, RectTransform, Image, RawImage, Text, Button, Toggle, Slider, Scrollbar, InputField, Dropdown, CanvasGroup, ScrollRect, layout, Mask, Outline / Shadow, EventSystem).
 - `getComponent` / `getComponents` / `tryGetComponent` / `getComponentInChildren` / `getComponentInParent` / `addComponent`, `GameObject.destroy(component)`, `GameObject.findObjectOfType` / `findObjectsByType` (cả lớp script), `getComponent(MyScript)` trả về instance script đang chạy. `getComponent("Tên")` (chuỗi) vẫn trả JSON như trước.
 - `GameObject.instantiate(gameObjectHoặcComponent)` sao chép object trong scene; `GameObject.createPrimitive(PrimitiveType.Sphere)`; `sendMessage` / `broadcastMessage` / `sendMessageUpwards`.
 - Vòng đời như Unity: `awake`, `onEnable`, `start`, `update`..., `onDisable`, `onDestroy`; `this.enabled = false` dừng Update (gọi onDisable) mà giữ nguyên trạng thái script.
@@ -474,7 +478,7 @@ world.spawn((Transform::default(), AudioSource::new("music.ogg").looping().play_
 let mut anim = Animator::playing("Sway");
 anim.add("Hop", 1.0);                 // phát thêm clip (node khác cùng chạy, node trùng thì trộn theo trọng số)
 anim.crossfade("Run", 0.3);           // chuyển clip mượt
-world.insert_one(robot, anim);        // mesh có xương được skin bằng CPU, mọi nền tảng
+world.insert_one(robot, anim);        // SkinnedMeshRenderer được skin bằng CPU, mọi nền tảng
 
 // Particles
 world.spawn((Transform::from_position(pos), ParticleSystem { rate: 40.0, shape: Shape::Cone { angle: 12.0, radius: 0.1 },

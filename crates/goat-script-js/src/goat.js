@@ -2075,7 +2075,7 @@ GameObject.findAnyObjectByType = GameObject.findObjectOfType;
 GameObject.findObjectsOfType = GameObject.findObjectsByType;
 
 // the existing wrappers become components too (getComponent(Camera), addComponent(AudioSource)...)
-for (const [W, engine] of [[Camera, 'Camera'], [Renderer, 'MeshRenderer'], [Animator, 'Animator'], [Animation, 'Animation'], [NavMeshAgent, 'NavMeshAgent'], [SpriteAnimator, 'SpriteAnimator'], [AudioSource, 'AudioSource']]) {
+for (const [W, engine] of [[Camera, 'Camera'], [Renderer, ['MeshRenderer', 'SkinnedMeshRenderer']], [Animator, 'Animator'], [Animation, 'Animation'], [NavMeshAgent, 'NavMeshAgent'], [SpriteAnimator, 'SpriteAnimator'], [AudioSource, 'AudioSource']]) {
   W._engine = engine;
   for (const [k, d] of Object.entries(Object.getOwnPropertyDescriptors(Component.prototype))) {
     if (k !== 'constructor' && !(k in W.prototype)) Object.defineProperty(W.prototype, k, d);
@@ -2214,6 +2214,26 @@ export class MeshRenderer extends Renderer {
 MeshRenderer._engine = 'MeshRenderer';
 MeshRenderer._defaults = { materials: ['builtin:default'] };
 props(MeshRenderer, { sortingOrder: 'sorting_order', layer: 'layer' });
+/**
+ * Unity's SkinnedMeshRenderer: a mesh deformed by bones (models with a skin get one; no MeshFilter).
+ * `sharedMesh`, `sharedMaterials` / `sharedMaterial` = asset keys, `material` = the object's own copy
+ * (Renderer), `rootBone`, `bones` (GameObjects), `updateWhenOffscreen`, `quality`.
+ */
+export class SkinnedMeshRenderer extends Renderer {
+  constructor(h) { super(h); }
+  _c() { return N.getComponent(this._h, 'SkinnedMeshRenderer'); }
+  get sharedMaterial() { return this._c()?.materials?.[0] ?? null; }
+  set sharedMaterial(m) { const c = this._c(); if (c) { const l = c.materials ?? []; l[0] = typeof m === 'string' ? m : 'builtin:default'; c.materials = l; N.setComponent(this._h, 'SkinnedMeshRenderer', c); } }
+  get sharedMaterials() { return [...(this._c()?.materials ?? [])]; }
+  set sharedMaterials(list) { const c = this._c(); if (c) { c.materials = Array.from(list ?? [], (m) => (typeof m === 'string' ? m : 'builtin:default')); N.setComponent(this._h, 'SkinnedMeshRenderer', c); } }
+  get materials() { return this.sharedMaterials; }
+  set materials(list) { this.sharedMaterials = list; }
+  get rootBone() { return fromNative(N.call('SkinnedMeshRenderer.rootBone', this._h, [])); }
+  get bones() { return (N.call('SkinnedMeshRenderer.bones', this._h, []) ?? []).map(fromNative); }
+}
+SkinnedMeshRenderer._engine = 'SkinnedMeshRenderer';
+SkinnedMeshRenderer._defaults = { mesh: 'builtin:cube', materials: ['builtin:default'] };
+props(SkinnedMeshRenderer, { sharedMesh: 'mesh', updateWhenOffscreen: 'update_when_offscreen', quality: 'quality', sortingOrder: 'sorting_order', layer: 'layer' });
 /** Unity's MeshFilter: the mesh the MeshRenderer draws ('builtin:cube', a model mesh '<model>#mesh:0' with a submesh per material). */
 export class MeshFilter extends Component {
   static _engine = 'MeshFilter';
@@ -2408,7 +2428,7 @@ export class PhysicsRaycaster extends Component { static _engine = 'PhysicsRayca
 export class Physics2DRaycaster extends Component { static _engine = 'Physics2DRaycaster'; }
 
 /** Every component class, for getComponents(Component). */
-const COMPONENT_CLASSES = [Rigidbody, Rigidbody2D, Collider, Collider2D, CharacterController, ConstantForce, ConstantForce2D, Joint, Joint2D, TargetJoint2D, AreaEffector2D, PointEffector2D, BuoyancyEffector2D, PlatformEffector2D, SurfaceEffector2D, Light, MeshFilter, MeshRenderer, SpriteRenderer, SpriteMask, TextMesh, LineRenderer, TrailRenderer, ParticleSystem, PostEffect, LightProbeGroup, ReflectionProbe, LODGroup, BlobShadow, AudioListener, NavMeshObstacle, NavMeshSurface, NavMeshModifier, Canvas, RectTransform, Image, RawImage, Text, Button, Toggle, Slider, Scrollbar, InputField, Dropdown, CanvasGroup, ScrollRect, LayoutElement, LayoutGroup, ContentSizeFitter, AspectRatioFitter, Mask, RectMask2D, Outline, Shadow, ToggleGroup, EventSystem, PhysicsRaycaster, Physics2DRaycaster, Camera, Animator, Animation, NavMeshAgent, SpriteAnimator, AudioSource];
+const COMPONENT_CLASSES = [Rigidbody, Rigidbody2D, Collider, Collider2D, CharacterController, ConstantForce, ConstantForce2D, Joint, Joint2D, TargetJoint2D, AreaEffector2D, PointEffector2D, BuoyancyEffector2D, PlatformEffector2D, SurfaceEffector2D, Light, MeshFilter, MeshRenderer, SkinnedMeshRenderer, SpriteRenderer, SpriteMask, TextMesh, LineRenderer, TrailRenderer, ParticleSystem, PostEffect, LightProbeGroup, ReflectionProbe, LODGroup, BlobShadow, AudioListener, NavMeshObstacle, NavMeshSurface, NavMeshModifier, Canvas, RectTransform, Image, RawImage, Text, Button, Toggle, Slider, Scrollbar, InputField, Dropdown, CanvasGroup, ScrollRect, LayoutElement, LayoutGroup, ContentSizeFitter, AspectRatioFitter, Mask, RectMask2D, Outline, Shadow, ToggleGroup, EventSystem, PhysicsRaycaster, Physics2DRaycaster, Camera, Animator, Animation, NavMeshAgent, SpriteAnimator, AudioSource];
 
 // ------------------------------------------------------------------ Unity's Input (keys, mouse, touch, axes)
 

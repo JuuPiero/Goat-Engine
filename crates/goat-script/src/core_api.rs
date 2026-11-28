@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use goat_core::math::{Quat, Vec2, Vec3};
-use goat_runtime::{Camera, Entity, GlobalTransform, MeshRenderer, Name, Parent, Transform};
+use goat_runtime::{Camera, Entity, GlobalTransform, Name, Parent, Transform};
 use serde_json::{json, Value};
 
 use crate::{entity_json, Api, Extensions};
@@ -184,12 +184,10 @@ fn own_material(api: &mut Api, e: Entity) -> Result<(goat_gfx::MaterialId, goat_
     if let Some(m) = api.ctx.resources.get::<MaterialInstances>().and_then(|m| m.0.get(&e).copied()) {
         return Ok(m);
     }
-    let shared = api.ctx.world.get::<&MeshRenderer>(e).map_err(|_| "no MeshRenderer on this object")?.material().ok_or("the MeshRenderer has no material")?;
+    let shared = goat_runtime::renderer_material(api.ctx.world, e).ok_or("no MeshRenderer / SkinnedMeshRenderer with a material on this object")?;
     let desc = api.ctx.gfx.material_desc(shared).ok_or("the renderer's material isn't known")?;
     let copy = api.ctx.gfx.create_material(&desc).map_err(|e| e.to_string())?;
-    if let Ok(mut r) = api.ctx.world.get::<&mut MeshRenderer>(e) {
-        r.set_material(copy);
-    }
+    goat_runtime::set_renderer_material(api.ctx.world, e, copy);
     api.ctx.resources.get_or_default::<MaterialInstances>().0.insert(e, (copy, shared));
     Ok((copy, shared))
 }
@@ -233,7 +231,7 @@ fn set_property(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> 
 /// `Renderer.getProperty(name)` → [x, y, z, w].
 fn get_property(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
     let name = a.first().and_then(Value::as_str).unwrap_or("");
-    let id = api.ctx.world.get::<&MeshRenderer>(e).map_err(|_| "no MeshRenderer on this object")?.material().ok_or("the MeshRenderer has no material")?;
+    let id = goat_runtime::renderer_material(api.ctx.world, e).ok_or("no MeshRenderer / SkinnedMeshRenderer with a material on this object")?;
     let original = api.ctx.resources.get::<MaterialInstances>().and_then(|m| m.0.get(&e).map(|x| x.1)).unwrap_or(id);
     let desc = api.ctx.gfx.material_desc(id).ok_or("material")?;
     let shader = api.ctx.resources.get_mut::<goat_assets::AssetServer>().and_then(|a| a.material_shader(original));
@@ -248,18 +246,30 @@ fn get_property(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> 
     Ok(json!(v))
 }
 
+fn skinned_root_bone(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
+    let r = api.ctx.world.get::<&goat_runtime::SkinnedMeshRenderer>(e).map_err(|_| "no SkinnedMeshRenderer on this object")?;
+    Ok(r.root_bone.map(entity_json).unwrap_or(Value::Null))
+}
+
+fn skinned_bones(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
+    let r = api.ctx.world.get::<&goat_runtime::SkinnedMeshRenderer>(e).map_err(|_| "no SkinnedMeshRenderer on this object")?;
+    Ok(Value::Array(r.bones.iter().map(|&b| entity_json(b)).collect()))
+}
+
 fn submesh_count(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
     Ok(json!(api.ctx.world.get::<&goat_runtime::MeshFilter>(e).map(|f| f.submeshes.len()).unwrap_or(0)))
 }
 
 fn set_visible(api: &mut Api, e: Entity, a: &[Value]) -> Result<Value, String> {
     let on = a.first().and_then(Value::as_bool).unwrap_or(true);
-    api.ctx.world.get::<&mut MeshRenderer>(e).map_err(|_| "no MeshRenderer on this object")?.visible = on;
+    if !goat_runtime::set_renderer_visible(api.ctx.world, e, on) {
+        return Err("no MeshRenderer / SkinnedMeshRenderer on this object".into());
+    }
     Ok(Value::Null)
 }
 
 fn is_visible(api: &mut Api, e: Entity, _: &[Value]) -> Result<Value, String> {
-    Ok(Value::Bool(api.ctx.world.get::<&MeshRenderer>(e).is_ok_and(|r| r.visible)))
+    Ok(Value::Bool(goat_runtime::renderer_visible(api.ctx.world, e).unwrap_or(false)))
 }
 
 
@@ -407,5 +417,7 @@ pub fn register(x: &mut Extensions) {
         .add("Renderer.getProperty", get_property)
         .add("Renderer.setEnabled", set_visible)
         .add("MeshFilter.subMeshCount", submesh_count)
+        .add("SkinnedMeshRenderer.rootBone", skinned_root_bone)
+        .add("SkinnedMeshRenderer.bones", skinned_bones)
         .add("Renderer.enabled", is_visible);
 }

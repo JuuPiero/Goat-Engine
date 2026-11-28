@@ -236,6 +236,89 @@ fn load_mesh_renderer(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(),
     insert(ctx, e, r)
 }
 
+// ------------------------------------------------------------------ SkinnedMeshRenderer
+
+#[derive(Serialize, Deserialize)]
+struct SkinnedMeshRendererJson {
+    mesh: String,
+    #[serde(default)]
+    materials: Option<Vec<String>>,
+    /// Shown in the Inspector (the bones come from the model instance; not read back).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root_bone: Option<String>,
+    #[serde(default)]
+    bones: usize,
+    #[serde(default)]
+    update_when_offscreen: bool,
+    #[serde(default = "auto_quality")]
+    quality: String,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    visible: bool,
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    layer: u8,
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    sorting_order: i32,
+}
+
+fn auto_quality() -> String {
+    "Auto".into()
+}
+
+fn save_skinned_mesh_renderer(ctx: &SaveContext, e: Entity) -> Option<Value> {
+    let r = ctx.world.get::<&SkinnedMeshRenderer>(e).ok()?;
+    let Some(mesh) = ctx.assets.key_of_submeshes(&r.shared) else {
+        goat_core::warn!("scene save: a SkinnedMeshRenderer uses a mesh made in code (no asset key): skipped");
+        return None;
+    };
+    let mut materials = Vec::with_capacity(r.materials.len());
+    for m in &r.materials {
+        materials.push(ctx.assets.key_of_material(*m)?.to_string());
+    }
+    let root_bone = r.root_bone.and_then(|b| ctx.world.get::<&Name>(b).ok().map(|n| n.0.clone()));
+    to_value(SkinnedMeshRendererJson {
+        mesh,
+        materials: Some(materials),
+        root_bone,
+        bones: r.bones.len(),
+        update_when_offscreen: r.update_when_offscreen,
+        quality: r.quality.name().into(),
+        visible: r.visible,
+        layer: r.layer,
+        sorting_order: r.sorting_order,
+    })
+}
+
+fn load_skinned_mesh_renderer(ctx: &mut LoadContext, e: Entity, v: &Value) -> Result<(), String> {
+    let j: SkinnedMeshRendererJson = from_value(v)?;
+    let mut materials = Vec::new();
+    for k in j.materials.unwrap_or_else(|| vec!["builtin:default".into()]) {
+        materials.push(ctx.assets.material(ctx.gfx, &k).map_err(|e| e.to_string())?);
+    }
+    let shared = ctx.assets.mesh_filter(ctx.gfx, &j.mesh).map_err(|e| e.to_string())?;
+    // a model instance's renderer (overrides): keep its skin and bones, take the settings
+    if let Ok(mut r) = ctx.world.get::<&mut SkinnedMeshRenderer>(e) {
+        if r.shared != shared {
+            r.shared = shared;
+            r.skin = None;
+            r.deformed.clear();
+        }
+        r.materials = materials;
+        r.update_when_offscreen = j.update_when_offscreen;
+        r.quality = SkinQuality::from_name(&j.quality);
+        r.visible = j.visible;
+        r.layer = j.layer.min(31);
+        r.sorting_order = j.sorting_order;
+        return Ok(());
+    }
+    let mut r = SkinnedMeshRenderer::new(shared, materials);
+    r.update_when_offscreen = j.update_when_offscreen;
+    r.quality = SkinQuality::from_name(&j.quality);
+    r.visible = j.visible;
+    r.layer = j.layer.min(31);
+    r.sorting_order = j.sorting_order;
+    insert(ctx, e, r)
+}
+
 /// `"LodGroup": { "levels": [ { "mesh": "models/rock.glb#mesh:0:0", "screen_height": 0.4 }, ... ], "cull": true }`
 #[derive(Serialize, Deserialize)]
 struct LodJson {
@@ -460,6 +543,7 @@ pub(crate) fn register(r: &mut SceneRegistry) {
         .component(ComponentCodec { name: "Camera", save: save_camera, load: load_camera, remove: remove_typed::<Camera> })
         .component(ComponentCodec { name: "MeshFilter", save: save_mesh_filter, load: load_mesh_filter, remove: remove_typed::<MeshFilter> })
         .component(ComponentCodec { name: "MeshRenderer", save: save_mesh_renderer, load: load_mesh_renderer, remove: remove_typed::<MeshRenderer> })
+        .component(ComponentCodec { name: "SkinnedMeshRenderer", save: save_skinned_mesh_renderer, load: load_skinned_mesh_renderer, remove: remove_typed::<SkinnedMeshRenderer> })
         .component(ComponentCodec { name: "DirectionalLight", save: save_directional, load: load_directional, remove: remove_typed::<DirectionalLight> })
         .component(ComponentCodec { name: "PointLight", save: save_point, load: load_point, remove: remove_typed::<PointLight> })
         .component(ComponentCodec { name: "SpotLight", save: save_spot, load: load_spot, remove: remove_typed::<SpotLight> })

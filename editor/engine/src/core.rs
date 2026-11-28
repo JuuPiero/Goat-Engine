@@ -110,7 +110,7 @@ fn icon_of(w: &hecs::World, e: Entity) -> &'static str {
         "particles"
     } else if w.get::<&goat_audio::AudioSource>(e).is_ok() {
         "audio"
-    } else if w.get::<&MeshRenderer>(e).is_ok() || w.get::<&MeshFilter>(e).is_ok() {
+    } else if w.get::<&MeshRenderer>(e).is_ok() || w.get::<&MeshFilter>(e).is_ok() || w.get::<&SkinnedMeshRenderer>(e).is_ok() {
         "mesh"
     } else {
         "empty"
@@ -236,6 +236,8 @@ pub struct EditorCore {
     axes: [f32; 4],
     /// Device Simulator: the 3D slider given to the game (`Input::slider_3d`).
     pub slider_3d: f32,
+    /// Skinning of the edited scene's SkinnedMeshRenderers (reused vertex buffer).
+    skin_scratch: goat_gfx::MeshData,
     pub aspect: f32,
 }
 
@@ -283,6 +285,7 @@ impl EditorCore {
             held: [false; 14],
             axes: [0.0; 4],
             slider_3d: 0.0,
+            skin_scratch: goat_gfx::MeshData::default(),
             aspect: 16.0 / 9.0,
         }
     }
@@ -528,6 +531,14 @@ impl EditorCore {
                     }
                 }
             }
+            if let (Ok(r), Ok(g)) = (w.get::<&SkinnedMeshRenderer>(x), w.get::<&GlobalTransform>(x)) {
+                let s = g.0.to_scale_rotation_translation().0.abs().max_element();
+                for (m, _) in r.draws() {
+                    if let Some(b) = gfx.mesh_bounds(m) {
+                        spheres.push((g.0.transform_point3(b.center), b.radius * s));
+                    }
+                }
+            }
             stack.extend(children.iter().filter(|(p, _)| *p == x).map(|(_, c)| *c));
         }
         // colliders / lines count too (objects without renderers are framed by them, like Unity)
@@ -556,9 +567,18 @@ impl EditorCore {
         let (origin, dir) = self.ray(x, y);
 
         let mut best: Option<(f32, Entity)> = None;
-        for (e, (mf, _, g)) in w.query::<(&MeshFilter, &MeshRenderer, &GlobalTransform)>().without::<&DontSave>().without::<&InactiveInHierarchy>().iter() {
+        let skinned: Vec<(Entity, Vec<goat_gfx::MeshId>, Mat4)> = w
+            .query::<(&SkinnedMeshRenderer, &GlobalTransform)>()
+            .without::<&DontSave>()
+            .without::<&InactiveInHierarchy>()
+            .iter()
+            .map(|(e, (r, g))| (e, r.draws().map(|(m, _)| m).collect(), g.0))
+            .collect();
+        let filters = w.query::<(&MeshFilter, &MeshRenderer, &GlobalTransform)>().without::<&DontSave>().without::<&InactiveInHierarchy>().iter().map(|(e, (f, _, g))| (e, f.submeshes.clone(), g.0)).collect::<Vec<_>>();
+        for (e, subs, gm) in filters.into_iter().chain(skinned) {
+            let g = GlobalTransform(gm);
             let scale = g.0.to_scale_rotation_translation().0.abs().max_element();
-            for &m in &mf.submeshes {
+            for &m in &subs {
                 let Some(b) = gfx.mesh_bounds(m) else { continue };
                 let c = g.0.transform_point3(b.center);
                 let rad = b.radius * scale;
@@ -739,6 +759,8 @@ impl EditorCore {
         goat_runtime::set_active(&mut self.edit.world, self.camera, !game_view);
         self.edit.view_camera = if game_view { None } else { Some(self.camera) };
         let hidden = if game_view { hide_editor_drawables(&mut self.edit.world) } else { Vec::new() };
+        // skinned meshes show their bones' pose in Edit mode too (Unity)
+        goat_animation::update_skinned_meshes(&self.edit.world, gfx, &mut self.skin_scratch);
         if simulate {
             self.edit.frame(dt, gfx);
         } else {

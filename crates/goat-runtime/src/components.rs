@@ -175,6 +175,149 @@ impl MeshRenderer {
     }
 }
 
+/// Skin data of a mesh (Unity's Mesh.bindposes + boneWeights), shared by every instance of it.
+#[derive(Debug)]
+pub struct SkinData {
+    /// Per bone: mesh space → that bone's space at bind time (the inverse bind matrices).
+    pub bindposes: Vec<Mat4>,
+    /// Per submesh: its bind-pose vertices and 4 bone indices / weights per vertex (None: not skinned).
+    pub submeshes: Vec<Option<SkinnedSubmesh>>,
+}
+
+#[derive(Debug)]
+pub struct SkinnedSubmesh {
+    pub mesh: goat_gfx::MeshData,
+    pub joints: Vec<[u16; 4]>,
+    pub weights: Vec<[f32; 4]>,
+}
+
+/// Bones per vertex used by the skinning (Unity's SkinQuality): fewer = cheaper (the 3DS's CPU).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SkinQuality {
+    #[default]
+    Auto,
+    OneBone,
+    TwoBones,
+    FourBones,
+}
+
+impl SkinQuality {
+    pub fn bones(self) -> usize {
+        match self {
+            SkinQuality::OneBone => 1,
+            SkinQuality::TwoBones => 2,
+            SkinQuality::Auto | SkinQuality::FourBones => 4,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            SkinQuality::Auto => "Auto",
+            SkinQuality::OneBone => "1 Bone",
+            SkinQuality::TwoBones => "2 Bones",
+            SkinQuality::FourBones => "4 Bones",
+        }
+    }
+    pub fn from_name(s: &str) -> Self {
+        match s {
+            "1 Bone" => SkinQuality::OneBone,
+            "2 Bones" => SkinQuality::TwoBones,
+            "4 Bones" => SkinQuality::FourBones,
+            _ => SkinQuality::Auto,
+        }
+    }
+}
+
+/// Draws a mesh deformed by bones (Unity's SkinnedMeshRenderer): the mesh (`shared`: its submeshes in
+/// bind pose), its materials (material i → submesh i, like [`MeshRenderer`]), the bone objects and the
+/// root bone. The skinning (goat-animation) deforms the skinned submeshes from the bones' poses into
+/// this object's own meshes (`deformed`), drawn instead of the shared ones. No [`MeshFilter`] is needed.
+#[derive(Clone, Debug)]
+pub struct SkinnedMeshRenderer {
+    /// The mesh (Unity's sharedMesh): its submeshes, in bind pose.
+    pub shared: Vec<MeshId>,
+    pub materials: Vec<MaterialId>,
+    /// The bone objects, in the order of the skin's bindposes.
+    pub bones: Vec<Entity>,
+    /// The skeleton's root (bounds of the deformed mesh follow it).
+    pub root_bone: Option<Entity>,
+    /// Bindposes + weights of the mesh (None: drawn as is, in bind pose).
+    pub skin: Option<std::sync::Arc<SkinData>>,
+    /// Off: not skinned while no camera can see it (it keeps its last pose).
+    pub update_when_offscreen: bool,
+    pub quality: SkinQuality,
+    pub visible: bool,
+    pub layer: u8,
+    pub sorting_order: i32,
+    /// This object's own deformed copy of each skinned submesh (made by the first skinning).
+    pub deformed: Vec<Option<MeshId>>,
+}
+
+impl SkinnedMeshRenderer {
+    pub fn new(shared: Vec<MeshId>, materials: Vec<MaterialId>) -> Self {
+        SkinnedMeshRenderer { shared, materials, bones: Vec::new(), root_bone: None, skin: None, update_when_offscreen: false, quality: SkinQuality::Auto, visible: true, layer: 0, sorting_order: 0, deformed: Vec::new() }
+    }
+    /// The first material (Unity's sharedMaterial).
+    pub fn material(&self) -> Option<MaterialId> {
+        self.materials.first().copied()
+    }
+    pub fn set_material(&mut self, material: MaterialId) {
+        match self.materials.first_mut() {
+            Some(m) => *m = material,
+            None => self.materials.push(material),
+        }
+    }
+    /// The (mesh, material) pairs drawn: submesh i (deformed when skinned) with material i.
+    pub fn draws(&self) -> impl Iterator<Item = (MeshId, MaterialId)> + '_ {
+        let n = self.shared.len();
+        self.materials.iter().enumerate().filter(move |_| n > 0).map(move |(i, &m)| {
+            let s = i.min(n.saturating_sub(1));
+            (self.deformed.get(s).copied().flatten().unwrap_or(self.shared[s]), m)
+        })
+    }
+}
+
+/// The first material of an entity's renderer (MeshRenderer or SkinnedMeshRenderer).
+pub fn renderer_material(world: &World, e: Entity) -> Option<MaterialId> {
+    if let Ok(r) = world.get::<&MeshRenderer>(e) {
+        return r.material();
+    }
+    world.get::<&SkinnedMeshRenderer>(e).ok().and_then(|r| r.material())
+}
+
+/// Sets the first material of an entity's renderer; false without one.
+pub fn set_renderer_material(world: &World, e: Entity, material: MaterialId) -> bool {
+    if let Ok(mut r) = world.get::<&mut MeshRenderer>(e) {
+        r.set_material(material);
+        return true;
+    }
+    if let Ok(mut r) = world.get::<&mut SkinnedMeshRenderer>(e) {
+        r.set_material(material);
+        return true;
+    }
+    false
+}
+
+/// Whether an entity has a renderer (MeshRenderer / SkinnedMeshRenderer) and it is visible.
+pub fn renderer_visible(world: &World, e: Entity) -> Option<bool> {
+    if let Ok(r) = world.get::<&MeshRenderer>(e) {
+        return Some(r.visible);
+    }
+    world.get::<&SkinnedMeshRenderer>(e).ok().map(|r| r.visible)
+}
+
+/// Shows / hides an entity's renderer; false without one.
+pub fn set_renderer_visible(world: &World, e: Entity, on: bool) -> bool {
+    if let Ok(mut r) = world.get::<&mut MeshRenderer>(e) {
+        r.visible = on;
+        return true;
+    }
+    if let Ok(mut r) = world.get::<&mut SkinnedMeshRenderer>(e) {
+        r.visible = on;
+        return true;
+    }
+    false
+}
+
 /// Level of detail (Unity's LOD Group) next to a [`MeshRenderer`]: the renderer draws the mesh
 /// (with its first material)
 /// of the first level whose `screen_height` (the object's height as a fraction of the screen,
